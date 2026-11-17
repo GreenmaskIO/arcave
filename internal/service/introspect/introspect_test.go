@@ -441,7 +441,7 @@ func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
 	daemon.AssertExpectations(t)
 }
 
-func TestInspector_ReadContainers(t *testing.T) {
+func TestInspector_Observe(t *testing.T) {
 	// Arrange: two services, one waiting on the other to complete, a hook's runner and a one-off,
 	// in one listing.
 	web := summary("c-web-1", "web", "nginx:1", 1)
@@ -456,7 +456,7 @@ func TestInspector_ReadContainers(t *testing.T) {
 	daemon.expectInspect("c-migrate-1", "c-web-1")
 
 	// Act: no volume, network or image is read, so none is expected.
-	got, err := NewInspector(daemon, composeProject).ReadContainers(context.Background())
+	got, err := NewInspector(daemon, composeProject).Observe(context.Background())
 
 	// Assert
 	require.NoError(t, err)
@@ -465,12 +465,12 @@ func TestInspector_ReadContainers(t *testing.T) {
 	assert.Nil(t, got.Services[0].AwaitsCompletion)
 	assert.Equal(t, "web", got.Services[1].Name)
 	assert.Equal(t, []string{"migrate"}, got.Services[1].AwaitsCompletion)
-	require.Len(t, got.Services[1].Containers, 1, "neither a hook's runner nor a one-off is a replica")
-	assert.Equal(t, "c-web-1", got.Services[1].Containers[0].ID)
+	require.Len(t, got.Services[1].Replicas, 1, "neither a hook's runner nor a one-off is a replica")
+	assert.Equal(t, "c-web-1", got.Services[1].Replicas[0].ContainerID)
 	daemon.AssertExpectations(t)
 }
 
-func TestInspector_ReadContainers_GoneUnderTheRead(t *testing.T) {
+func TestInspector_Observe_GoneUnderTheRead(t *testing.T) {
 	// Arrange: web-2 and the only migrate replica go between the listing and their inspect, as a
 	// rollback rebuilding them removes them.
 	daemon := &mockDockerAPI{}
@@ -486,18 +486,18 @@ func TestInspector_ReadContainers_GoneUnderTheRead(t *testing.T) {
 	}
 
 	// Act
-	got, err := NewInspector(daemon, composeProject).ReadContainers(context.Background())
+	got, err := NewInspector(daemon, composeProject).Observe(context.Background())
 
 	// Assert
 	require.NoError(t, err)
 	require.Len(t, got.Services, 1, "a service with no container left is left out")
 	assert.Equal(t, "web", got.Services[0].Name)
-	require.Len(t, got.Services[0].Containers, 1)
-	assert.Equal(t, "c-web-1", got.Services[0].Containers[0].ID)
+	require.Len(t, got.Services[0].Replicas, 1)
+	assert.Equal(t, "c-web-1", got.Services[0].Replicas[0].ContainerID)
 	daemon.AssertExpectations(t)
 }
 
-func TestInspector_ReadContainers_DaemonFailures(t *testing.T) {
+func TestInspector_Observe_DaemonFailures(t *testing.T) {
 	daemonErr := errors.New("daemon refused")
 	tests := []struct {
 		name  string
@@ -525,11 +525,11 @@ func TestInspector_ReadContainers_DaemonFailures(t *testing.T) {
 			tt.setup(daemon)
 
 			// Act
-			got, err := NewInspector(daemon, composeProject).ReadContainers(context.Background())
+			got, err := NewInspector(daemon, composeProject).Observe(context.Background())
 
 			// Assert
 			require.ErrorIs(t, err, daemonErr)
-			assert.Equal(t, model.ComposeProjectContainers{}, got)
+			assert.Equal(t, model.ObservedWorkload{}, got)
 			daemon.AssertExpectations(t)
 		})
 	}

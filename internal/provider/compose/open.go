@@ -58,14 +58,14 @@ type Workload struct {
 // Close releases what Open opened, newest first.
 func (w Workload) Close(ctx context.Context) { w.opened.release(ctx) }
 
-// ComposeContainers reads one compose project's containers off the daemon, with what it holds open.
-type ComposeContainers struct {
-	*introspect.Inspector
+// Observer reads one compose project off the daemon for a status, with what it holds open.
+type Observer struct {
+	provider.Observer
 	opened closers
 }
 
-// Close releases the connection OpenComposeContainers opened.
-func (c ComposeContainers) Close(ctx context.Context) { c.opened.release(ctx) }
+// Close releases the connection OpenObserver opened.
+func (o Observer) Close(ctx context.Context) { o.opened.release(ctx) }
 
 // Open connects the daemon and opens the workload of composeProject over its store; on error it
 // releases whatever it had opened.
@@ -84,18 +84,18 @@ func Open(
 	}, nil
 }
 
-// OpenComposeContainers connects the daemon and reads composeProject's containers off it. Nothing
-// here runs compose, so the CLI's progress channel goes nowhere; no runtime profile: the container
-// list and the compat inspect read alike on every engine.
-func OpenComposeContainers(cfg Config, composeProject model.DockerComposeProjectName) (ComposeContainers, error) {
+// OpenObserver connects the daemon to observe composeProject on it. Nothing here runs compose, so
+// the CLI's progress channel goes nowhere; no runtime profile: the container list and the compat
+// inspect read alike on every engine.
+func OpenObserver(cfg Config, composeProject model.DockerComposeProjectName) (Observer, error) {
 	var opened closers
 	daemon, err := connectDaemon(cfg.Settings.Docker, io.Discard, &opened)
 	if err != nil {
-		return ComposeContainers{}, err
+		return Observer{}, err
 	}
-	return ComposeContainers{
-		Inspector: introspect.NewInspector(daemon.api, composeProject),
-		opened:    opened,
+	return Observer{
+		Observer: introspect.NewInspector(daemon.api, composeProject),
+		opened:   opened,
 	}, nil
 }
 

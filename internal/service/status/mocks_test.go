@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
 )
 
 // fakePointer is a current-session pointer naming id, none when nil, or failing with err.
@@ -46,18 +47,59 @@ func (m *mockInflight) Get(ctx context.Context) (model.InflightMarker, bool, err
 	return marker, args.Bool(1), args.Error(2)
 }
 
-type mockContainersReader struct{ mock.Mock }
+type mockObserver struct{ mock.Mock }
 
-func (m *mockContainersReader) ReadContainers(ctx context.Context) (model.ComposeProjectContainers, error) {
+func (m *mockObserver) Observe(ctx context.Context) (model.ObservedWorkload, error) {
 	args := m.Called(ctx)
-	return args.Get(0).(model.ComposeProjectContainers), args.Error(1)
+	return args.Get(0).(model.ObservedWorkload), args.Error(1)
 }
 
-// failingReader is a SessionReader and a SavepointLoader whose every read fails with err.
+// failingReader is a SessionReader whose every read fails with err.
 type failingReader struct{ err error }
 
 func (f failingReader) ListSessions(context.Context) ([]model.Session, error) { return nil, f.err }
 
-func (f failingReader) LoadSavepoints(context.Context, []model.SavepointID) ([]model.Savepoint, error) {
-	return nil, f.err
+// fakeSession is the provider's session id: the default session holds savepoints of every
+// workload, another none; err fails every read of a savepoint.
+type fakeSession struct {
+	id         model.SessionID
+	savepoints []model.Savepoint
+	err        error
 }
+
+func newFakeSession(id model.SessionID, savepoints []model.Savepoint, err error) fakeSession {
+	if id != model.DefaultSession {
+		savepoints = nil
+	}
+	return fakeSession{
+		id:         id,
+		savepoints: savepoints,
+		err:        err,
+	}
+}
+
+func (f fakeSession) ID() model.SessionID { return f.id }
+
+func (f fakeSession) Workloads(context.Context) ([]provider.WorkloadName, error) { return nil, nil }
+
+func (f fakeSession) Savepoints(provider.WorkloadName) (provider.Savepoints, error) { return f, nil }
+
+func (f fakeSession) FindGarbage(context.Context, []model.GarbageDataKind) []provider.Garbage {
+	return nil
+}
+
+func (f fakeSession) List(context.Context) ([]model.Savepoint, error) { return f.savepoints, f.err }
+
+func (f fakeSession) Load(_ context.Context, id model.SavepointID) (model.Savepoint, bool, error) {
+	if f.err != nil {
+		return model.Savepoint{}, false, f.err
+	}
+	for _, savepoint := range f.savepoints {
+		if savepoint.ID == id {
+			return savepoint, true, nil
+		}
+	}
+	return model.Savepoint{}, false, nil
+}
+
+func (f fakeSession) Remove(context.Context, model.SavepointID) error { return f.err }

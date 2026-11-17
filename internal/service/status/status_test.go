@@ -21,23 +21,19 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"net/netip"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/greenmaskio/storages"
-	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/api/types/network"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	savepointrepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
+	"github.com/greenmaskio/arcave/internal/provider"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
-	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
 var (
@@ -120,17 +116,17 @@ func TestFindDeployments(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			var services []model.ServiceContainers
+			var services []model.ObservedService
 			for i, replicas := range tt.labels {
-				service := model.ServiceContainers{Name: fmt.Sprintf("svc%d", i)}
+				service := model.ObservedService{Name: fmt.Sprintf("svc%d", i)}
 				for number, labels := range replicas {
-					service.Containers = append(service.Containers, newStatusContainer(service.Name, number+1, labels, runningState()))
+					service.Replicas = append(service.Replicas, newStatusContainer(service.Name, number+1, labels, runningState()))
 				}
 				services = append(services, service)
 			}
 
 			// Act
-			deployments := findDeployments(model.ComposeProjectContainers{Services: services})
+			deployments := findDeployments(model.ObservedWorkload{Services: services})
 
 			// Assert
 			assert.Equal(t, tt.wantSource, deployments.source)
@@ -148,26 +144,20 @@ func TestFindDeployments(t *testing.T) {
 
 func TestNewReplicaState(t *testing.T) {
 	tests := []struct {
-		name  string
-		state container.State
-		job   bool
-		want  model.ReplicaState
+		name    string
+		replica model.ObservedReplica
+		job     bool
+		want    model.ReplicaState
 	}{
-		{name: "running", state: container.State{Status: container.StateRunning, Running: true}, want: model.ReplicaStateRunning},
-		{name: "restarting outranks running", state: container.State{Status: container.StateRestarting, Running: true, Restarting: true}, want: model.ReplicaStateRestarting},
-		{name: "paused outranks running", state: container.State{Status: container.StatePaused, Running: true, Paused: true}, want: model.ReplicaStatePaused},
-		{name: "created", state: container.State{Status: container.StateCreated}, want: model.ReplicaStateCreated},
-		{name: "removing", state: container.State{Status: container.StateRemoving}, want: model.ReplicaStateRemoving},
-		{name: "dead", state: container.State{Status: container.StateDead, Dead: true}, want: model.ReplicaStateDead},
-		{name: "exited 0", state: container.State{Status: container.StateExited}, want: model.ReplicaStateExited},
-		{name: "exited 1", state: container.State{Status: container.StateExited, ExitCode: 1}, want: model.ReplicaStateExited},
-		{name: "a job that exited 0 completed", state: container.State{Status: container.StateExited}, job: true, want: model.ReplicaStateCompleted},
-		{name: "a job that failed exited", state: container.State{Status: container.StateExited, ExitCode: 1}, job: true, want: model.ReplicaStateExited},
-		{name: "a job still running runs", state: container.State{Status: container.StateRunning, Running: true}, job: true, want: model.ReplicaStateRunning},
+		{name: "exited 0", replica: model.ObservedReplica{State: model.ReplicaStateExited}, want: model.ReplicaStateExited},
+		{name: "a job that exited 0 completed", replica: model.ObservedReplica{State: model.ReplicaStateExited}, job: true, want: model.ReplicaStateCompleted},
+		{name: "a job that failed exited", replica: model.ObservedReplica{State: model.ReplicaStateExited, ExitCode: 1}, job: true, want: model.ReplicaStateExited},
+		{name: "a job still running runs", replica: model.ObservedReplica{State: model.ReplicaStateRunning}, job: true, want: model.ReplicaStateRunning},
+		{name: "a dead job is dead", replica: model.ObservedReplica{State: model.ReplicaStateDead}, job: true, want: model.ReplicaStateDead},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, newReplicaState(tt.state, tt.job))
+			assert.Equal(t, tt.want, newReplicaState(tt.replica, tt.job))
 		})
 	}
 }
@@ -204,13 +194,13 @@ func TestNewServiceStatuses(t *testing.T) {
 	labels := deployment.Labels()
 	tests := []struct {
 		name       string
-		services   []model.ServiceContainers
+		services   []model.ObservedService
 		deployment *model.SavepointDeployment
 		want       []model.ServiceStatus
 	}{
 		{
 			name: "a recorded gap is no missing replica, a recorded replica the daemon lacks is",
-			services: []model.ServiceContainers{{Name: "web", Containers: []model.Container{
+			services: []model.ObservedService{{Name: "web", Replicas: []model.ObservedReplica{
 				newStatusContainer("web", 1, labels, runningState()),
 			}}},
 			deployment: &deployment,
@@ -226,12 +216,12 @@ func TestNewServiceStatuses(t *testing.T) {
 		},
 		{
 			name: "a replica added since, one rebuilt outside arcave, and a job another waits on that exited 0",
-			services: []model.ServiceContainers{{Name: "web", AwaitsCompletion: []string{"migrate"}, Containers: []model.Container{
+			services: []model.ObservedService{{Name: "web", AwaitsCompletion: []string{"migrate"}, Replicas: []model.ObservedReplica{
 				newStatusContainer("web", 1, nil, runningState()),
 				newStatusContainer("web", 2, labels, runningState()),
 				newStatusContainer("web", 3, labels, runningState()),
-			}}, {Name: "migrate", Containers: []model.Container{
-				newStatusContainer("migrate", 1, labels, container.State{Status: container.StateExited}),
+			}}, {Name: "migrate", Replicas: []model.ObservedReplica{
+				newStatusContainer("migrate", 1, labels, model.ObservedReplica{State: model.ReplicaStateExited}),
 			}}},
 			deployment: &deployment,
 			want: []model.ServiceStatus{
@@ -247,8 +237,8 @@ func TestNewServiceStatuses(t *testing.T) {
 		},
 		{
 			name: "with none deployed nothing is expected, so nothing is missing; an exit 0 no service waits on is no job's",
-			services: []model.ServiceContainers{{Name: "migrate", Containers: []model.Container{
-				newStatusContainer("migrate", 1, nil, container.State{Status: container.StateExited}),
+			services: []model.ObservedService{{Name: "migrate", Replicas: []model.ObservedReplica{
+				newStatusContainer("migrate", 1, nil, model.ObservedReplica{State: model.ReplicaStateExited}),
 			}}},
 			want: []model.ServiceStatus{
 				{Name: "migrate", State: model.ReplicaStateExited, Replicas: []model.ReplicaStatus{
@@ -260,7 +250,7 @@ func TestNewServiceStatuses(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			containers := model.ComposeProjectContainers{Services: tt.services}
+			containers := model.ObservedWorkload{Services: tt.services}
 			deployments := findDeployments(containers)
 			require.Equal(t, tt.deployment != nil, deployments.latest != nil)
 
@@ -271,30 +261,6 @@ func TestNewServiceStatuses(t *testing.T) {
 			assert.Equal(t, tt.want, withoutReplicaTimes(services))
 		})
 	}
-}
-
-func TestNewPublishedPorts(t *testing.T) {
-	// Arrange
-	http := network.MustParsePort("80/tcp")
-	dns := network.MustParsePort("53/udp")
-	settings := &container.NetworkSettings{Ports: network.PortMap{
-		http: {
-			{HostIP: netip.MustParseAddr("::"), HostPort: "8080"},
-			{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: "8080"},
-		},
-		dns:                               {{HostPort: "5353"}},
-		network.MustParsePort("9000/tcp"): nil,
-	}}
-
-	// Act
-	ports := newPublishedPorts(settings)
-
-	// Assert
-	assert.Equal(t, []model.PublishedPort{
-		{ContainerPort: 53, Protocol: "udp", HostPort: 5353},
-		{ContainerPort: 80, Protocol: "tcp", HostIP: "0.0.0.0", HostPort: 8080},
-		{ContainerPort: 80, Protocol: "tcp", HostIP: "::", HostPort: 8080},
-	}, ports, "a zero address is no address, and an exposed port publishes nothing")
 }
 
 func TestNewComposeProjectState(t *testing.T) {
@@ -405,7 +371,7 @@ func TestService_Status(t *testing.T) {
 		name string
 		// containers runs one db replica per entry of labels, in state.
 		labels   []map[string]string
-		state    container.State
+		state    model.ObservedReplica
 		replaces string
 		// stored are the savepoints of the default session's compose project.
 		stored   []model.Savepoint
@@ -570,7 +536,7 @@ func TestService_Status(t *testing.T) {
 		{
 			name:   "a rollback in flight",
 			labels: []map[string]string{baselineDeployment.Labels()},
-			state:  container.State{Status: container.StateCreated},
+			state:  model.ObservedReplica{State: model.ReplicaStateCreated},
 			stored: []model.Savepoint{statusDeployed},
 			marker: &model.InflightMarker{Phase: model.InflightRestoring, Session: model.DefaultSession,
 				ComposeProject: demoProject, Target: statusDeployed.ID, Safety: safety.ID, At: statusCheckedAt.Add(-time.Minute)},
@@ -601,7 +567,7 @@ func TestService_Status(t *testing.T) {
 		{
 			name:   "every container stopped",
 			labels: []map[string]string{baselineDeployment.Labels()},
-			state:  container.State{Status: container.StateExited, FinishedAt: finished.Format(time.RFC3339Nano)},
+			state:  model.ObservedReplica{State: model.ReplicaStateExited, FinishedAt: &finished},
 			stored: []model.Savepoint{statusDeployed},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, model.ComposeProjectStateStopped, status.State)
@@ -837,22 +803,22 @@ func TestService_Status(t *testing.T) {
 			// Arrange
 			ctx := zerolog.Nop().WithContext(context.Background())
 			store := newDirStore(t)
-			seedStatusStore(t, store, tt.sessions, tt.stored)
-			service := model.ServiceContainers{Name: demoService}
+			seedStatusSessions(t, store, tt.sessions)
+			service := model.ObservedService{Name: demoService}
 			for i, labels := range tt.labels {
 				replica := newStatusContainer(demoService, i+1, labels, tt.state)
-				replica.Inspect.Created = started.Format(time.RFC3339Nano)
+				replica.CreatedAt = &started
 				if labels == nil {
 					replica.Replaces = tt.replaces
 				}
-				service.Containers = append(service.Containers, replica)
+				service.Replicas = append(service.Replicas, replica)
 			}
-			var containers model.ComposeProjectContainers
-			if len(service.Containers) > 0 {
-				containers.Services = []model.ServiceContainers{service}
+			var containers model.ObservedWorkload
+			if len(service.Replicas) > 0 {
+				containers.Services = []model.ObservedService{service}
 			}
-			reader := &mockContainersReader{}
-			reader.On("ReadContainers", mock.Anything).Return(containers, nil).Once()
+			reader := &mockObserver{}
+			reader.On("Observe", mock.Anything).Return(containers, nil).Once()
 			marker := &mockInflight{}
 			if tt.marker != nil {
 				marker.On("Get", mock.Anything).Return(*tt.marker, true, nil).Once()
@@ -860,9 +826,9 @@ func TestService_Status(t *testing.T) {
 				marker.On("Get", mock.Anything).Return(nil, false, tt.markerErr).Once()
 			}
 			svc := New(Deps{
-				ComposeContainers: reader,
-				Inflight:          marker,
-				Current:           &fakePointer{id: tt.pointer, err: tt.pointerErr},
+				Observer: reader,
+				Inflight: marker,
+				Current:  &fakePointer{id: tt.pointer, err: tt.pointerErr},
 				OpenArcaveProjectStore: func(context.Context) (storages.Storager, error) {
 					if tt.storeErr != nil {
 						return nil, tt.storeErr
@@ -875,11 +841,8 @@ func TestService_Status(t *testing.T) {
 					}
 					return sessionrepo.New(store)
 				},
-				NewSavepointLoader: func(store storages.Storager) SavepointLoader {
-					if tt.savepointsErr != nil {
-						return failingReader{err: tt.savepointsErr}
-					}
-					return savepointrepo.New(store)
+				NewProviderSession: func(_ storages.Navigator, id model.SessionID) provider.Session {
+					return newFakeSession(id, tt.stored, tt.savepointsErr)
 				},
 				ArcaveProject:  demoArcaveProject,
 				ComposeProject: demoProject,
@@ -907,11 +870,11 @@ func TestService_Status(t *testing.T) {
 
 func TestService_Status_ADaemonThatCannotBeReadFailsIt(t *testing.T) {
 	// Arrange: nothing past the daemon is read, so nothing else is expected.
-	reader := &mockContainersReader{}
-	reader.On("ReadContainers", mock.Anything).Return(model.ComposeProjectContainers{}, errors.New("daemon unreachable")).Once()
+	reader := &mockObserver{}
+	reader.On("Observe", mock.Anything).Return(model.ObservedWorkload{}, errors.New("daemon unreachable")).Once()
 	svc := New(Deps{
-		ComposeContainers: reader,
-		ComposeProject:    demoProject,
+		Observer:       reader,
+		ComposeProject: demoProject,
 	})
 
 	// Act
@@ -939,30 +902,30 @@ func newStatusDeployment(savepoint model.Savepoint, session model.Session) model
 	}
 }
 
-// newStatusContainer is replica number of service as the daemon reports it, labelled with labels.
-func newStatusContainer(service string, number int, labels map[string]string, state container.State) model.Container {
-	return model.Container{
-		ID:     fmt.Sprintf("%s-%d-id", service, number),
-		Name:   fmt.Sprintf("demo-%s-%d", service, number),
-		Number: number,
-		Labels: labels,
-		Inspect: container.InspectResponse{
-			State:   &state,
-			Created: statusStarted.Format(time.RFC3339Nano),
-		},
+// newStatusContainer is replica number of service as the daemon reports it, labelled with labels; of
+// state it takes the state and the times.
+func newStatusContainer(service string, number int, labels map[string]string, state model.ObservedReplica) model.ObservedReplica {
+	return model.ObservedReplica{
+		Number:      number,
+		Container:   fmt.Sprintf("demo-%s-%d", service, number),
+		ContainerID: fmt.Sprintf("%s-%d-id", service, number),
+		Labels:      labels,
+		State:       state.State,
+		CreatedAt:   &statusStarted,
+		StartedAt:   state.StartedAt,
+		FinishedAt:  state.FinishedAt,
 	}
 }
 
-func runningState() container.State {
+func runningState() model.ObservedReplica {
 	return runningStateAt(statusStarted)
 }
 
-// runningStateAt is a container running since started.
-func runningStateAt(started time.Time) container.State {
-	return container.State{
-		Status:    container.StateRunning,
-		Running:   true,
-		StartedAt: started.Format(time.RFC3339Nano),
+// runningStateAt is a replica running since started.
+func runningStateAt(started time.Time) model.ObservedReplica {
+	return model.ObservedReplica{
+		State:     model.ReplicaStateRunning,
+		StartedAt: &started,
 	}
 }
 
@@ -994,19 +957,11 @@ func withoutReplicaTimes(services []model.ServiceStatus) []model.ServiceStatus {
 	return services
 }
 
-// seedStatusStore commits sessions, and savepoints to demoProject in the default session.
-func seedStatusStore(t *testing.T, store storages.Storager, sessions []model.Session, savepoints []model.Savepoint) {
+// seedStatusSessions commits sessions.
+func seedStatusSessions(t *testing.T, store storages.Storager, sessions []model.Session) {
 	t.Helper()
-	ctx := context.Background()
 	for _, session := range sessions {
-		require.NoError(t, sessionrepo.New(store).SaveSession(ctx, session))
-	}
-	sessionStore, err := storefactory.Session(store, model.DefaultSession)
-	require.NoError(t, err)
-	composeProjectStore, err := storefactory.ComposeProject(sessionStore, demoProject)
-	require.NoError(t, err)
-	for _, savepoint := range savepoints {
-		require.NoError(t, savepointrepo.New(composeProjectStore).SaveSavepoint(ctx, savepoint))
+		require.NoError(t, sessionrepo.New(store).SaveSession(context.Background(), session))
 	}
 }
 

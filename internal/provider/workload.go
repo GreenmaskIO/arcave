@@ -28,6 +28,14 @@ type Workload interface {
 	Inspect(ctx context.Context) (LiveWorkload, error)
 }
 
+// Observer reads one workload for a status, built at the DI root apart from the Workload: it opens
+// no store and refuses no daemon.
+type Observer interface {
+	// Observe reads the workload's replicas as the daemon runs them; it takes no lock and changes
+	// nothing. A workload never started or taken down has none.
+	Observe(ctx context.Context) (model.ObservedWorkload, error)
+}
+
 // LiveWorkload is the workload as Inspect found it; nothing is touched.
 type LiveWorkload interface {
 	// Absent tells whether nothing of the workload exists to hold or to tear down: it was never

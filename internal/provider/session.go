@@ -24,6 +24,8 @@ import (
 type Savepoints interface {
 	// List returns every committed savepoint, oldest first, attributes as they were given.
 	List(ctx context.Context) ([]model.Savepoint, error)
+	// Load returns the savepoint id names; found is false for one never committed or removed since.
+	Load(ctx context.Context, id model.SavepointID) (savepoint model.Savepoint, found bool, err error)
 	// Remove uncommits the savepoint id names, then deletes what was stored under it; one already
 	// gone is no error. Several savepoints may be removed at once.
 	Remove(ctx context.Context, id model.SavepointID) error

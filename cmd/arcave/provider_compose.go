@@ -25,8 +25,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
-	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
-	"github.com/greenmaskio/arcave/internal/service/status"
 )
 
 // openComposeWorkload opens the compose provider's workload of composeProject over its store, the
@@ -53,7 +51,7 @@ func newComposeSavepoints(store storages.Storager) provider.Savepoints {
 }
 
 // newComposeSession is the compose provider's side of session id, reached with no daemon.
-func newComposeSession(arcaveProjectStore storages.Storager, id model.SessionID) provider.Session {
+func newComposeSession(arcaveProjectStore storages.Navigator, id model.SessionID) provider.Session {
 	return compose.NewStoreSession(arcaveProjectStore, id)
 }
 
@@ -71,17 +69,17 @@ func openComposeGarbageSession(
 	return session, nil
 }
 
-// openComposeContainers reads composeProject's containers off the daemon, as status does; what it
-// opens goes on opened.
-func openComposeContainers(
+// openComposeObserver observes composeProject on the daemon, as status does; what it opens goes on
+// opened.
+func openComposeObserver(
 	cfg config.Config, composeProject model.DockerComposeProjectName, opened *closers,
-) (compose.ComposeContainers, error) {
-	containers, err := compose.OpenComposeContainers(newComposeConfig(cfg, ""), composeProject)
+) (provider.Observer, error) {
+	observer, err := compose.OpenObserver(newComposeConfig(cfg, ""), composeProject)
 	if err != nil {
-		return compose.ComposeContainers{}, err
+		return nil, err
 	}
-	opened.addFunc(containers.Close)
-	return containers, nil
+	opened.addFunc(observer.Close)
+	return observer, nil
 }
 
 // newComposeConfig is what the compose provider is opened with: its own sections of cfg and the
@@ -104,9 +102,4 @@ func composeProgressMode(ctx context.Context, mode string, drawing bool) string 
 	log.Ctx(ctx).Warn().Msg("compose.progress: tty is ignored while arcave draws its own progress; " +
 		"compose's progress goes to the log, pass --progress log to keep compose's renderer")
 	return composeconfig.ProgressLog
-}
-
-// newSavepointLoader is the savepoint repository of a compose project's store, as status reads it.
-func newSavepointLoader(store storages.Storager) status.SavepointLoader {
-	return sprepo.New(store)
 }

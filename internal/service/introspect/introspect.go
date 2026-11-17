@@ -123,34 +123,6 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 	}, nil
 }
 
-// ReadContainers reports the compose project's replicas and the services each waits on to complete,
-// nothing they mount or run on. None means never started or taken down. A container gone between
-// the listing and its inspect is left out, and a service with none left with it.
-func (s *Inspector) ReadContainers(ctx context.Context) (model.ComposeProjectContainers, error) {
-	listed, err := s.listContainers(ctx)
-	if err != nil {
-		return model.ComposeProjectContainers{}, fmt.Errorf("read containers of compose project %q: %w", s.composeProject, err)
-	}
-	byService := groupByService(keepProjectContainers(listed))
-	services := make([]model.ServiceContainers, 0, len(byService))
-	for _, name := range slices.Sorted(maps.Keys(byService)) {
-		containers, err := s.readPresentContainers(ctx, byService[name])
-		if err != nil {
-			return model.ComposeProjectContainers{}, fmt.Errorf("read service %q of compose project %q: %w",
-				name, s.composeProject, err)
-		}
-		if len(containers) == 0 {
-			continue
-		}
-		services = append(services, model.ServiceContainers{
-			Name:             name,
-			AwaitsCompletion: parseAwaitsCompletion(byService[name][0].Labels[api.DependenciesLabel]),
-			Containers:       containers,
-		})
-	}
-	return model.ComposeProjectContainers{Services: services}, nil
-}
-
 // listContainers lists every container compose stamped with the compose project's name, stopped
 // ones included.
 func (s *Inspector) listContainers(ctx context.Context) ([]container.Summary, error) {

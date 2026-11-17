@@ -23,9 +23,11 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider"
 )
 
-// SavepointRecords lists and deletes the committed savepoints of one compose project.
+// SavepointRecords lists, reads and deletes the committed savepoints of one compose project.
 type SavepointRecords interface {
 	ListSavepoints(ctx context.Context) ([]model.Savepoint, error)
+	// LoadSavepoints returns the committed records of ids; one not found is left out.
+	LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error)
 	// DeleteSavepoint uncommits the record, then deletes the tree.
 	DeleteSavepoint(ctx context.Context, id model.SavepointID) error
 }
@@ -43,6 +45,15 @@ func NewSavepoints(records SavepointRecords) provider.Savepoints {
 // List returns every committed savepoint.
 func (s savepoints) List(ctx context.Context) ([]model.Savepoint, error) {
 	return s.records.ListSavepoints(ctx)
+}
+
+// Load returns the committed savepoint id names, if any.
+func (s savepoints) Load(ctx context.Context, id model.SavepointID) (model.Savepoint, bool, error) {
+	loaded, err := s.records.LoadSavepoints(ctx, []model.SavepointID{id})
+	if err != nil || len(loaded) == 0 {
+		return model.Savepoint{}, false, err
+	}
+	return loaded[0], true, nil
 }
 
 // Remove uncommits the savepoint id names, then deletes its tree.

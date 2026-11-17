@@ -225,6 +225,43 @@ type ReplicaStatus struct {
 	Ports        []PublishedPort `json:"ports,omitempty"`
 }
 
+// ObservedWorkload is a workload's replicas as the daemon runs them: what a provider's Observe
+// reads for a status, nothing they mount or run on.
+type ObservedWorkload struct {
+	// Services are the services the daemon holds a replica of, sorted by name.
+	Services []ObservedService
+}
+
+// ObservedService is one service's replicas.
+type ObservedService struct {
+	Name string
+	// AwaitsCompletion are the services this one waits on to complete successfully.
+	AwaitsCompletion []string
+	// Replicas are sorted by Number.
+	Replicas []ObservedReplica
+}
+
+// ObservedReplica is one container as the daemon reports it. State is never completed or missing:
+// whether an exit is a job's success, and what is missing, are a status's to judge.
+type ObservedReplica struct {
+	Number        int
+	Container     string
+	ContainerID   string
+	Labels        map[string]string
+	State         ReplicaState
+	Health        ReplicaHealth
+	ExitCode      int
+	OOMKilled     bool
+	RestartCount  int
+	FailingChecks int
+	CreatedAt     *time.Time
+	StartedAt     *time.Time
+	FinishedAt    *time.Time
+	// Replaces is the container this one was recreated over; empty for one created anew.
+	Replaces string
+	Ports    []PublishedPort
+}
+
 // PublishedPort is one port a replica publishes on the host.
 type PublishedPort struct {
 	ContainerPort int    `json:"container_port"`

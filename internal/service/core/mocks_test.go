@@ -259,6 +259,12 @@ func (m *mockSavepoints) List(ctx context.Context) ([]model.Savepoint, error) {
 	return savepoints, args.Error(1)
 }
 
+func (m *mockSavepoints) Load(ctx context.Context, id model.SavepointID) (model.Savepoint, bool, error) {
+	args := m.Called(ctx, id)
+	savepoint, _ := args.Get(0).(model.Savepoint)
+	return savepoint, args.Bool(1), args.Error(2)
+}
+
 func (m *mockSavepoints) Remove(ctx context.Context, id model.SavepointID) error {
 	return m.Called(ctx, id).Error(0)
 }

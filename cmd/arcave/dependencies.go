@@ -199,14 +199,14 @@ func openStatusService(
 	if err := storefactory.ValidateComposeProjectName(composeProject); err != nil {
 		return nil, err
 	}
-	composeContainers, err := openComposeContainers(cfg, composeProject, opened)
+	observer, err := openComposeObserver(cfg, composeProject, opened)
 	if err != nil {
 		return nil, err
 	}
 	return status.New(status.Deps{
-		ComposeContainers: composeContainers,
-		Inflight:          inflightrepo.New(projectPath),
-		Current:           currentsession.New(projectPath),
+		Observer: observer,
+		Inflight: inflightrepo.New(projectPath),
+		Current:  currentsession.New(projectPath),
 		OpenArcaveProjectStore: func(ctx context.Context) (storages.Storager, error) {
 			arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath, opened)
 			if err != nil {
@@ -215,7 +215,7 @@ func openStatusService(
 			return arcaveProject.store, nil
 		},
 		NewSessionReader:   newSessionReader,
-		NewSavepointLoader: newSavepointLoader,
+		NewProviderSession: newComposeSession,
 		ArcaveProject:      model.ArcaveProjectName(cfg.Project.Name),
 		ComposeProject:     composeProject,
 	}), nil
