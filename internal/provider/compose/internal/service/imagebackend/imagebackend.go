@@ -23,6 +23,7 @@ package imagebackend
 import (
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"maps"
 	"path"
@@ -127,7 +128,7 @@ type Copier struct {
 	dockerImageEngine      dockerImageEngine
 	writableLayerArchivers map[model.ImageBackendKind]ImageArchiver
 	imageArchiver          ImageArchiver
-	origin                 model.LayerOrigin
+	origin                 composemodel.LayerOrigin
 }
 
 // NewCopier binds a copier to the compose project store it works under and the origin every
@@ -135,7 +136,7 @@ type Copier struct {
 // archiver every image is kept by.
 func NewCopier(
 	store storages.Navigator,
-	origin model.LayerOrigin,
+	origin composemodel.LayerOrigin,
 	dockerImageEngine dockerImageEngine,
 	writableLayerArchivers map[model.ImageBackendKind]ImageArchiver,
 	imageArchiver ImageArchiver,
@@ -154,7 +155,7 @@ func NewCopier(
 func (s *Copier) writableLayerArchiver(kind model.ImageBackendKind) (ImageArchiver, error) {
 	archiver, ok := s.writableLayerArchivers[kind]
 	if !ok {
-		return nil, fmt.Errorf("%w: image backend %q", model.ErrUnsupportedImageArchive, kind)
+		return nil, fmt.Errorf("%w: image backend %q", composemodel.ErrUnsupportedImageArchive, kind)
 	}
 	return archiver, nil
 }
@@ -163,7 +164,7 @@ func (s *Copier) writableLayerArchiver(kind model.ImageBackendKind) (ImageArchiv
 // drops it from the daemon. The commit is stamped with the container's upstream, so a
 // container later rebuilt on this layer still names it, and with the copier's origin, so a
 // gc knows whose tag names it.
-func (s *Copier) CaptureWritableLayer(ctx context.Context, req model.WritableLayerCaptureRequest) (model.WritableLayer, error) {
+func (s *Copier) CaptureWritableLayer(ctx context.Context, req composemodel.WritableLayerCaptureRequest) (model.WritableLayer, error) {
 	archiver, err := s.writableLayerArchiver(req.Backend)
 	if err != nil {
 		return model.WritableLayer{}, err
@@ -205,7 +206,7 @@ func (s *Copier) CaptureWritableLayer(ctx context.Context, req model.WritableLay
 
 // newLayerLabels are the labels a commit carries: every deployment key blank, the origin, and the
 // upstream; none for an upstream that is unknown, so a layer never names one it was not told.
-func (s *Copier) newLayerLabels(container model.ContainerRef) map[string]string {
+func (s *Copier) newLayerLabels(container composemodel.ContainerRef) map[string]string {
 	labels := model.NewBlankDeploymentLabels()
 	maps.Copy(labels, s.origin.Labels())
 	if container.UpstreamImageID != "" {
@@ -222,7 +223,7 @@ func (s *Copier) newLayerLabels(container model.ContainerRef) map[string]string 
 // fails to hand over, is recorded by identity alone: a missing image must not
 // cost the savepoint its data.
 func (s *Copier) CaptureImage(
-	ctx context.Context, req model.ImageCaptureRequest,
+	ctx context.Context, req composemodel.ImageCaptureRequest,
 ) (model.Image, error) {
 	image := req.Image
 	image.Stored, image.StoredBytes = false, 0
@@ -277,7 +278,7 @@ func (s *Copier) storeImage(
 // RestoreWritableLayer loads one recorded writable layer's committed image back into the
 // daemon and tags it req.Tag. An image the daemon already holds is only tagged: a load costs
 // the whole archive, and the id in the record identifies it either way.
-func (s *Copier) RestoreWritableLayer(ctx context.Context, req model.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error) {
+func (s *Copier) RestoreWritableLayer(ctx context.Context, req composemodel.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error) {
 	archiver, err := s.writableLayerArchiver(req.Layer.ImageBackend)
 	if err != nil {
 		return model.WritableLayerRestoreResult{}, err

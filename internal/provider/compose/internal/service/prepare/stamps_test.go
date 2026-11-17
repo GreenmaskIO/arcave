@@ -16,6 +16,7 @@ package prepare
 
 import (
 	"context"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -52,11 +53,11 @@ func TestCheckCaptureStamps(t *testing.T) {
 	}{
 		{name: "a spec with no capture stamps checks nothing"},
 		{name: "every mount the spec captures is held", labels: types.Labels{
-			string(model.NewMountStampLabel("/data")):  "true; backend=fullcopy; origin=config",
-			string(model.NewMountStampLabel("/cache")): "false; origin=label; source=arcave.mounts.exclude=/cache on service db",
+			string(composemodel.NewMountStampLabel("/data")):  "true; backend=fullcopy; origin=config",
+			string(composemodel.NewMountStampLabel("/cache")): "false; origin=label; source=arcave.mounts.exclude=/cache on service db",
 		}},
 		{name: "a mount the spec captures and the record lacks is refused", labels: types.Labels{
-			string(model.NewMountStampLabel("/cache")): "true; backend=fullcopy; origin=config",
+			string(composemodel.NewMountStampLabel("/cache")): "true; backend=fullcopy; origin=config",
 		}, wantErr: "the mount at /cache of service db", wantErrIs: errSpecRecordMismatch},
 		{name: "a layer the spec leaves out needs nothing of the record", labels: types.Labels{
 			string(model.SystemLabelWritableLayerStamp): "false; origin=config; source=capture.writable_layers=false in the config",

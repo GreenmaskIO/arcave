@@ -22,8 +22,8 @@ import (
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman/libpod"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // mockLibpod is a test double for libpod.Client (the libpodAPI seam).
@@ -79,6 +79,6 @@ type mockOneShotRunner struct {
 	mock.Mock
 }
 
-func (m *mockOneShotRunner) RunOneShot(ctx context.Context, spec model.OneShotSpec) error {
+func (m *mockOneShotRunner) RunOneShot(ctx context.Context, spec composemodel.OneShotSpec) error {
 	return m.Called(ctx, spec).Error(0)
 }

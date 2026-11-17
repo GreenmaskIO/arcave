@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -29,7 +29,7 @@ const kindProjectIntrospect progress.Kind = "project.introspect"
 
 // composeIntrospector reads the live compose project as the daemon holds it.
 type composeIntrospector interface {
-	Introspect(ctx context.Context) (model.IntrospectionResult, error)
+	Introspect(ctx context.Context) (composemodel.IntrospectionResult, error)
 }
 
 // Deps are Inspector's collaborators.
@@ -59,24 +59,24 @@ func New(deps Deps) *Inspector {
 
 // Inspect reads the compose project as the daemon holds it now, and refuses a daemon older than
 // the provider runs on.
-func (s *Inspector) Inspect(ctx context.Context) (model.IntrospectionResult, error) {
+func (s *Inspector) Inspect(ctx context.Context) (composemodel.IntrospectionResult, error) {
 	introspection, err := s.Introspect(ctx)
 	if err != nil {
-		return model.IntrospectionResult{}, err
+		return composemodel.IntrospectionResult{}, err
 	}
 	if err := requireDaemon(ctx, s.daemonVersion, s.minDaemonMajor); err != nil {
-		return model.IntrospectionResult{}, err
+		return composemodel.IntrospectionResult{}, err
 	}
 	return introspection, nil
 }
 
 // Introspect reads the compose project as the daemon holds it now, under its own step.
-func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, error) {
+func (s *Inspector) Introspect(ctx context.Context) (composemodel.IntrospectionResult, error) {
 	ctx, step := progress.Run(ctx, progress.Step{Kind: kindProjectIntrospect})
 	introspection, err := s.composeInspector.Introspect(ctx)
 	step.End(err)
 	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("introspect compose project: %w", err)
+		return composemodel.IntrospectionResult{}, fmt.Errorf("introspect compose project: %w", err)
 	}
 	return introspection, nil
 }

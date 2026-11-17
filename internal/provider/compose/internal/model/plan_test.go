@@ -23,7 +23,7 @@ import (
 )
 
 func TestPlan_NewNotCovered(t *testing.T) {
-	containers := []model.ContainerRef{{
+	containers := []ContainerRef{{
 		ID:      "c1",
 		Name:    "demo-db-1",
 		Service: "db",

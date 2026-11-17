@@ -16,6 +16,7 @@ package captureplan
 
 import (
 	"context"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
 
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
@@ -71,7 +72,7 @@ func TestNewContainerRefs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			introspection := composetest.DemoIntrospection()
-			introspection.Project.Services = []model.Service{{Name: composetest.DemoService, Containers: []model.Container{{
+			introspection.Project.Services = []composemodel.Service{{Name: composetest.DemoService, Containers: []composemodel.Container{{
 				ID: composetest.DemoContainerID, Number: 1,
 				Inspect: container.InspectResponse{
 					Image:  tt.image.String(),
@@ -90,7 +91,7 @@ func TestNewContainerRefs(t *testing.T) {
 			got := newContainerRefs(ctx, introspection)
 
 			// Assert
-			assert.Equal(t, []model.ContainerRef{{
+			assert.Equal(t, []composemodel.ContainerRef{{
 				Service: composetest.DemoService, Replica: 1, ID: composetest.DemoContainerID,
 				UpstreamImageID: tt.wantID, UpstreamImageRef: tt.want,
 			}}, got)
@@ -102,11 +103,11 @@ func TestNewUnresolvedImages(t *testing.T) {
 	// Arrange
 	introspection := composetest.DemoIntrospectionWithContainers()
 	resolved := composetest.DemoContainerRef()
-	unresolved := model.ContainerRef{Service: composetest.DemoService, Replica: 1, ID: composetest.DemoContainerID, Name: composetest.DemoContainerName(1)}
+	unresolved := composemodel.ContainerRef{Service: composetest.DemoService, Replica: 1, ID: composetest.DemoContainerID, Name: composetest.DemoContainerName(1)}
 
 	// Act
-	none := newUnresolvedImages(introspection, []model.ContainerRef{resolved})
-	got := newUnresolvedImages(introspection, []model.ContainerRef{unresolved})
+	none := newUnresolvedImages(introspection, []composemodel.ContainerRef{resolved})
+	got := newUnresolvedImages(introspection, []composemodel.ContainerRef{unresolved})
 
 	// Assert
 	assert.Nil(t, none)
@@ -120,7 +121,7 @@ func TestNewImageCaptures(t *testing.T) {
 	// one that cannot be traced.
 	goneID := model.ImageDigestID("sha256:9999999999999999999999999999999999999999999999999999999999999999")
 	introspection := composetest.DemoIntrospectionWithContainers()
-	containers := []model.ContainerRef{
+	containers := []composemodel.ContainerRef{
 		{Service: composetest.DemoService, Replica: 1, UpstreamImageID: composetest.DemoUpstreamID, UpstreamImageRef: composetest.DemoBaseImage},
 		{Service: composetest.DemoService, Replica: 2, UpstreamImageID: composetest.DemoUpstreamID, UpstreamImageRef: composetest.DemoBaseImage},
 		{Service: "cache", Replica: 1, UpstreamImageID: goneID, UpstreamImageRef: "redis:7"},
@@ -131,7 +132,7 @@ func TestNewImageCaptures(t *testing.T) {
 	got := newImageCaptures(introspection, containers)
 
 	// Assert
-	assert.Equal(t, []model.ImageCaptureRequest{
+	assert.Equal(t, []composemodel.ImageCaptureRequest{
 		composetest.DemoImageCaptureRequest(),
 		{Image: model.Image{ID: goneID, Refs: []string{"redis:7"}}},
 	}, got)
@@ -156,7 +157,7 @@ func TestWarnOnComposeImageMismatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			c := model.Container{
+			c := composemodel.Container{
 				ID:     "c1",
 				Labels: map[string]string{composeImageLabel: tt.composeID},
 				Inspect: container.InspectResponse{
@@ -167,7 +168,7 @@ func TestWarnOnComposeImageMismatch(t *testing.T) {
 			if tt.mediaType != "" {
 				inspect.Descriptor = &ocispec.Descriptor{MediaType: tt.mediaType}
 			}
-			introspection := model.IntrospectionResult{Images: map[model.ImageDigestID]image.InspectResponse{runningID: inspect}}
+			introspection := composemodel.IntrospectionResult{Images: map[model.ImageDigestID]image.InspectResponse{runningID: inspect}}
 			logs := &composetest.SyncBuffer{}
 			ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -188,7 +189,7 @@ func TestNewImageCaptures_PodmanRepoTags(t *testing.T) {
 	upstream := introspection.Images[composetest.DemoUpstreamID]
 	upstream.RepoTags = []string{"docker.io/library/" + composetest.DemoBaseImage, "registry:5000/mirror/postgres:16"}
 	introspection.Images[composetest.DemoUpstreamID] = upstream
-	containers := []model.ContainerRef{
+	containers := []composemodel.ContainerRef{
 		{Service: composetest.DemoService, Replica: 1, UpstreamImageID: composetest.DemoUpstreamID, UpstreamImageRef: composetest.DemoBaseImage},
 	}
 

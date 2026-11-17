@@ -17,6 +17,7 @@ package compose
 import (
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"slices"
 
@@ -145,7 +146,7 @@ func openWorkload(
 	if err != nil {
 		return nil, err
 	}
-	origin := model.LayerOrigin{
+	origin := composemodel.LayerOrigin{
 		ArcaveProject:  cfg.ArcaveProject,
 		ComposeProject: composeProject,
 	}

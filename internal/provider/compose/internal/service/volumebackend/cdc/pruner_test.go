@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
@@ -73,7 +73,7 @@ func TestPruner_Forget(t *testing.T) {
 			name:    "a failed run, by restic's own diagnosis",
 			ids:     []string{forgottenSnapshot},
 			stderr:  "Fatal: wrong password or no key found\n",
-			runErr:  &model.ContainerExitError{Image: demoImage, StatusCode: 12},
+			runErr:  &composemodel.ContainerExitError{Image: demoImage, StatusCode: 12},
 			wantRun: true,
 			wantErr: "wrong password or no key found",
 		},

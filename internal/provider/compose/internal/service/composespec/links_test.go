@@ -23,16 +23,16 @@ import (
 	"github.com/moby/moby/api/types/system"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // linkedProject holds db with two replicas, and app, the service linking to it.
-func linkedProject() model.IntrospectionResult {
-	return model.IntrospectionResult{Project: model.Project{
+func linkedProject() composemodel.IntrospectionResult {
+	return composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: "demo",
-		Services: []model.Service{
-			{Name: "app", Containers: []model.Container{{ID: "app1", Name: "demo-app-1", Number: 1}}},
-			{Name: "db", Containers: []model.Container{
+		Services: []composemodel.Service{
+			{Name: "app", Containers: []composemodel.Container{{ID: "app1", Name: "demo-app-1", Number: 1}}},
+			{Name: "db", Containers: []composemodel.Container{
 				{ID: "db1", Name: "demo-db-1", Number: 1},
 				{ID: "db2", Name: "demo-db-2", Number: 2},
 			}},

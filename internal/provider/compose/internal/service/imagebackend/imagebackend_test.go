@@ -17,6 +17,7 @@ package imagebackend
 import (
 	"context"
 	"errors"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 	"testing"
@@ -41,10 +42,10 @@ const (
 	commitNote  = "arcave savepoint 019e843e-1650-7000-8000-000000000000"
 )
 
-func demoRequest() model.WritableLayerCaptureRequest {
-	return model.WritableLayerCaptureRequest{
+func demoRequest() composemodel.WritableLayerCaptureRequest {
+	return composemodel.WritableLayerCaptureRequest{
 		SnapshotID: snapshotID,
-		Container: model.ContainerRef{
+		Container: composemodel.ContainerRef{
 			Service: "db", Replica: 1, ID: containerID, Name: "demo-db-1",
 			UpstreamImageID: upstreamID, UpstreamImageRef: "postgres:16",
 		},
@@ -52,7 +53,7 @@ func demoRequest() model.WritableLayerCaptureRequest {
 	}
 }
 
-var demoOwner = model.LayerOrigin{ArcaveProject: "app", ComposeProject: "demo"}
+var demoOwner = composemodel.LayerOrigin{ArcaveProject: "app", ComposeProject: "demo"}
 
 func demoUpstreamLabels() map[string]string {
 	return map[string]string{
@@ -179,18 +180,18 @@ func TestManifest_RefusesWhatItCannotRead(t *testing.T) {
 			name:    "a capture stored by the other backend",
 			written: &Manifest{ImageID: imageID, Format: FormatArchive},
 			asks:    FormatBlobs,
-			wantErr: model.ErrUnsupportedImageArchive,
+			wantErr: composemodel.ErrUnsupportedImageArchive,
 		},
 		{
 			name:    "a manifest naming no members",
 			written: &Manifest{ImageID: imageID, Format: FormatBlobs},
 			asks:    FormatBlobs,
-			wantErr: model.ErrSavepointImageMissing,
+			wantErr: composemodel.ErrSavepointImageMissing,
 		},
 		{
 			name:    "a capture with no manifest at all",
 			asks:    FormatBlobs,
-			wantErr: model.ErrSavepointImageMissing,
+			wantErr: composemodel.ErrSavepointImageMissing,
 		},
 	}
 
@@ -201,7 +202,7 @@ func TestManifest_RefusesWhatItCannotRead(t *testing.T) {
 			imageStore, err := writableLayerStorage(newStore(t), snapshotID, "db", 1)
 			require.NoError(t, err)
 			if tt.written != nil {
-				if tt.written.Members == nil && tt.wantErr == model.ErrUnsupportedImageArchive {
+				if tt.written.Members == nil && tt.wantErr == composemodel.ErrUnsupportedImageArchive {
 					tt.written.Members = []Member{{Name: "image.tar", Kind: KindArchive}}
 				}
 				require.NoError(t, WriteManifest(ctx, imageStore, *tt.written))
@@ -289,8 +290,8 @@ func TestCopier_RefusesAnUnknownBackend(t *testing.T) {
 	_, restoreErr := copier.RestoreWritableLayer(ctx, restore)
 
 	// Assert
-	require.ErrorIs(t, captureErr, model.ErrUnsupportedImageArchive)
-	require.ErrorIs(t, restoreErr, model.ErrUnsupportedImageArchive)
+	require.ErrorIs(t, captureErr, composemodel.ErrUnsupportedImageArchive)
+	require.ErrorIs(t, restoreErr, composemodel.ErrUnsupportedImageArchive)
 	engine.AssertExpectations(t)
 }
 
@@ -385,7 +386,7 @@ func TestCopier_CaptureImage(t *testing.T) {
 			archiver := &stubArchiver{size: StoredSize{Image: 900, Written: 40}}
 
 			// Act
-			got, err := newCopier(store, engine, archiver).CaptureImage(ctx, model.ImageCaptureRequest{
+			got, err := newCopier(store, engine, archiver).CaptureImage(ctx, composemodel.ImageCaptureRequest{
 				Image: demoUpstream(), ExistsInDaemon: tt.existsInDaemon,
 			})
 
@@ -410,7 +411,7 @@ func TestCopier_CaptureImage_FailsWhenTheRunIsCancelled(t *testing.T) {
 	engine.On("SaveImage", mock.Anything, upstreamID).Return(nil, context.Canceled).Once()
 
 	// Act
-	_, err := newCopier(newStore(t), engine, &stubArchiver{}).CaptureImage(ctx, model.ImageCaptureRequest{
+	_, err := newCopier(newStore(t), engine, &stubArchiver{}).CaptureImage(ctx, composemodel.ImageCaptureRequest{
 		Image: demoUpstream(), ExistsInDaemon: true,
 	})
 
@@ -508,13 +509,13 @@ func TestCopier_RestoreWritableLayer_ReportsWhyTheArchiverCouldNotRender(t *test
 	engine := &mockImageEngine{}
 	engine.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
 	engine.On("LoadImage", mock.Anything, mock.Anything).Return(nil).Once()
-	archiver := &stubArchiver{renders: "half an ", loadErr: model.ErrSavepointImageMissing}
+	archiver := &stubArchiver{renders: "half an ", loadErr: composemodel.ErrSavepointImageMissing}
 
 	// Act
 	_, err := newCopier(newStore(t), engine, archiver).RestoreWritableLayer(ctx, demoRestoreRequest())
 
 	// Assert
-	require.ErrorIs(t, err, model.ErrSavepointImageMissing)
+	require.ErrorIs(t, err, composemodel.ErrSavepointImageMissing)
 	engine.AssertExpectations(t)
 }
 
@@ -578,8 +579,8 @@ func (s *stubArchiver) Load(_ context.Context, _ storages.Storager, _ model.Imag
 	return s.loadErr
 }
 
-func demoRestoreRequest() model.WritableLayerRestoreRequest {
-	return model.WritableLayerRestoreRequest{
+func demoRestoreRequest() composemodel.WritableLayerRestoreRequest {
+	return composemodel.WritableLayerRestoreRequest{
 		SnapshotID: snapshotID,
 		Layer: model.WritableLayer{
 			Service: "db", Replica: 1, ContainerID: containerID, ContainerName: "demo-db-1",

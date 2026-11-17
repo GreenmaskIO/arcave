@@ -52,9 +52,9 @@ func demoImagePlan(backend model.VolumeSnapshotBackend) composemodel.Plan {
 	return composemodel.Plan{
 		Spec:           demoSpecBytes,
 		Volumes:        []model.VolumeSnapshotBackend{backend},
-		Images:         []model.ImageCaptureRequest{demoImageCaptureRequest()},
-		WritableLayers: []model.WritableLayerCaptureRequest{{Container: demoContainerRef()}},
-		Containers:     []model.ContainerRef{demoContainerRef()},
+		Images:         []composemodel.ImageCaptureRequest{demoImageCaptureRequest()},
+		WritableLayers: []composemodel.WritableLayerCaptureRequest{{Container: demoContainerRef()}},
+		Containers:     []composemodel.ContainerRef{demoContainerRef()},
 	}
 }
 
@@ -98,7 +98,7 @@ func TestCapturer_Capture_CommitsTheImagesAndWritableLayers(t *testing.T) {
 				Return(demoImage(), nil).Once()
 			// The id is read at match time, set by the volume's capture that runs first.
 			layer := images.On("CaptureWritableLayer", mock.Anything,
-				mock.MatchedBy(func(req model.WritableLayerCaptureRequest) bool {
+				mock.MatchedBy(func(req composemodel.WritableLayerCaptureRequest) bool {
 					return req.SnapshotID == id && req.Container == demoContainerRef()
 				})).
 				Return(demoWritableLayer(), nil).Once()
@@ -176,7 +176,7 @@ func TestCapturer_Capture_FailedImageCaptureCommitsNothing(t *testing.T) {
 				Return(demoImage(), tt.imageErr).Once()
 			if tt.imageErr == nil {
 				layer := images.On("CaptureWritableLayer", mock.Anything,
-					mock.MatchedBy(func(req model.WritableLayerCaptureRequest) bool { return req.SnapshotID == id })).
+					mock.MatchedBy(func(req composemodel.WritableLayerCaptureRequest) bool { return req.SnapshotID == id })).
 					Return(model.WritableLayer{}, tt.layerErr).Once()
 				mock.InOrder(image, layer)
 			}
@@ -218,7 +218,7 @@ func TestCapturer_Capture_ImageNotStoredWarns(t *testing.T) {
 	})
 	plan := composemodel.Plan{
 		Spec:   demoSpecBytes,
-		Images: []model.ImageCaptureRequest{demoImageCaptureRequest()},
+		Images: []composemodel.ImageCaptureRequest{demoImageCaptureRequest()},
 	}
 	recorder := &composetest.WarnedRecorder{}
 	now := func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }

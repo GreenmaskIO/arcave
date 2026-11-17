@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -98,7 +99,7 @@ func TestPlanner_newReplacementPolicy(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, policy.DecideNamedVolume("demo_db").Capture)
 			if tt.wantIgnored {
-				assert.ErrorIs(t, labelsIgnored, model.ErrInvalidCapturePolicy)
+				assert.ErrorIs(t, labelsIgnored, composemodel.ErrInvalidCapturePolicy)
 			} else {
 				assert.NoError(t, labelsIgnored)
 			}
@@ -110,17 +111,17 @@ func TestPlanner_newReplacementPolicy(t *testing.T) {
 // upstream another captured service names is not reported as left out.
 func TestNotCovered_ReportsEachExclusionOnce(t *testing.T) {
 	// Arrange
-	introspection := model.IntrospectionResult{Project: model.Project{Name: "demo", Services: []model.Service{
-		{Name: "app", Volumes: []model.ServiceVolume{{Type: model.VolumeTypeBind, RawType: "bind", Source: "/src", Target: "/app"}}},
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{Name: "demo", Services: []composemodel.Service{
+		{Name: "app", Volumes: []composemodel.ServiceVolume{{Type: model.VolumeTypeBind, RawType: "bind", Source: "/src", Target: "/app"}}},
 	}}}
-	excluded := model.VolumeDecision{CaptureDecision: model.CaptureDecision{Source: "a label"}}
-	volumePolicy := model.CapturePolicy{Mounts: map[model.MountRef]model.VolumeDecision{{Service: "app", Target: "/app"}: excluded}}
-	containers := []model.ContainerRef{
+	excluded := composemodel.VolumeDecision{CaptureDecision: composemodel.CaptureDecision{Source: "a label"}}
+	volumePolicy := composemodel.CapturePolicy{Mounts: map[composemodel.MountRef]composemodel.VolumeDecision{{Service: "app", Target: "/app"}: excluded}}
+	containers := []composemodel.ContainerRef{
 		{Service: "a", Replica: 1, UpstreamImageID: composetest.DemoUpstreamID},
 		{Service: "b", Replica: 1, UpstreamImageID: composetest.DemoUpstreamID},
 	}
-	imagePolicy := model.CapturePolicy{Services: map[string]model.ServiceDecision{
-		"a": {Image: model.CaptureDecision{Source: "a label"}},
+	imagePolicy := composemodel.CapturePolicy{Services: map[string]composemodel.ServiceDecision{
+		"a": {Image: composemodel.CaptureDecision{Source: "a label"}},
 	}}
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -132,7 +133,7 @@ func TestNotCovered_ReportsEachExclusionOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, notCovered.ServicesWithoutVolumes)
 	assert.Len(t, notCovered.Mounts, 1)
-	assert.Equal(t, []model.ContainerRef{containers[1]}, taken)
+	assert.Equal(t, []composemodel.ContainerRef{containers[1]}, taken)
 	assert.Empty(t, skipped)
 }
 
@@ -156,7 +157,7 @@ func TestPlanner_Plan_InvalidLabelBuildsNothing(t *testing.T) {
 	_, err := svc.Plan(ctx, introspection, nil)
 
 	// Assert
-	require.ErrorIs(t, err, model.ErrInvalidCapturePolicy)
+	require.ErrorIs(t, err, composemodel.ErrInvalidCapturePolicy)
 	var policyErr *provider.CapturePolicyError
 	assert.ErrorAs(t, err, &policyErr)
 	assembler.AssertExpectations(t)
@@ -164,15 +165,15 @@ func TestPlanner_Plan_InvalidLabelBuildsNothing(t *testing.T) {
 
 func TestNewLayerCaptures(t *testing.T) {
 	// Arrange
-	containers := []model.ContainerRef{
+	containers := []composemodel.ContainerRef{
 		{Service: "app", Replica: 1, Name: "demo-app-1"},
 		{Service: "db", Replica: 1, Name: "demo-db-1"},
 		{Service: "db", Replica: 2, Name: "demo-db-2"},
 	}
-	policy := model.CapturePolicy{
+	policy := composemodel.CapturePolicy{
 		WritableLayerBackend: model.ImageBackendDedupCopy,
-		Services: map[string]model.ServiceDecision{
-			"db": {WritableLayer: model.WritableLayerDecision{CaptureDecision: model.CaptureDecision{Source: "a label"}}},
+		Services: map[string]composemodel.ServiceDecision{
+			"db": {WritableLayer: composemodel.WritableLayerDecision{CaptureDecision: composemodel.CaptureDecision{Source: "a label"}}},
 		},
 	}
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -181,7 +182,7 @@ func TestNewLayerCaptures(t *testing.T) {
 	layers, skipped := newLayerCaptures(ctx, containers, policy)
 
 	// Assert
-	assert.Equal(t, []model.WritableLayerCaptureRequest{
+	assert.Equal(t, []composemodel.WritableLayerCaptureRequest{
 		{Container: containers[0], Backend: model.ImageBackendDedupCopy},
 	}, layers)
 	assert.Equal(t, []model.SkippedWritableLayer{
@@ -229,7 +230,7 @@ func TestPlanner_Plan_FailedPlanWarnsOfIgnoredLabels(t *testing.T) {
 	require.EqualError(t, err, "assembling the compose spec: boom")
 	assert.Zero(t, plan)
 	assert.Contains(t, logs.String(), "the capture ignored the labels and followed the config")
-	assert.Contains(t, logs.String(), model.ErrInvalidCapturePolicy.Error())
+	assert.Contains(t, logs.String(), composemodel.ErrInvalidCapturePolicy.Error())
 	assembler.AssertExpectations(t)
 }
 
@@ -317,11 +318,11 @@ func TestNewReplicaGaps(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			introspection := composetest.DemoIntrospection()
-			svc := model.Service{Name: composetest.DemoService}
+			svc := composemodel.Service{Name: composetest.DemoService}
 			for _, n := range tt.numbers {
-				svc.Containers = append(svc.Containers, model.Container{Number: n})
+				svc.Containers = append(svc.Containers, composemodel.Container{Number: n})
 			}
-			introspection.Project.Services = []model.Service{svc}
+			introspection.Project.Services = []composemodel.Service{svc}
 			logs := &composetest.SyncBuffer{}
 			ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -343,26 +344,26 @@ func TestNewReplicaGaps(t *testing.T) {
 // nothing, is not covered. Every backend is rooted at the one store the DI root left.
 func TestPlanner_Plan_CoversEveryUnit(t *testing.T) {
 	// Arrange
-	introspection := model.IntrospectionResult{Project: model.Project{
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: "demo",
-		Services: []model.Service{
+		Services: []composemodel.Service{
 			{
 				Name: "app",
-				Volumes: []model.ServiceVolume{
+				Volumes: []composemodel.ServiceVolume{
 					{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg"},
 					{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/scratch"},
 				},
 			},
 			{
 				Name: "db",
-				Volumes: []model.ServiceVolume{{
+				Volumes: []composemodel.ServiceVolume{{
 					Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
 					Target: "/var/lib/postgresql/data", VolumeName: "demo_pgdata",
 				}},
 			},
 			{Name: "web"},
 		},
-		Volumes: []model.NamedVolume{{
+		Volumes: []composemodel.NamedVolume{{
 			Key: "pgdata", Name: "demo_pgdata",
 			UsedBy: []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
 		}},
@@ -403,14 +404,14 @@ func TestPlanner_Plan_CoversEveryUnit(t *testing.T) {
 // Every replica's anonymous volume is a unit of its own, captured by its own backend.
 func TestPlanner_Plan_AnonymousVolumePerReplica(t *testing.T) {
 	// Arrange
-	anon := func(replica int) model.ServiceVolume {
-		return model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: replica}
+	anon := func(replica int) composemodel.ServiceVolume {
+		return composemodel.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: replica}
 	}
-	introspection := model.IntrospectionResult{Project: model.Project{
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: "demo",
-		Services: []model.Service{{
+		Services: []composemodel.Service{{
 			Name:    "worker",
-			Volumes: []model.ServiceVolume{anon(1), anon(2), anon(3)},
+			Volumes: []composemodel.ServiceVolume{anon(1), anon(2), anon(3)},
 		}},
 	}}
 	store := composetest.NewDirStore(t)
@@ -476,10 +477,10 @@ func TestPlanner_Plan_StampsTheConfiguredBackend(t *testing.T) {
 // name, so having no container to read it through is no reason to leave it out.
 func TestPlanner_Plan_CoversAnUnmountedVolume(t *testing.T) {
 	// Arrange
-	introspection := model.IntrospectionResult{Project: model.Project{
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name:     "demo",
 		Services: composetest.DemoIntrospection().Project.Services,
-		Volumes: []model.NamedVolume{
+		Volumes: []composemodel.NamedVolume{
 			{Key: "db", Name: "demo_db", UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}},
 			// Mounted by no service — docker created it, so it can hold data.
 			{Key: "orphan", Name: "demo_orphan"},
@@ -520,13 +521,13 @@ func TestPlanner_Plan_CoversAnUnmountedVolume(t *testing.T) {
 func TestPlanner_Plan_Refusals(t *testing.T) {
 	errAssemble := errors.New("compose files are gone")
 	errNoFactory := errors.New("no factory")
-	nothing := model.IntrospectionResult{Project: model.Project{
+	nothing := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name:     composetest.DemoProject,
-		Services: []model.Service{{Name: composetest.DemoService}},
+		Services: []composemodel.Service{{Name: composetest.DemoService}},
 	}}
 	tests := []struct {
 		name          string
-		introspection model.IntrospectionResult
+		introspection composemodel.IntrospectionResult
 		arrange       func(assembler *composetest.MockAssembler, registry *composetest.MockRegistry, store storages.Storager)
 		wantErr       error
 		wantText      string
@@ -558,7 +559,7 @@ func TestPlanner_Plan_Refusals(t *testing.T) {
 		},
 		{
 			name: "a compose project taken down",
-			introspection: model.IntrospectionResult{Project: model.Project{
+			introspection: composemodel.IntrospectionResult{Project: composemodel.Project{
 				Name:    composetest.DemoProject,
 				Volumes: composetest.DemoIntrospection().Project.Volumes,
 			}},
@@ -628,12 +629,12 @@ func TestPlanner_Plan_PlansTheImagesAndWritableLayers(t *testing.T) {
 
 			// Assert
 			require.NoError(t, err)
-			assert.Equal(t, []model.ImageCaptureRequest{composetest.DemoImageCaptureRequest()}, plan.Images)
-			assert.Equal(t, []model.WritableLayerCaptureRequest{{
+			assert.Equal(t, []composemodel.ImageCaptureRequest{composetest.DemoImageCaptureRequest()}, plan.Images)
+			assert.Equal(t, []composemodel.WritableLayerCaptureRequest{{
 				Container: composetest.DemoContainerRef(),
 				Backend:   model.ImageBackendDedupCopy,
 			}}, plan.WritableLayers)
-			assert.Equal(t, []model.ContainerRef{composetest.DemoContainerRef()}, plan.Containers)
+			assert.Equal(t, []composemodel.ContainerRef{composetest.DemoContainerRef()}, plan.Containers)
 			registry.AssertExpectations(t)
 		})
 	}

@@ -23,7 +23,7 @@ import (
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // execStream is an exec's stdio as one stream: its stdout read, its stdin
@@ -82,7 +82,7 @@ func (s *execStream) release() {
 // openExecStream starts exec in the running container containerID and returns
 // its stdio as one stream.
 func openExecStream(
-	ctx context.Context, api dockerAPI, containerID string, exec model.OneShotExec,
+	ctx context.Context, api dockerAPI, containerID string, exec composemodel.OneShotExec,
 ) (*execStream, error) {
 	created, err := api.ExecCreate(ctx, containerID, client.ExecCreateOptions{
 		Cmd:          exec.Cmd,

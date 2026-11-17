@@ -16,6 +16,7 @@ package test
 
 import (
 	"cmp"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"maps"
 	"net/netip"
 	"regexp"
@@ -53,8 +54,8 @@ func specOptions() gocmp.Options {
 
 // recreatedByRuntime are what an engine changes between two creations of one compose project
 // beyond normalizeIntrospection: on Podman, a named volume's creation time.
-func recreatedByRuntime(runtime model.ContainerRuntimeKind) gocmp.Options {
-	if runtime != model.ContainerRuntimePodman {
+func recreatedByRuntime(runtime composemodel.ContainerRuntimeKind) gocmp.Options {
+	if runtime != composemodel.ContainerRuntimePodman {
 		return nil
 	}
 	return gocmp.Options{cmpopts.IgnoreFields(volume.Volume{}, "CreatedAt")}
@@ -65,8 +66,8 @@ func recreatedByRuntime(runtime model.ContainerRuntimeKind) gocmp.Options {
 // joining a namespace among its owner's aliases, the ids in its volumes-from annotation, bind
 // options in no fixed order, and an anonymous volume's mount request, exec option and z mode,
 // which it keeps only when compose created the volume through the mount API.
-func restampedByRuntime(runtime model.ContainerRuntimeKind) bool {
-	return runtime == model.ContainerRuntimePodman
+func restampedByRuntime(runtime composemodel.ContainerRuntimeKind) bool {
+	return runtime == composemodel.ContainerRuntimePodman
 }
 
 // dropHostnameEnv drops the HOSTNAME Podman sets to the container's own hostname.
@@ -168,7 +169,7 @@ var (
 
 // introspectionOptions compare two introspections of one compose project created twice;
 // declaredMACs are the MAC addresses its compose file pins.
-func introspectionOptions(declaredMACs map[string]bool, runtime model.ContainerRuntimeKind) gocmp.Options {
+func introspectionOptions(declaredMACs map[string]bool, runtime composemodel.ContainerRuntimeKind) gocmp.Options {
 	return gocmp.Options{
 		cmpopts.EquateEmpty(),
 		// The address and port types hide their fields; their == is their equality.
@@ -177,7 +178,7 @@ func introspectionOptions(declaredMACs map[string]bool, runtime model.ContainerR
 		gocmp.Comparer(func(a, b network.Port) bool { return a == b }),
 		ignoredContainerFields, ignoredSandboxFields, ignoredEndpointFields,
 		ignoredNetworkFields,
-		gocmp.Transformer("replicaIdentity", func(res model.IntrospectionResult) model.IntrospectionResult {
+		gocmp.Transformer("replicaIdentity", func(res composemodel.IntrospectionResult) composemodel.IntrospectionResult {
 			return normalizeIntrospection(res, declaredMACs, restampedByRuntime(runtime))
 		}),
 	}
@@ -185,20 +186,20 @@ func introspectionOptions(declaredMACs map[string]bool, runtime model.ContainerR
 
 // normalizeIntrospection renames container ids and anonymous volumes to service#replica
 // identities and drops what the daemon allocated rather than the compose file declared.
-func normalizeIntrospection(res model.IntrospectionResult, declaredMACs map[string]bool, restamped bool) model.IntrospectionResult {
+func normalizeIntrospection(res composemodel.IntrospectionResult, declaredMACs map[string]bool, restamped bool) composemodel.IntrospectionResult {
 	n := newNormalizer(res)
 	n.declaredMACs = declaredMACs
 	n.restamped = restamped
 	out := res
-	out.Project.Services = make([]model.Service, len(res.Project.Services))
+	out.Project.Services = make([]composemodel.Service, len(res.Project.Services))
 	for i, svc := range res.Project.Services {
 		out.Project.Services[i] = n.service(svc)
 	}
-	out.Project.Volumes = make([]model.NamedVolume, len(res.Project.Volumes))
+	out.Project.Volumes = make([]composemodel.NamedVolume, len(res.Project.Volumes))
 	for i, v := range res.Project.Volumes {
 		out.Project.Volumes[i] = n.namedVolume(v)
 	}
-	out.Project.Networks = make([]model.Network, len(res.Project.Networks))
+	out.Project.Networks = make([]composemodel.Network, len(res.Project.Networks))
 	for i, network := range res.Project.Networks {
 		network.Inspect.Labels = comparableLabels(network.Inspect.Labels)
 		if !n.static[network.Name] {
@@ -233,7 +234,7 @@ type normalizer struct {
 	restamped bool
 }
 
-func newNormalizer(res model.IntrospectionResult) normalizer {
+func newNormalizer(res composemodel.IntrospectionResult) normalizer {
 	n := normalizer{
 		ids: map[string]string{}, volumes: map[string]string{}, randomPorts: map[string]bool{}, static: map[string]bool{},
 	}
@@ -267,10 +268,10 @@ func newNormalizer(res model.IntrospectionResult) normalizer {
 	return n
 }
 
-func (n normalizer) service(svc model.Service) model.Service {
+func (n normalizer) service(svc composemodel.Service) composemodel.Service {
 	out := svc
 	out.Labels = comparableLabels(svc.Labels)
-	out.Volumes = make([]model.ServiceVolume, len(svc.Volumes))
+	out.Volumes = make([]composemodel.ServiceVolume, len(svc.Volumes))
 	for i, v := range svc.Volumes {
 		v.VolumeName = n.volumeName(v.VolumeName)
 		v.InheritedFrom = joinedService(n.id(v.InheritedFrom))
@@ -279,14 +280,14 @@ func (n normalizer) service(svc model.Service) model.Service {
 		}
 		out.Volumes[i] = v
 	}
-	out.Containers = make([]model.Container, len(svc.Containers))
+	out.Containers = make([]composemodel.Container, len(svc.Containers))
 	for i, c := range svc.Containers {
 		out.Containers[i] = n.container(c)
 	}
 	return out
 }
 
-func (n normalizer) container(c model.Container) model.Container {
+func (n normalizer) container(c composemodel.Container) composemodel.Container {
 	out := c
 	out.ID = n.id(c.ID)
 	out.Labels = comparableLabels(c.Labels)
@@ -397,7 +398,7 @@ func hasStaticIPv6(e *network.EndpointSettings) bool {
 	return e.IPAMConfig != nil && e.IPAMConfig.IPv6Address.IsValid()
 }
 
-func (n normalizer) namedVolume(v model.NamedVolume) model.NamedVolume {
+func (n normalizer) namedVolume(v composemodel.NamedVolume) composemodel.NamedVolume {
 	out := v
 	out.Name = n.volumeName(v.Name)
 	return out

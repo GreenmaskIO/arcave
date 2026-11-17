@@ -17,6 +17,7 @@ package cdcbackend
 import (
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
 	"time"
 
@@ -73,7 +74,7 @@ func TestSnapshotter_Snapshot_Stdio_KilledMidBackup(t *testing.T) {
 
 	// Assert
 	require.NoError(t, <-killed, "the backup must have been killed once its first pack landed")
-	var exitErr *model.ContainerExitError
+	var exitErr *composemodel.ContainerExitError
 	require.ErrorAs(t, err, &exitErr)
 	assert.Equal(t, int64(137), exitErr.StatusCode)
 	assert.Empty(t, oneShotsOn(t, env.cli, vol), "a killed run must take its container with it")

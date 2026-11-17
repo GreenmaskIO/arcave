@@ -17,6 +17,7 @@ package test
 import (
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"slices"
 	"strings"
@@ -280,12 +281,12 @@ func (e *imageRollbackEnv) externalVolume(t *testing.T, name, script string) {
 }
 
 // containers maps each container of the compose project to its <service>-<replica> name.
-func (e *imageRollbackEnv) containers(t *testing.T) map[string]model.Container {
+func (e *imageRollbackEnv) containers(t *testing.T) map[string]composemodel.Container {
 	t.Helper()
 
 	res, err := e.inspector.Introspect(e.ctx)
 	require.NoError(t, err)
-	containers := map[string]model.Container{}
+	containers := map[string]composemodel.Container{}
 	for _, svc := range res.Project.Services {
 		for _, c := range svc.Containers {
 			containers[fmt.Sprintf("%s-%d", svc.Name, c.Number)] = c

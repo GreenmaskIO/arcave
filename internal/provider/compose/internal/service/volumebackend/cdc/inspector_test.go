@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"os"
 	"slices"
@@ -56,7 +57,7 @@ func readFixture(t *testing.T, name string) string {
 // matchInspection matches the one run of an inspection: args, against demoObjectID's repository,
 // in the image and network the options name. One expected run is also no lock cleared.
 func matchInspection(args []string, hostNetwork bool) any {
-	return mock.MatchedBy(func(spec model.OneShotSpec) bool {
+	return mock.MatchedBy(func(spec composemodel.OneShotSpec) bool {
 		return slices.Equal(args, spec.Cmd) &&
 			spec.Image == demoImage &&
 			spec.HostNetwork == hostNetwork &&
@@ -67,7 +68,7 @@ func matchInspection(args []string, hostNetwork bool) any {
 // respondWithOutput writes stdout and stderr to a run, verbatim.
 func respondWithOutput(stdout, stderr string) func(mock.Arguments) {
 	return func(args mock.Arguments) {
-		spec := args.Get(1).(model.OneShotSpec)
+		spec := args.Get(1).(composemodel.OneShotSpec)
 		_, _ = spec.Stdout.Write([]byte(stdout))
 		_, _ = spec.Stderr.Write([]byte(stderr))
 	}
@@ -113,7 +114,7 @@ func TestInspector_ReadSnapshots(t *testing.T) {
 		},
 		{
 			name:    "a failed run",
-			runErr:  &model.ContainerExitError{Image: demoImage, StatusCode: 12},
+			runErr:  &composemodel.ContainerExitError{Image: demoImage, StatusCode: 12},
 			wantErr: "exited with status 12",
 		},
 	}
@@ -230,7 +231,7 @@ func TestInspector_EstimateForget(t *testing.T) {
 			name:    "a failed run, by restic's own diagnosis",
 			ids:     []string{forgottenSnapshot},
 			stderr:  "Fatal: wrong password or no key found\n",
-			runErr:  &model.ContainerExitError{Image: demoImage, StatusCode: 12},
+			runErr:  &composemodel.ContainerExitError{Image: demoImage, StatusCode: 12},
 			wantRun: true,
 			wantErr: "wrong password or no key found",
 		},
@@ -272,7 +273,7 @@ func TestInspector_EstimateForget(t *testing.T) {
 // A run without --json ends on a plain Fatal line, and that line fronts its error.
 func TestRunner_output_ReportsAPlainFatalLine(t *testing.T) {
 	// Arrange
-	exit := &model.ContainerExitError{Image: demoImage, StatusCode: 1}
+	exit := &composemodel.ContainerExitError{Image: demoImage, StatusCode: 1}
 	containers := &mockRunner{}
 	containers.On("RunOneShot", mock.Anything, matchRestic("forget")).
 		Run(respondWithOutput("", "Fatal: unable to open config file\n")).Return(exit).Once()

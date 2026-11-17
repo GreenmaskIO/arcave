@@ -15,6 +15,7 @@
 package composespec
 
 import (
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"maps"
 	"net/netip"
 	"slices"
@@ -39,22 +40,22 @@ import (
 const fixtureContainerID = "3f1a2b3c4d5e6f708192a3b4c5d6e7f8"
 
 // richService is the fixture every fidelity assertion below reads.
-func richService() model.Service {
+func richService() composemodel.Service {
 	stopTimeout := 25
 	init := true
 	pidsLimit := int64(512)
-	return model.Service{
+	return composemodel.Service{
 		Name:   "db",
 		Image:  "postgres:16",
 		Labels: map[string]string{api.ServiceLabel: "db", api.DependenciesLabel: "cache:service_healthy:true"},
-		Volumes: []model.ServiceVolume{
+		Volumes: []composemodel.ServiceVolume{
 			{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", VolumeName: "demo_pgdata", Target: "/var/lib/postgresql/data"},
 			{Type: model.VolumeTypeAnon, RawType: "volume", VolumeName: "9f8e7d", Target: "/tmp/scratch", Replica: 1},
 			{Type: model.VolumeTypeAnon, RawType: "volume", VolumeName: "1a2b3c", Target: "/tmp/scratch", Replica: 2},
 			{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/seed", Target: "/docker-entrypoint-initdb.d", ReadOnly: true,
-				Bind: &model.BindMount{Propagation: "rprivate", CreateHostPath: true}},
+				Bind: &composemodel.BindMount{Propagation: "rprivate", CreateHostPath: true}},
 		},
-		Containers: []model.Container{{
+		Containers: []composemodel.Container{{
 			ID:     fixtureContainerID,
 			Name:   "demo-db-1",
 			Number: 1,
@@ -123,10 +124,10 @@ func richService() model.Service {
 
 func TestNewServiceConfig(t *testing.T) {
 	// Arrange
-	introspection := model.IntrospectionResult{Project: model.Project{
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name:     "demo",
-		Services: []model.Service{richService()},
-		Networks: []model.Network{{Key: "back", Name: "demo_back"}},
+		Services: []composemodel.Service{richService()},
+		Networks: []composemodel.Network{{Key: "back", Name: "demo_back"}},
 	}}
 
 	// Act
@@ -183,7 +184,7 @@ func TestNewServiceConfig(t *testing.T) {
 
 func TestNewServiceConfig_Volumes(t *testing.T) {
 	// Act
-	cfg := newAssembly(model.IntrospectionResult{}, NewDockerStamps(system.Info{})).newServiceConfig(richService())
+	cfg := newAssembly(composemodel.IntrospectionResult{}, NewDockerStamps(system.Info{})).newServiceConfig(richService())
 
 	// Assert
 	require.Len(t, cfg.Volumes, 3)
@@ -202,13 +203,13 @@ func TestNewServiceConfig_Volumes(t *testing.T) {
 func TestNewServiceVolume_Options(t *testing.T) {
 	tests := []struct {
 		name  string
-		mount model.ServiceVolume
+		mount composemodel.ServiceVolume
 		want  types.ServiceVolumeConfig
 	}{
 		{
 			name: "a named volume's options",
-			mount: model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
-				Target: "/data", Volume: &model.VolumeMount{
+			mount: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+				Target: "/data", Volume: &composemodel.VolumeMount{
 					NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"},
 				}},
 			want: types.ServiceVolumeConfig{Type: "volume", Source: "pgdata", Target: "/data",
@@ -218,8 +219,8 @@ func TestNewServiceVolume_Options(t *testing.T) {
 		},
 		{
 			name: "a bind's options, the default propagation left out",
-			mount: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host",
-				Target: "/etc/cfg", Bind: &model.BindMount{
+			mount: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host",
+				Target: "/etc/cfg", Bind: &composemodel.BindMount{
 					SELinux: "z", Propagation: "rprivate", CreateHostPath: true, Recursive: "readonly",
 				}},
 			want: types.ServiceVolumeConfig{Type: "bind", Source: "/host", Target: "/etc/cfg",
@@ -227,22 +228,22 @@ func TestNewServiceVolume_Options(t *testing.T) {
 		},
 		{
 			name: "a bind that must not create its host path",
-			mount: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host",
-				Target: "/etc/cfg", Bind: &model.BindMount{Propagation: "rshared"}},
+			mount: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host",
+				Target: "/etc/cfg", Bind: &composemodel.BindMount{Propagation: "rshared"}},
 			want: types.ServiceVolumeConfig{Type: "bind", Source: "/host", Target: "/etc/cfg",
 				Bind: &types.ServiceVolumeBind{Propagation: "rshared"}},
 		},
 		{
 			name: "a tmpfs mount's size and mode",
-			mount: model.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run",
-				Tmpfs: &model.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
+			mount: composemodel.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run",
+				Tmpfs: &composemodel.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
 			want: types.ServiceVolumeConfig{Type: "tmpfs", Target: "/run",
 				Tmpfs: &types.ServiceVolumeTmpfs{Size: 1 << 20, Mode: 0o1777}},
 		},
 		{
 			name: "an image mount's subpath",
-			mount: model.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1",
-				Target: "/assets", ReadOnly: true, Image: &model.ImageMount{Subpath: "static"}},
+			mount: composemodel.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1",
+				Target: "/assets", ReadOnly: true, Image: &composemodel.ImageMount{Subpath: "static"}},
 			want: types.ServiceVolumeConfig{Type: "image", Source: "assets:1", Target: "/assets",
 				ReadOnly: true, Image: &types.ServiceVolumeImage{SubPath: "static"}},
 		},
@@ -301,11 +302,11 @@ func TestNewServiceConfig_PodmanBridgeMode(t *testing.T) {
 			service := richService()
 			service.Containers[0].Inspect.HostConfig.NetworkMode = "bridge"
 			service.Containers[0].Inspect.NetworkSettings.Networks = tt.networks
-			introspection := model.IntrospectionResult{
-				Project: model.Project{
+			introspection := composemodel.IntrospectionResult{
+				Project: composemodel.Project{
 					Name:     "demo",
-					Services: []model.Service{service},
-					Networks: []model.Network{{Key: "back", Name: "demo_back"}},
+					Services: []composemodel.Service{service},
+					Networks: []composemodel.Network{{Key: "back", Name: "demo_back"}},
 				},
 			}
 
@@ -423,8 +424,8 @@ func TestDeclaredVolumesFrom(t *testing.T) {
 // the spec declares it back, with the dependency the loader would infer.
 func TestNewServiceConfig_SharedNamespaces(t *testing.T) {
 	// Arrange
-	db := model.Service{Name: "db", Containers: []model.Container{{ID: dbReplicaID}}}
-	app := model.Service{Name: "app", Containers: []model.Container{{
+	db := composemodel.Service{Name: "db", Containers: []composemodel.Container{{ID: dbReplicaID}}}
+	app := composemodel.Service{Name: "app", Containers: []composemodel.Container{{
 		ID: "app1",
 		Inspect: container.InspectResponse{
 			// The namespace owner's hostname and the image's EXPOSE: the daemon refuses both here.
@@ -441,7 +442,7 @@ func TestNewServiceConfig_SharedNamespaces(t *testing.T) {
 			},
 		},
 	}}}
-	introspection := model.IntrospectionResult{Project: model.Project{Name: "demo", Services: []model.Service{app, db}}}
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{Name: "demo", Services: []composemodel.Service{app, db}}}
 
 	// Act
 	cfg := newAssembly(introspection, NewDockerStamps(system.Info{})).newServiceConfig(app)
@@ -530,15 +531,15 @@ func TestNewServiceConfig_Image(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			svc := model.Service{Name: "db", Containers: []model.Container{{
+			svc := composemodel.Service{Name: "db", Containers: []composemodel.Container{{
 				ID: "c1",
 				Inspect: container.InspectResponse{
 					ID: "c1", Image: tt.running.String(),
 					Config: &container.Config{Image: tt.ref},
 				},
 			}}}
-			introspection := model.IntrospectionResult{
-				Project: model.Project{Name: "demo", Services: []model.Service{svc}},
+			introspection := composemodel.IntrospectionResult{
+				Project: composemodel.Project{Name: "demo", Services: []composemodel.Service{svc}},
 				Images:  tt.images,
 			}
 
@@ -617,15 +618,15 @@ func TestNewServiceConfig_DaemonDefaults(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			host := tt.host
-			svc := model.Service{Name: "db", Containers: []model.Container{{
+			svc := composemodel.Service{Name: "db", Containers: []composemodel.Container{{
 				ID: "c1",
 				Inspect: container.InspectResponse{
 					ID: "c1", HostConfig: &host,
 					Config: &container.Config{Image: "postgres:16", StopTimeout: tt.stop},
 				},
 			}}}
-			introspection := model.IntrospectionResult{
-				Project: model.Project{Name: "demo", Services: []model.Service{svc}},
+			introspection := composemodel.IntrospectionResult{
+				Project: composemodel.Project{Name: "demo", Services: []composemodel.Service{svc}},
 			}
 
 			// Act
@@ -715,15 +716,15 @@ func TestNewServiceConfig_DaemonAdditions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			host, config := tt.host, tt.config
-			svc := model.Service{Name: "app", Containers: []model.Container{{
+			svc := composemodel.Service{Name: "app", Containers: []composemodel.Container{{
 				ID: "c1",
 				Inspect: container.InspectResponse{
 					ID: "c1", HostConfig: &host,
 					Config: &config,
 				},
 			}}}
-			introspection := model.IntrospectionResult{
-				Project: model.Project{Name: "demo", Services: []model.Service{svc}},
+			introspection := composemodel.IntrospectionResult{
+				Project: composemodel.Project{Name: "demo", Services: []composemodel.Service{svc}},
 			}
 			stamps := NewDockerStamps(system.Info{Name: "docker-desktop"})
 
@@ -776,7 +777,7 @@ func TestNewServiceConfig_NetworkAttachment(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			endpoint := tt.endpoint
-			svc := model.Service{Name: "app", Containers: []model.Container{{
+			svc := composemodel.Service{Name: "app", Containers: []composemodel.Container{{
 				ID: "c1",
 				Inspect: container.InspectResponse{
 					ID: "c1", HostConfig: &container.HostConfig{},
@@ -786,10 +787,10 @@ func TestNewServiceConfig_NetworkAttachment(t *testing.T) {
 					},
 				},
 			}}}
-			introspection := model.IntrospectionResult{Project: model.Project{
+			introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 				Name:     "demo",
-				Services: []model.Service{svc},
-				Networks: []model.Network{{Key: "default", Name: "demo_default"}},
+				Services: []composemodel.Service{svc},
+				Networks: []composemodel.Network{{Key: "default", Name: "demo_default"}},
 			}}
 
 			// Act
@@ -820,15 +821,15 @@ func TestNewServiceConfig_DNS(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			svc := model.Service{Name: "app", Containers: []model.Container{{
+			svc := composemodel.Service{Name: "app", Containers: []composemodel.Container{{
 				ID: "c1",
 				Inspect: container.InspectResponse{
 					ID: "c1", HostConfig: &container.HostConfig{DNS: tt.dns},
 					Config: &container.Config{},
 				},
 			}}}
-			introspection := model.IntrospectionResult{
-				Project: model.Project{Name: "demo", Services: []model.Service{svc}},
+			introspection := composemodel.IntrospectionResult{
+				Project: composemodel.Project{Name: "demo", Services: []composemodel.Service{svc}},
 			}
 
 			// Act
@@ -860,13 +861,13 @@ func TestNewServiceConfig_VolumesFrom(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			svc := model.Service{
+			svc := composemodel.Service{
 				Name: "app",
-				Volumes: []model.ServiceVolume{{
+				Volumes: []composemodel.ServiceVolume{{
 					Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: 1,
 					InheritedFrom: tt.inheritedFrom,
 				}},
-				Containers: []model.Container{{
+				Containers: []composemodel.Container{{
 					ID:     "c1",
 					Number: 1,
 					Inspect: container.InspectResponse{
@@ -875,7 +876,7 @@ func TestNewServiceConfig_VolumesFrom(t *testing.T) {
 					},
 				}},
 			}
-			introspection := model.IntrospectionResult{Project: model.Project{Name: "demo", Services: []model.Service{svc}}}
+			introspection := composemodel.IntrospectionResult{Project: composemodel.Project{Name: "demo", Services: []composemodel.Service{svc}}}
 
 			// Act
 			cfg := newAssembly(introspection, NewDockerStamps(system.Info{})).newServiceConfig(svc)
@@ -951,11 +952,11 @@ func TestNewServiceConfig_HostnameAlias(t *testing.T) {
 			service := richService()
 			endpoint := service.Containers[0].Inspect.NetworkSettings.Networks["demo_back"]
 			endpoint.Aliases = append(endpoint.Aliases, "db-primary")
-			introspection := model.IntrospectionResult{
-				Project: model.Project{
+			introspection := composemodel.IntrospectionResult{
+				Project: composemodel.Project{
 					Name:     "demo",
-					Services: []model.Service{service},
-					Networks: []model.Network{{Key: "back", Name: "demo_back"}},
+					Services: []composemodel.Service{service},
+					Networks: []composemodel.Network{{Key: "back", Name: "demo_back"}},
 				},
 			}
 
@@ -999,11 +1000,11 @@ func TestNewServiceConfig_PodmanDefaultOverImage(t *testing.T) {
 			inspect.Config.StopSignal = "15"
 			inspect.Config.Healthcheck.Timeout = 30 * time.Second
 			inspect.Image = "sha256:" + strings.Repeat("c", 64)
-			introspection := model.IntrospectionResult{
-				Project: model.Project{
+			introspection := composemodel.IntrospectionResult{
+				Project: composemodel.Project{
 					Name:     "demo",
-					Services: []model.Service{service},
-					Networks: []model.Network{{Key: "back", Name: "demo_back"}},
+					Services: []composemodel.Service{service},
+					Networks: []composemodel.Network{{Key: "back", Name: "demo_back"}},
 				},
 				Images: map[model.ImageDigestID]image.InspectResponse{
 					model.ImageDigestID(inspect.Image): {ID: inspect.Image, Config: &tt.image},
@@ -1086,11 +1087,11 @@ func TestNewServiceConfig_PodmanDefaults(t *testing.T) {
 			host.CgroupParent = "user.slice"
 			host.LogConfig = container.LogConfig{Type: "journald"}
 			host.Ulimits = []*container.Ulimit{{Name: "RLIMIT_NOFILE", Soft: 1024, Hard: 2048}}
-			introspection := model.IntrospectionResult{
-				Project: model.Project{
+			introspection := composemodel.IntrospectionResult{
+				Project: composemodel.Project{
 					Name:     "demo",
-					Services: []model.Service{service},
-					Networks: []model.Network{{Key: "back", Name: "demo_back"}},
+					Services: []composemodel.Service{service},
+					Networks: []composemodel.Network{{Key: "back", Name: "demo_back"}},
 				},
 				Images: map[model.ImageDigestID]image.InspectResponse{
 					model.ImageDigestID(inspect.Image): {

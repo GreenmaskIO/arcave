@@ -17,6 +17,7 @@ package deploy
 import (
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -130,18 +131,18 @@ func TestProvider_rebuildDivergentReplicas(t *testing.T) {
 				})
 			}
 			built := composetest.DemoIntrospection()
-			svc := model.Service{Name: composetest.DemoService}
+			svc := composemodel.Service{Name: composetest.DemoService}
 			for _, n := range tt.created {
-				svc.Containers = append(svc.Containers, model.Container{ID: createdID(n), Number: n})
+				svc.Containers = append(svc.Containers, composemodel.Container{ID: createdID(n), Number: n})
 			}
-			built.Project.Services = []model.Service{svc}
+			built.Project.Services = []composemodel.Service{svc}
 			inspector := &composetest.MockInspector{}
 			inspector.On("Introspect", mock.Anything).Return(built, nil).Once()
 			rebuilder := &composetest.MockContainerRebuilder{}
 			calls := make([]*mock.Call, 0, len(tt.want))
 			for _, w := range tt.want {
 				calls = append(calls, rebuilder.On("RecreateWithImage", mock.Anything, createdID(w.created),
-					model.ReplicaIdentity{Name: composetest.DemoContainerName(w.recorded), Number: w.recorded},
+					composemodel.ReplicaIdentity{Name: composetest.DemoContainerName(w.recorded), Number: w.recorded},
 					imageOf(replicas, w.recorded)).
 					Return("rebuilt", nil).Once())
 			}
@@ -189,14 +190,14 @@ func TestProvider_rebuildDivergentReplicas_CreatedAsRecorded(t *testing.T) {
 func TestProvider_rebuildDivergentReplicas_WarnsOnARenumberedReplica(t *testing.T) {
 	// Arrange
 	built := composetest.DemoIntrospection()
-	built.Project.Services = []model.Service{{Name: composetest.DemoService, Containers: []model.Container{
+	built.Project.Services = []composemodel.Service{{Name: composetest.DemoService, Containers: []composemodel.Container{
 		{ID: createdID(1), Number: 1}, {ID: createdID(2), Number: 2},
 	}}}
 	inspector := &composetest.MockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(built, nil).Once()
 	rebuilder := &composetest.MockContainerRebuilder{}
 	rebuilder.On("RecreateWithImage", mock.Anything, createdID(2),
-		model.ReplicaIdentity{Name: composetest.DemoContainerName(3), Number: 3}, composetest.DemoRestoredTag(3)).Return("rebuilt", nil).Once()
+		composemodel.ReplicaIdentity{Name: composetest.DemoContainerName(3), Number: 3}, composetest.DemoRestoredTag(3)).Return("rebuilt", nil).Once()
 	s := New(Deps{ComposeInspector: inspector, ContainerRebuilder: rebuilder})
 	logs := &composetest.SyncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())

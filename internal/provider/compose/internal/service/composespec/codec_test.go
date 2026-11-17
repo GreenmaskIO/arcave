@@ -16,6 +16,7 @@ package composespec
 
 import (
 	"context"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"net/netip"
 	"slices"
 	"testing"
@@ -33,31 +34,31 @@ import (
 
 // richResult is the compose project the round-trip is measured on: every section a rebuild
 // needs, on a service that declares something of each kind.
-func richResult() model.IntrospectionResult {
+func richResult() composemodel.IntrospectionResult {
 	svc := richService()
-	svc.Volumes[0].Volume = &model.VolumeMount{NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"}}
+	svc.Volumes[0].Volume = &composemodel.VolumeMount{NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"}}
 	svc.Volumes = append(svc.Volumes,
-		model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/conf", Target: "/etc/conf",
-			Bind: &model.BindMount{Propagation: "rshared", Recursive: "disabled"}},
-		model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/data", Target: "/data",
-			Bind: &model.BindMount{CreateHostPath: true}},
-		model.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run/cache",
-			Tmpfs: &model.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
-		model.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1", Target: "/assets",
-			ReadOnly: true, Image: &model.ImageMount{Subpath: "static"}},
+		composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/conf", Target: "/etc/conf",
+			Bind: &composemodel.BindMount{Propagation: "rshared", Recursive: "disabled"}},
+		composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/data", Target: "/data",
+			Bind: &composemodel.BindMount{CreateHostPath: true}},
+		composemodel.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run/cache",
+			Tmpfs: &composemodel.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
+		composemodel.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1", Target: "/assets",
+			ReadOnly: true, Image: &composemodel.ImageMount{Subpath: "static"}},
 	)
 	svc.Containers[0].Labels = map[string]string{
 		api.WorkingDirLabel:  "/srv/demo",
 		api.ConfigFilesLabel: "/srv/demo/compose.yaml",
 	}
-	return model.IntrospectionResult{Project: model.Project{
+	return composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name:     "demo",
-		Services: []model.Service{svc},
-		Volumes: []model.NamedVolume{{
+		Services: []composemodel.Service{svc},
+		Volumes: []composemodel.NamedVolume{{
 			Key: "pgdata", Name: "demo_pgdata", Driver: "local",
 			Labels: map[string]string{api.VolumeLabel: "pgdata"},
 		}},
-		Networks: []model.Network{{
+		Networks: []composemodel.Network{{
 			Key:  "back",
 			Name: "demo_back",
 			Inspect: network.Inspect{
@@ -182,22 +183,22 @@ func TestCodec_MarshalParse_EmptyOptions(t *testing.T) {
 func TestCodec_MarshalParse_SharedNamespaces(t *testing.T) {
 	// Arrange
 	const dbID = "9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9"
-	replica := func(id, name string, host container.HostConfig) model.Container {
-		return model.Container{ID: id, Name: name, Number: 1, Inspect: container.InspectResponse{
+	replica := func(id, name string, host container.HostConfig) composemodel.Container {
+		return composemodel.Container{ID: id, Name: name, Number: 1, Inspect: container.InspectResponse{
 			ID: id, HostConfig: &host,
 			Config: &container.Config{Image: "alpine:3"},
 		}}
 	}
-	introspection := model.IntrospectionResult{Project: model.Project{
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: "demo",
-		Services: []model.Service{
-			{Name: "app", Containers: []model.Container{replica("app1", "demo-app-1", container.HostConfig{
+		Services: []composemodel.Service{
+			{Name: "app", Containers: []composemodel.Container{replica("app1", "demo-app-1", container.HostConfig{
 				NetworkMode: container.NetworkMode("container:" + dbID),
 				IpcMode:     container.IpcMode("container:" + dbID),
 				PidMode:     container.PidMode("container:" + dbID),
 			})}},
-			{Name: "db", Containers: []model.Container{replica(dbID, "demo-db-1", container.HostConfig{NetworkMode: "bridge"})}},
-			{Name: "backup", Containers: []model.Container{replica("backup1", "demo-backup-1", container.HostConfig{
+			{Name: "db", Containers: []composemodel.Container{replica(dbID, "demo-db-1", container.HostConfig{NetworkMode: "bridge"})}},
+			{Name: "backup", Containers: []composemodel.Container{replica("backup1", "demo-backup-1", container.HostConfig{
 				NetworkMode: "default", VolumesFrom: []string{dbID, "sidecar"},
 				Links: []string{"/demo-db-1:/demo-backup-1/database", "/demo-db-1:/demo-backup-1/db-1"},
 			})}},

@@ -17,6 +17,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"maps"
 	"slices"
@@ -101,7 +102,7 @@ func (e *Engine) RemoveImage(ctx context.Context, imageID model.ImageDigestID) e
 func (e *Engine) RemoveImageRef(ctx context.Context, ref model.ImageRef) error {
 	inspect, err := e.api.ImageInspect(ctx, string(ref))
 	if cerrdefs.IsNotFound(err) {
-		return fmt.Errorf("remove image reference %s: %w", ref, model.ErrImageRefNotFound)
+		return fmt.Errorf("remove image reference %s: %w", ref, composemodel.ErrImageRefNotFound)
 	}
 	if err != nil {
 		return fmt.Errorf("inspect image reference %s: %w", ref, err)
@@ -119,7 +120,7 @@ func (e *Engine) RemoveImageRef(ctx context.Context, ref model.ImageRef) error {
 	}
 	_, err = e.api.ImageRemove(ctx, string(ref), client.ImageRemoveOptions{PruneChildren: true})
 	if cerrdefs.IsNotFound(err) {
-		return fmt.Errorf("remove image reference %s: %w", ref, model.ErrImageRefNotFound)
+		return fmt.Errorf("remove image reference %s: %w", ref, composemodel.ErrImageRefNotFound)
 	}
 	if err != nil {
 		return fmt.Errorf("remove image reference %s: %w", ref, err)
@@ -180,42 +181,42 @@ func (e *Engine) ImageExists(ctx context.Context, imageID model.ImageDigestID) (
 
 // ListLayerImages lists every arcave/…:sp-<savepoint> tag the daemon holds, spelled
 // as Docker does, with the image it names and the origin that image's labels name.
-func (e *Engine) ListLayerImages(ctx context.Context) ([]model.TaggedImage, error) {
+func (e *Engine) ListLayerImages(ctx context.Context) ([]composemodel.TaggedImage, error) {
 	summaries, err := e.api.ImageList(ctx, client.ImageListOptions{
 		Filters: make(client.Filters).Add("reference", model.RestoredLayerTagNamespace+"/*"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list arcave images: %w", err)
 	}
-	var tagged []model.TaggedImage
+	var tagged []composemodel.TaggedImage
 	for _, summary := range summaries.Items {
-		origin, _ := model.ParseLayerOrigin(summary.Labels)
+		origin, _ := composemodel.ParseLayerOrigin(summary.Labels)
 		for _, ref := range summary.RepoTags {
 			familiar := model.ImageRef(ref).Familiar()
 			if !familiar.IsRestoredLayerTag() {
 				continue
 			}
-			tagged = append(tagged, model.TaggedImage{
+			tagged = append(tagged, composemodel.TaggedImage{
 				Ref:     familiar,
 				ImageID: model.ImageDigestID(summary.ID),
 				Origin:  origin,
 			})
 		}
 	}
-	slices.SortFunc(tagged, func(a, b model.TaggedImage) int { return strings.Compare(string(a.Ref), string(b.Ref)) })
+	slices.SortFunc(tagged, func(a, b composemodel.TaggedImage) int { return strings.Compare(string(a.Ref), string(b.Ref)) })
 	return tagged, nil
 }
 
 // ListContainerImages lists what every container, running or not, was created from: the
 // reference it names, spelled as Docker does, and the image that resolved to.
-func (e *Engine) ListContainerImages(ctx context.Context) ([]model.ContainerImage, error) {
+func (e *Engine) ListContainerImages(ctx context.Context) ([]composemodel.ContainerImage, error) {
 	containers, err := e.api.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("list containers: %w", err)
 	}
-	images := make([]model.ContainerImage, 0, len(containers.Items))
+	images := make([]composemodel.ContainerImage, 0, len(containers.Items))
 	for _, summary := range containers.Items {
-		images = append(images, model.ContainerImage{
+		images = append(images, composemodel.ContainerImage{
 			ContainerID: summary.ID,
 			Ref:         model.ImageRef(summary.Image).Familiar(),
 			ImageID:     model.ImageDigestID(summary.ImageID),

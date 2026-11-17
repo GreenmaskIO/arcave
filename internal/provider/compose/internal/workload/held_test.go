@@ -51,10 +51,10 @@ func TestHeld_Capture(t *testing.T) {
 		Project:    composetest.DemoSpec,
 		Spec:       composetest.DemoSpecBytes,
 		Services:   stopServices,
-		Containers: []model.ContainerRef{composetest.DemoContainerRef()},
+		Containers: []composemodel.ContainerRef{composetest.DemoContainerRef()},
 	}
 	ctx := composetest.NewTestContext()
-	holding, err := svc.newCapturePlan(plan, model.IntrospectionResult{}).Hold(ctx)
+	holding, err := svc.newCapturePlan(plan, composemodel.IntrospectionResult{}).Hold(ctx)
 	require.NoError(t, err)
 
 	// Act
@@ -83,7 +83,7 @@ func TestHeld_PrepareSavepoint(t *testing.T) {
 	tag := "arcave/demo-db-1-postgres-16:sp-" + undo.ID.String()
 	mock.InOrder(
 		expectRecordRead(repo, undo),
-		images.On("RestoreWritableLayer", mock.Anything, model.WritableLayerRestoreRequest{
+		images.On("RestoreWritableLayer", mock.Anything, composemodel.WritableLayerRestoreRequest{
 			SnapshotID: undo.ID, Layer: composetest.DemoWritableLayer(), Tag: tag,
 		}).Return(model.WritableLayerRestoreResult{Service: composetest.DemoService, Replica: 1, Tag: tag}, nil).Once(),
 	)
@@ -110,7 +110,7 @@ func TestHeld_Teardown(t *testing.T) {
 	// Arrange: demo_db the project owned when inspected; demo_cache appeared since.
 	introspection := composetest.DemoIntrospection()
 	now := composetest.DemoAbsentIntrospection()
-	now.Project.Volumes = append(now.Project.Volumes, model.NamedVolume{Key: "demo_cache", Name: "demo_cache"})
+	now.Project.Volumes = append(now.Project.Volumes, composemodel.NamedVolume{Key: "demo_cache", Name: "demo_cache"})
 	runner := &composetest.MockComposeRunner{}
 	inspector := &composetest.MockInspector{}
 	remover := &composetest.MockVolumeRemover{}
@@ -164,14 +164,14 @@ func TestHeld_Teardown_FailedDown(t *testing.T) {
 func TestHeld_Teardown_CarriesTheAnonymousVolumes(t *testing.T) {
 	// Arrange
 	anonVol := model.Volume{ObjectID: "volume-anon-app-1-scratch", Backend: model.SnapshotBackendFullCopy}
-	introspection := model.IntrospectionResult{Project: model.Project{
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: composetest.DemoProject,
-		Services: []model.Service{{
+		Services: []composemodel.Service{{
 			Name: "app",
-			Volumes: []model.ServiceVolume{
+			Volumes: []composemodel.ServiceVolume{
 				{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/scratch", VolumeName: "9f8e7d", Replica: 1},
 			},
-			Containers: []model.Container{{Name: "demo-app-1", Number: 1}},
+			Containers: []composemodel.Container{{Name: "demo-app-1", Number: 1}},
 		}},
 	}}
 	record := composetest.DemoRecord()

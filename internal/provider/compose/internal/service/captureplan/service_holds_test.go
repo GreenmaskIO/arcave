@@ -30,8 +30,8 @@ import (
 )
 
 // newStateReplica is replica n of service in the given state; a nil state is none reported.
-func newStateReplica(service string, n int, state *container.State) model.Container {
-	return model.Container{
+func newStateReplica(service string, n int, state *container.State) composemodel.Container {
+	return composemodel.Container{
 		ID:      fmt.Sprintf("%s-id-%d", service, n),
 		Name:    fmt.Sprintf("demo-%s-%d", service, n),
 		Number:  n,
@@ -48,53 +48,53 @@ func TestNewServiceHolds(t *testing.T) {
 		created    = &container.State{Status: container.StateCreated}
 		restarting = &container.State{Status: container.StateRestarting, Running: true, Restarting: true}
 	)
-	refOf := func(replica model.Container, service string) model.ContainerRef {
-		return model.ContainerRef{Service: service, Replica: replica.Number, ID: replica.ID, Name: replica.Name}
+	refOf := func(replica composemodel.Container, service string) composemodel.ContainerRef {
+		return composemodel.ContainerRef{Service: service, Replica: replica.Number, ID: replica.ID, Name: replica.Name}
 	}
 
 	tests := []struct {
 		name     string
-		services []model.Service
-		policy   model.CapturePolicy
-		want     func(services []model.Service) []composemodel.ServiceHold
+		services []composemodel.Service
+		policy   composemodel.CapturePolicy
+		want     func(services []composemodel.Service) []composemodel.ServiceHold
 	}{
 		{
 			name: "mixed modes, a service with no decision held by the policy's mode",
-			services: []model.Service{
-				{Name: "db", Containers: []model.Container{newStateReplica("db", 1, running)}},
-				{Name: "web", Containers: []model.Container{newStateReplica("web", 1, running)}},
-				{Name: "worker", Containers: []model.Container{newStateReplica("worker", 1, running)}},
+			services: []composemodel.Service{
+				{Name: "db", Containers: []composemodel.Container{newStateReplica("db", 1, running)}},
+				{Name: "web", Containers: []composemodel.Container{newStateReplica("web", 1, running)}},
+				{Name: "worker", Containers: []composemodel.Container{newStateReplica("worker", 1, running)}},
 			},
-			policy: model.CapturePolicy{
+			policy: composemodel.CapturePolicy{
 				Mode: model.CaptureModeLive,
-				Services: map[string]model.ServiceDecision{
+				Services: map[string]composemodel.ServiceDecision{
 					"db":  {Mode: model.CaptureModeStop},
 					"web": {Mode: model.CaptureModePause},
 				},
 			},
-			want: func(services []model.Service) []composemodel.ServiceHold {
+			want: func(services []composemodel.Service) []composemodel.ServiceHold {
 				return []composemodel.ServiceHold{
-					{Service: "db", Mode: model.CaptureModeStop, Running: []model.ContainerRef{refOf(services[0].Containers[0], "db")}},
-					{Service: "web", Mode: model.CaptureModePause, Running: []model.ContainerRef{refOf(services[1].Containers[0], "web")}},
-					{Service: "worker", Mode: model.CaptureModeLive, Running: []model.ContainerRef{refOf(services[2].Containers[0], "worker")}},
+					{Service: "db", Mode: model.CaptureModeStop, Running: []composemodel.ContainerRef{refOf(services[0].Containers[0], "db")}},
+					{Service: "web", Mode: model.CaptureModePause, Running: []composemodel.ContainerRef{refOf(services[1].Containers[0], "web")}},
+					{Service: "worker", Mode: model.CaptureModeLive, Running: []composemodel.ContainerRef{refOf(services[2].Containers[0], "worker")}},
 				}
 			},
 		},
 		{
 			name: "a paused, exited, created or restarting replica is idle; no state is running",
-			services: []model.Service{{Name: "db", Containers: []model.Container{
+			services: []composemodel.Service{{Name: "db", Containers: []composemodel.Container{
 				newStateReplica("db", 1, paused),
 				newStateReplica("db", 2, exited),
 				newStateReplica("db", 3, created),
 				newStateReplica("db", 4, restarting),
 				newStateReplica("db", 5, nil),
 			}}},
-			want: func(services []model.Service) []composemodel.ServiceHold {
+			want: func(services []composemodel.Service) []composemodel.ServiceHold {
 				replicas := services[0].Containers
 				return []composemodel.ServiceHold{{
 					Service: "db",
 					Mode:    model.CaptureModeStop,
-					Running: []model.ContainerRef{refOf(replicas[4], "db")},
+					Running: []composemodel.ContainerRef{refOf(replicas[4], "db")},
 					Idle: []composemodel.IdleReplica{
 						{Ref: refOf(replicas[0], "db"), State: "paused"},
 						{Ref: refOf(replicas[1], "db"), State: "exited"},
@@ -109,7 +109,7 @@ func TestNewServiceHolds(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			introspection := model.IntrospectionResult{Project: model.Project{Name: composetest.DemoProject, Services: tt.services}}
+			introspection := composemodel.IntrospectionResult{Project: composemodel.Project{Name: composetest.DemoProject, Services: tt.services}}
 
 			// Act
 			holds := newServiceHolds(introspection, tt.policy)
@@ -190,7 +190,7 @@ func TestPlanner_Plan_HoldsEachServiceByItsMode(t *testing.T) {
 			assert.Equal(t, []composemodel.ServiceHold{{
 				Service: composetest.DemoService,
 				Mode:    tt.wantMode,
-				Running: []model.ContainerRef{{Service: composetest.DemoService, Replica: 1, ID: composetest.DemoContainerID, Name: composetest.DemoContainerName(1)}},
+				Running: []composemodel.ContainerRef{{Service: composetest.DemoService, Replica: 1, ID: composetest.DemoContainerID, Name: composetest.DemoContainerName(1)}},
 			}}, plan.Services)
 			registry.AssertExpectations(t)
 		})

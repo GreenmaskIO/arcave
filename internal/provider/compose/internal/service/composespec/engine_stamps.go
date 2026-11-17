@@ -24,7 +24,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/system"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 const (
@@ -92,7 +92,7 @@ type EngineNetworking struct {
 // its runtime, log driver and host name, and Docker Desktop's stop timeout.
 func NewDockerStamps(info system.Info) EngineStamps {
 	stopTimeout := 0
-	if model.IsDockerDesktop(info) {
+	if composemodel.IsDockerDesktop(info) {
 		stopTimeout = desktopStopTimeout
 	}
 	return EngineStamps{
@@ -149,7 +149,7 @@ func nonEmpty(values ...string) []string {
 }
 
 // dropEngineStamps takes out of cfg what the engine stamped on the container by itself.
-func (a assembly) dropEngineStamps(cfg *types.ServiceConfig, replica model.Container) {
+func (a assembly) dropEngineStamps(cfg *types.ServiceConfig, replica composemodel.Container) {
 	stamps := a.engineStamps
 	image := a.upstreamConfig(replica)
 
@@ -201,8 +201,8 @@ func (a assembly) dropEngineStamps(cfg *types.ServiceConfig, replica model.Conta
 
 // upstreamConfig is the config of the image the replica's upstream names, not a restored
 // layer's: a commit keeps what the engine stamped.
-func (a assembly) upstreamConfig(replica model.Container) dockerspec.DockerOCIImageConfig {
-	id, _, ok := model.ResolveUpstream(a.introspection, replica)
+func (a assembly) upstreamConfig(replica composemodel.Container) dockerspec.DockerOCIImageConfig {
+	id, _, ok := composemodel.ResolveUpstream(a.introspection, replica)
 	if !ok {
 		return dockerspec.DockerOCIImageConfig{}
 	}

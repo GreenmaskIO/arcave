@@ -89,7 +89,7 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 	}{
 		{name: "a savepoint with its layer", savepoint: composetest.DemoRecordWithImages(), found: true},
 		{name: "a record not found", savepoint: composetest.DemoRecordWithImages(), wantErr: sessionstore.ErrRecordNotFound},
-		{name: "a record with no spec", savepoint: noSpec, found: true, wantErr: model.ErrSavepointNoSpec},
+		{name: "a record with no spec", savepoint: noSpec, found: true, wantErr: composemodel.ErrSavepointNoSpec},
 		{name: "a layer the daemon will not take", savepoint: composetest.DemoRecordWithImages(), found: true, loadErr: errLoad, wantErr: errLoad},
 	}
 	for _, tt := range tests {
@@ -112,7 +112,7 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 				calls = append(calls,
 					repo.On("LoadSpec", mock.Anything, tt.savepoint.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
 					codec.On("Parse", mock.Anything, composetest.DemoTargetSpecBytes).Return(composetest.DemoTargetSpec, nil).Once(),
-					images.On("RestoreWritableLayer", mock.Anything, model.WritableLayerRestoreRequest{
+					images.On("RestoreWritableLayer", mock.Anything, composemodel.WritableLayerRestoreRequest{
 						SnapshotID: tt.savepoint.ID, Layer: composetest.DemoWritableLayer(), Tag: composetest.DemoRestoredTag(1),
 					}).Return(composetest.DemoWritableLayerRestoreResult(), tt.loadErr).Once())
 			}
@@ -215,7 +215,7 @@ func TestLive_PrepareSavepoint_LeftoverVolumes(t *testing.T) {
 // only logged, and over an absent compose project it removes nothing.
 func TestLive_Teardown(t *testing.T) {
 	paused := composetest.DemoIntrospection()
-	paused.Project.Services[0].Containers = []model.Container{{
+	paused.Project.Services[0].Containers = []composemodel.Container{{
 		ID:     composetest.DemoContainerID,
 		Name:   composetest.DemoContainerName(1),
 		Number: 1,
@@ -225,7 +225,7 @@ func TestLive_Teardown(t *testing.T) {
 	}}
 	tests := []struct {
 		name          string
-		introspection model.IntrospectionResult
+		introspection composemodel.IntrospectionResult
 		unpauseErr    error
 		downErr       error
 		wantWarnings  []string

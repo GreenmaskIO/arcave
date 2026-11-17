@@ -41,7 +41,7 @@ func checkCaptureStamps(ctx context.Context, savepoint model.Savepoint, project 
 			return err
 		}
 		for _, mount := range svc.Volumes {
-			stamp, ok, err := readStamp(svc, model.NewMountStampLabel(mount.Target))
+			stamp, ok, err := readStamp(svc, composemodel.NewMountStampLabel(mount.Target))
 			if err != nil {
 				return err
 			}
@@ -82,20 +82,20 @@ func checkLayerStamp(ctx context.Context, savepoint model.Savepoint, name string
 }
 
 // readStamp reads one capture stamp of a service; ok is false when it carries none.
-func readStamp(svc types.ServiceConfig, key model.SystemLabel) (model.CaptureStamp, bool, error) {
+func readStamp(svc types.ServiceConfig, key model.SystemLabel) (composemodel.CaptureStamp, bool, error) {
 	value, ok := svc.Labels[string(key)]
 	if !ok {
-		return model.CaptureStamp{}, false, nil
+		return composemodel.CaptureStamp{}, false, nil
 	}
-	stamp, err := model.ParseCaptureStamp(value)
+	stamp, err := composemodel.ParseCaptureStamp(value)
 	if err != nil {
-		return model.CaptureStamp{}, false, fmt.Errorf("service %s: %w", svc.Name, err)
+		return composemodel.CaptureStamp{}, false, fmt.Errorf("service %s: %w", svc.Name, err)
 	}
 	return stamp, true, nil
 }
 
 // stampEvent is the log line of one stamp, its backend and why named.
-func stampEvent(ctx context.Context, service string, stamp model.CaptureStamp) *zerolog.Event {
+func stampEvent(ctx context.Context, service string, stamp composemodel.CaptureStamp) *zerolog.Event {
 	event := zerolog.Ctx(ctx).Info().Str("service", service).Str("origin", string(stamp.Origin))
 	if stamp.Backend != "" {
 		event = event.Str("backend", stamp.Backend)

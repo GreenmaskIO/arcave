@@ -17,6 +17,7 @@ package capture
 import (
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -29,7 +30,7 @@ import (
 // captureImages stores every distinct image concurrently, apart from the writable layers.
 // inResult marks the warning of an image not stored as InResult.
 func (s *Capturer) captureImages(
-	ctx context.Context, snapshotID model.SavepointID, reqs []model.ImageCaptureRequest, inResult bool,
+	ctx context.Context, snapshotID model.SavepointID, reqs []composemodel.ImageCaptureRequest, inResult bool,
 ) ([]model.Image, error) {
 	if len(reqs) == 0 {
 		return nil, nil
@@ -93,7 +94,7 @@ func newImageStep(image model.Image) progress.Step {
 // captureWritableLayers commits every requested writable layer under one savepoint id,
 // concurrently, and returns one capture per request in input order.
 func (s *Capturer) captureWritableLayers(
-	ctx context.Context, snapshotID model.SavepointID, reqs []model.WritableLayerCaptureRequest,
+	ctx context.Context, snapshotID model.SavepointID, reqs []composemodel.WritableLayerCaptureRequest,
 ) ([]model.WritableLayer, error) {
 	if len(reqs) == 0 {
 		return nil, nil
@@ -144,7 +145,7 @@ func (s *Capturer) captureWritableLayers(
 
 // imageOpContext attributes every line the capture logs.
 func imageOpContext(
-	ctx context.Context, container model.ContainerRef, snapshotID model.SavepointID,
+	ctx context.Context, container composemodel.ContainerRef, snapshotID model.SavepointID,
 ) context.Context {
 	return zerolog.Ctx(ctx).With().
 		Str("service", container.Service).

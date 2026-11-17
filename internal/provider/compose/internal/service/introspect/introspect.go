@@ -21,6 +21,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"maps"
 	"regexp"
 	"slices"
@@ -71,10 +72,10 @@ func NewInspector(api dockerAPI, composeProject model.DockerComposeProjectName) 
 
 // Introspect reports the compose project, stopped containers included. It cannot see an external volume
 // named like a generated one, an unmounted foreign volume, or a torn-down compose project.
-func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, error) {
+func (s *Inspector) Introspect(ctx context.Context) (composemodel.IntrospectionResult, error) {
 	listed, err := s.listContainers(ctx)
 	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read containers of compose project %q: %w", s.composeProject, err)
+		return composemodel.IntrospectionResult{}, fmt.Errorf("read containers of compose project %q: %w", s.composeProject, err)
 	}
 	replicas := keepProjectContainers(listed)
 
@@ -82,36 +83,36 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 	// then each external or anonymous one a service or any of its replicas mounts.
 	volumeIndex, err := s.readOwnedVolumes(ctx)
 	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read volumes of compose project %q: %w", s.composeProject, err)
+		return composemodel.IntrospectionResult{}, fmt.Errorf("read volumes of compose project %q: %w", s.composeProject, err)
 	}
 
 	services, err := s.readServices(ctx, replicas, volumeIndex)
 	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read services of compose project %q: %w", s.composeProject, err)
+		return composemodel.IntrospectionResult{}, fmt.Errorf("read services of compose project %q: %w", s.composeProject, err)
 	}
 
 	if err := s.mountedVolumes(ctx, services, volumeIndex); err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read volumes mounted in compose project %q: %w", s.composeProject, err)
+		return composemodel.IntrospectionResult{}, fmt.Errorf("read volumes mounted in compose project %q: %w", s.composeProject, err)
 	}
 
 	networks, err := s.readNetworks(ctx)
 	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read networks of compose project %q: %w", s.composeProject, err)
+		return composemodel.IntrospectionResult{}, fmt.Errorf("read networks of compose project %q: %w", s.composeProject, err)
 	}
 
 	images, err := s.readImages(ctx, services)
 	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read images of compose project %q: %w", s.composeProject, err)
+		return composemodel.IntrospectionResult{}, fmt.Errorf("read images of compose project %q: %w", s.composeProject, err)
 	}
 
 	referenced, err := s.readReferenced(ctx, services)
 	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read containers compose project %q refers to: %w", s.composeProject, err)
+		return composemodel.IntrospectionResult{}, fmt.Errorf("read containers compose project %q refers to: %w", s.composeProject, err)
 	}
 	markInherited(services, referenced)
 
-	return model.IntrospectionResult{
-		Project: model.Project{
+	return composemodel.IntrospectionResult{
+		Project: composemodel.Project{
 			Name:     s.composeProject.String(),
 			Services: services,
 			Volumes:  s.newNamedVolumes(services, volumeIndex),
@@ -175,9 +176,9 @@ func (s *Inspector) readOwnedVolumes(ctx context.Context) (map[string]volume.Vol
 // readServices reports the compose project's readServices, sorted by name.
 func (s *Inspector) readServices(
 	ctx context.Context, containers []container.Summary, volumeIndex map[string]volume.Volume,
-) ([]model.Service, error) {
+) ([]composemodel.Service, error) {
 	byService := groupByService(containers)
-	services := make([]model.Service, 0, len(byService))
+	services := make([]composemodel.Service, 0, len(byService))
 	for _, name := range slices.Sorted(maps.Keys(byService)) {
 		svc, err := s.readService(ctx, name, byService[name], volumeIndex)
 		if err != nil {
@@ -208,16 +209,16 @@ func groupByService(summaries []container.Summary) map[string][]container.Summar
 // readService reports one readService from its replicas.
 func (s *Inspector) readService(
 	ctx context.Context, name string, replicas []container.Summary, volumeIndex map[string]volume.Volume,
-) (model.Service, error) {
+) (composemodel.Service, error) {
 	containers, err := s.readContainers(ctx, replicas)
 	if err != nil {
-		return model.Service{}, err
+		return composemodel.Service{}, err
 	}
 	mounts, err := s.replicaMounts(ctx, name, replicas, containers, volumeIndex)
 	if err != nil {
-		return model.Service{}, err
+		return composemodel.Service{}, err
 	}
-	return model.Service{
+	return composemodel.Service{
 		Name:       name,
 		Image:      replicas[0].Image,
 		Labels:     replicas[0].Labels,
@@ -234,10 +235,10 @@ func (s *Inspector) readService(
 // numbered by its replica. A mount the first replica does not declare alike is warned of:
 // the spec is the first replica's, so a rollback rebuilds the replica without it.
 func (s *Inspector) replicaMounts(
-	ctx context.Context, service string, replicas []container.Summary, containers []model.Container,
+	ctx context.Context, service string, replicas []container.Summary, containers []composemodel.Container,
 	volumeIndex map[string]volume.Volume,
-) ([]model.ServiceVolume, error) {
-	var first, mounts []model.ServiceVolume
+) ([]composemodel.ServiceVolume, error) {
+	var first, mounts []composemodel.ServiceVolume
 	for replicaIndex, replica := range replicas {
 		ownMounts, err := s.readServiceVolumes(ctx, replica, containers[replicaIndex].Inspect, volumeIndex)
 		if err != nil {
@@ -259,15 +260,15 @@ func (s *Inspector) replicaMounts(
 			}
 		}
 	}
-	slices.SortStableFunc(mounts, func(a, b model.ServiceVolume) int {
+	slices.SortStableFunc(mounts, func(a, b composemodel.ServiceVolume) int {
 		return cmp.Or(strings.Compare(a.Target, b.Target), a.Replica-b.Replica)
 	})
 	return mounts, nil
 }
 
 // readContainers inspects each replica and carries the raw response verbatim.
-func (s *Inspector) readContainers(ctx context.Context, group []container.Summary) ([]model.Container, error) {
-	containers := make([]model.Container, 0, len(group))
+func (s *Inspector) readContainers(ctx context.Context, group []container.Summary) ([]composemodel.Container, error) {
+	containers := make([]composemodel.Container, 0, len(group))
 	for _, summary := range group {
 		inspected, err := s.readContainer(ctx, summary)
 		if err != nil {
@@ -280,8 +281,8 @@ func (s *Inspector) readContainers(ctx context.Context, group []container.Summar
 
 // readPresentContainers inspects every container of group the daemon still holds: one removed
 // since the listing is skipped.
-func (s *Inspector) readPresentContainers(ctx context.Context, group []container.Summary) ([]model.Container, error) {
-	containers := make([]model.Container, 0, len(group))
+func (s *Inspector) readPresentContainers(ctx context.Context, group []container.Summary) ([]composemodel.Container, error) {
+	containers := make([]composemodel.Container, 0, len(group))
 	for _, summary := range group {
 		inspected, err := s.readContainer(ctx, summary)
 		switch {
@@ -297,12 +298,12 @@ func (s *Inspector) readPresentContainers(ctx context.Context, group []container
 }
 
 // readContainer inspects the container summary lists.
-func (s *Inspector) readContainer(ctx context.Context, summary container.Summary) (model.Container, error) {
+func (s *Inspector) readContainer(ctx context.Context, summary container.Summary) (composemodel.Container, error) {
 	inspected, err := s.api.ContainerInspect(ctx, summary.ID, client.ContainerInspectOptions{})
 	if err != nil {
-		return model.Container{}, fmt.Errorf("inspect container %s: %w", summary.ID, err)
+		return composemodel.Container{}, fmt.Errorf("inspect container %s: %w", summary.ID, err)
 	}
-	return model.Container{
+	return composemodel.Container{
 		ID:       summary.ID,
 		Name:     containerName(summary.Names),
 		Number:   replicaNumber(summary.Labels),
@@ -351,9 +352,9 @@ func containerName(names []string) string {
 func (s *Inspector) readServiceVolumes(
 	ctx context.Context, replica container.Summary, inspect container.InspectResponse,
 	volumeIndex map[string]volume.Volume,
-) ([]model.ServiceVolume, error) {
+) ([]composemodel.ServiceVolume, error) {
 	declared := newDeclaredMounts(inspect)
-	mounts := make([]model.ServiceVolume, 0, len(replica.Mounts))
+	mounts := make([]composemodel.ServiceVolume, 0, len(replica.Mounts))
 	for _, mountPoint := range replica.Mounts {
 		mount, err := s.readServiceVolume(ctx, mountPoint, volumeIndex)
 		if err != nil {
@@ -365,7 +366,7 @@ func (s *Inspector) readServiceVolumes(
 		}
 		mounts = append(mounts, mount)
 	}
-	slices.SortStableFunc(mounts, func(a, b model.ServiceVolume) int {
+	slices.SortStableFunc(mounts, func(a, b composemodel.ServiceVolume) int {
 		return strings.Compare(a.Target, b.Target)
 	})
 	return mounts, nil
@@ -374,10 +375,10 @@ func (s *Inspector) readServiceVolumes(
 // undeclaredMounts are the mounts of a later replica the first does not declare with the
 // same type at the same target. An anonymous volume at a target the first leaves free is
 // not one: it is captured, and the replica's own layer declares it back.
-func undeclaredMounts(first, own []model.ServiceVolume) []model.ServiceVolume {
-	var undeclared []model.ServiceVolume
+func undeclaredMounts(first, own []composemodel.ServiceVolume) []composemodel.ServiceVolume {
+	var undeclared []composemodel.ServiceVolume
 	for _, mount := range own {
-		at := slices.IndexFunc(first, func(f model.ServiceVolume) bool { return f.Target == mount.Target })
+		at := slices.IndexFunc(first, func(f composemodel.ServiceVolume) bool { return f.Target == mount.Target })
 		if at >= 0 && first[at].Type == mount.Type {
 			continue // declared alike
 		}
@@ -392,8 +393,8 @@ func undeclaredMounts(first, own []model.ServiceVolume) []model.ServiceVolume {
 // readServiceVolume classifies one mount; a volume mount is the project's own, anonymous, or external.
 func (s *Inspector) readServiceVolume(
 	ctx context.Context, mountPoint container.MountPoint, volumeIndex map[string]volume.Volume,
-) (model.ServiceVolume, error) {
-	serviceVolume := model.ServiceVolume{
+) (composemodel.ServiceVolume, error) {
+	serviceVolume := composemodel.ServiceVolume{
 		RawType:  string(mountPoint.Type),
 		Target:   mountPoint.Destination,
 		ReadOnly: !mountPoint.RW,
@@ -403,7 +404,7 @@ func (s *Inspector) readServiceVolume(
 	case mount.TypeVolume:
 		dockerVolume, err := s.volume(ctx, mountPoint.Name, volumeIndex)
 		if err != nil {
-			return model.ServiceVolume{}, err
+			return composemodel.ServiceVolume{}, err
 		}
 		serviceVolume.VolumeName = mountPoint.Name
 		switch {
@@ -475,7 +476,7 @@ func newDeclaredMounts(inspect container.InspectResponse) map[string]declaredMou
 }
 
 // applyMountOptions fills mount's per-type options and source from the declared mount.
-func applyMountOptions(mount *model.ServiceVolume, mountPoint container.MountPoint, declared declaredMount) {
+func applyMountOptions(mount *composemodel.ServiceVolume, mountPoint container.MountPoint, declared declaredMount) {
 	switch mount.Type {
 	case model.VolumeTypeNamed, model.VolumeTypeAnon:
 		mount.Volume = newVolumeOptions(declared)
@@ -486,7 +487,7 @@ func applyMountOptions(mount *model.ServiceVolume, mountPoint container.MountPoi
 		mount.Bind = newBindOptions(mountPoint, declared)
 	case model.VolumeTypeTmpfs:
 		if declared.mountRequest != nil && declared.mountRequest.TmpfsOptions != nil {
-			mount.Tmpfs = &model.TmpfsMount{
+			mount.Tmpfs = &composemodel.TmpfsMount{
 				SizeBytes: declared.mountRequest.TmpfsOptions.SizeBytes,
 				Mode:      uint32(declared.mountRequest.TmpfsOptions.Mode),
 			}
@@ -495,7 +496,7 @@ func applyMountOptions(mount *model.ServiceVolume, mountPoint container.MountPoi
 		if declared.mountRequest != nil {
 			mount.Source = declared.mountRequest.Source
 			if declared.mountRequest.ImageOptions != nil {
-				mount.Image = &model.ImageMount{Subpath: declared.mountRequest.ImageOptions.Subpath}
+				mount.Image = &composemodel.ImageMount{Subpath: declared.mountRequest.ImageOptions.Subpath}
 			}
 		}
 	}
@@ -503,21 +504,21 @@ func applyMountOptions(mount *model.ServiceVolume, mountPoint container.MountPoi
 
 // newVolumeOptions reads nocopy, subpath and the per-mount labels; nil when the request carried
 // none. Empty options are kept: compose sends them for every volume its file declares.
-func newVolumeOptions(declared declaredMount) *model.VolumeMount {
+func newVolumeOptions(declared declaredMount) *composemodel.VolumeMount {
 	if declared.bindRequest != nil && declared.bindRequest.Volume != nil && declared.bindRequest.Volume.NoCopy {
-		return &model.VolumeMount{NoCopy: true}
+		return &composemodel.VolumeMount{NoCopy: true}
 	}
 	if declared.mountRequest == nil || declared.mountRequest.VolumeOptions == nil {
 		return nil
 	}
 	volumeOpts := declared.mountRequest.VolumeOptions
-	return &model.VolumeMount{NoCopy: volumeOpts.NoCopy, Subpath: volumeOpts.Subpath, Labels: volumeOpts.Labels}
+	return &composemodel.VolumeMount{NoCopy: volumeOpts.NoCopy, Subpath: volumeOpts.Subpath, Labels: volumeOpts.Labels}
 }
 
 // newBindOptions reads a bind's options. The bind API creates a missing host path and the mount
 // API does so only when asked, so a bind of unknown origin is taken as the bind API's.
-func newBindOptions(mountPoint container.MountPoint, declared declaredMount) *model.BindMount {
-	bind := &model.BindMount{Propagation: string(mountPoint.Propagation), CreateHostPath: true}
+func newBindOptions(mountPoint container.MountPoint, declared declaredMount) *composemodel.BindMount {
+	bind := &composemodel.BindMount{Propagation: string(mountPoint.Propagation), CreateHostPath: true}
 	if declared.bindRequest != nil && declared.bindRequest.Bind != nil {
 		bind.SELinux = declared.bindRequest.Bind.SELinux
 	}
@@ -557,7 +558,7 @@ func isAnonymous(dockerVolume volume.Volume) bool {
 }
 
 // mountedVolumes reads into the index every volume any replica mounts, not only the first.
-func (s *Inspector) mountedVolumes(ctx context.Context, services []model.Service, volumeIndex map[string]volume.Volume) error {
+func (s *Inspector) mountedVolumes(ctx context.Context, services []composemodel.Service, volumeIndex map[string]volume.Volume) error {
 	for _, name := range mountedVolumeNames(services) {
 		if _, err := s.volume(ctx, name, volumeIndex); err != nil {
 			return fmt.Errorf("mounted volume %q: %w", name, err)
@@ -567,7 +568,7 @@ func (s *Inspector) mountedVolumes(ctx context.Context, services []model.Service
 }
 
 // mountedVolumeNames are the docker names of the volumes the replicas mount, in discovery order.
-func mountedVolumeNames(services []model.Service) []string {
+func mountedVolumeNames(services []composemodel.Service) []string {
 	var names []string
 	for _, svc := range services {
 		for _, replica := range svc.Containers {
@@ -582,21 +583,21 @@ func mountedVolumeNames(services []model.Service) []string {
 }
 
 // readNetworks reports the project's readNetworks, sorted by key.
-func (s *Inspector) readNetworks(ctx context.Context) ([]model.Network, error) {
+func (s *Inspector) readNetworks(ctx context.Context) ([]composemodel.Network, error) {
 	listed, err := s.api.NetworkList(ctx, client.NetworkListOptions{Filters: s.newProjectFilter()})
 	if err != nil {
 		return nil, err
 	}
 
-	networks := make([]model.Network, 0, len(listed.Items))
+	networks := make([]composemodel.Network, 0, len(listed.Items))
 	for _, summary := range listed.Items {
-		networks = append(networks, model.Network{
+		networks = append(networks, composemodel.Network{
 			Key:     summary.Labels[api.NetworkLabel],
 			Name:    summary.Name,
 			Inspect: network.Inspect{Network: summary.Network},
 		})
 	}
-	slices.SortFunc(networks, func(a, b model.Network) int {
+	slices.SortFunc(networks, func(a, b composemodel.Network) int {
 		return strings.Compare(a.Key, b.Key)
 	})
 	return networks, nil
@@ -605,7 +606,7 @@ func (s *Inspector) readNetworks(ctx context.Context) ([]model.Network, error) {
 // readImages inspects each distinct image the containers run on, then the base readImages those name
 // by model.SystemLabelBaseImageID — the true base of a container a rollback rebuilt on an arcave tag.
 func (s *Inspector) readImages(
-	ctx context.Context, services []model.Service,
+	ctx context.Context, services []composemodel.Service,
 ) (map[model.ImageDigestID]image.InspectResponse, error) {
 	ids, err := containerImageIDs(services)
 	if err != nil {
@@ -632,7 +633,7 @@ func (s *Inspector) readImages(
 }
 
 // containerImageIDs are the distinct ids of the images the containers run on, in discovery order.
-func containerImageIDs(services []model.Service) ([]model.ImageDigestID, error) {
+func containerImageIDs(services []composemodel.Service) ([]model.ImageDigestID, error) {
 	var ids []model.ImageDigestID
 	for _, svc := range services {
 		for _, replica := range svc.Containers {
@@ -694,7 +695,7 @@ func baseImageID(inspect image.InspectResponse) (model.ImageDigestID, bool) {
 // readReferenced inspects each distinct container outside the project a replica refers to, keyed by
 // id. One the daemon no longer has is left out; that is not an error.
 func (s *Inspector) readReferenced(
-	ctx context.Context, services []model.Service,
+	ctx context.Context, services []composemodel.Service,
 ) (map[string]container.InspectResponse, error) {
 	referenced := map[string]container.InspectResponse{}
 	for _, ref := range foreignReferences(services) {
@@ -714,7 +715,7 @@ func (s *Inspector) readReferenced(
 
 // foreignReferences are the distinct containers the replicas name in a container: namespace
 // mode or in volumes_from that are no replica of the project, in discovery order.
-func foreignReferences(services []model.Service) []string {
+func foreignReferences(services []composemodel.Service) []string {
 	own := map[string]bool{}
 	for _, svc := range services {
 		for _, replica := range svc.Containers {
@@ -750,7 +751,7 @@ func foreignReferences(services []model.Service) []string {
 
 // markInherited sets InheritedFrom on every mount a replica inherited through volumes_from: one its
 // source — a replica of the project or a referenced container — mounts alike at the same target.
-func markInherited(services []model.Service, referenced map[string]container.InspectResponse) {
+func markInherited(services []composemodel.Service, referenced map[string]container.InspectResponse) {
 	sources := map[string]container.InspectResponse{}
 	for _, svc := range services {
 		for _, replica := range svc.Containers {
@@ -772,16 +773,16 @@ func markInherited(services []model.Service, referenced map[string]container.Ins
 
 // mountingReplica is the replica a reported mount was read off: its own for an anonymous
 // volume, the first otherwise.
-func mountingReplica(svc model.Service, mount model.ServiceVolume) (model.Container, bool) {
+func mountingReplica(svc composemodel.Service, mount composemodel.ServiceVolume) (composemodel.Container, bool) {
 	if mount.Type != model.VolumeTypeAnon {
 		if len(svc.Containers) == 0 {
-			return model.Container{}, false
+			return composemodel.Container{}, false
 		}
 		return svc.Containers[0], true
 	}
-	at := slices.IndexFunc(svc.Containers, func(c model.Container) bool { return c.Number == mount.Replica })
+	at := slices.IndexFunc(svc.Containers, func(c composemodel.Container) bool { return c.Number == mount.Replica })
 	if at < 0 {
-		return model.Container{}, false
+		return composemodel.Container{}, false
 	}
 	return svc.Containers[at], true
 }
@@ -811,15 +812,15 @@ func inheritedFrom(inspect container.InspectResponse, target string, sources map
 
 // newNamedVolumes lists the volumes compose owns, an unmounted one included, plus the external
 // ones only a mount reveals, each with its users filled in.
-func (s *Inspector) newNamedVolumes(services []model.Service, volumeIndex map[string]volume.Volume) []model.NamedVolume {
+func (s *Inspector) newNamedVolumes(services []composemodel.Service, volumeIndex map[string]volume.Volume) []composemodel.NamedVolume {
 	users := newVolumeUsers(services)
 
-	volumes := make([]model.NamedVolume, 0, len(volumeIndex))
+	volumes := make([]composemodel.NamedVolume, 0, len(volumeIndex))
 	for name, dockerVolume := range volumeIndex {
 		if !s.owns(dockerVolume) {
 			continue
 		}
-		volumes = append(volumes, model.NamedVolume{
+		volumes = append(volumes, composemodel.NamedVolume{
 			Key:        dockerVolume.Labels[api.VolumeLabel],
 			Name:       name,
 			UsedBy:     users[name],
@@ -830,13 +831,13 @@ func (s *Inspector) newNamedVolumes(services []model.Service, volumeIndex map[st
 	}
 	for name := range users {
 		if !s.owns(volumeIndex[name]) {
-			volumes = append(volumes, model.NamedVolume{
+			volumes = append(volumes, composemodel.NamedVolume{
 				Key: name, Name: name, External: true, UsedBy: users[name],
 			})
 		}
 	}
 
-	slices.SortFunc(volumes, func(a, b model.NamedVolume) int {
+	slices.SortFunc(volumes, func(a, b composemodel.NamedVolume) int {
 		return strings.Compare(a.Key, b.Key)
 	})
 	return volumes
@@ -844,7 +845,7 @@ func (s *Inspector) newNamedVolumes(services []model.Service, volumeIndex map[st
 
 // newVolumeUsers inverts the service->volume relation, keyed by docker name and sorted by
 // (service, target); an identical mount declared twice is one reference.
-func newVolumeUsers(services []model.Service) map[string][]model.ServiceReference {
+func newVolumeUsers(services []composemodel.Service) map[string][]model.ServiceReference {
 	users := map[string][]model.ServiceReference{}
 	for _, svc := range services {
 		for _, mount := range svc.Volumes {

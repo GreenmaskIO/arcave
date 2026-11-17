@@ -14,7 +14,9 @@
 
 package model
 
-import "fmt"
+import (
+	"fmt"
+)
 
 // ContainerExitError reports a one-shot Docker container that exited non-zero.
 // Like the sentinels in errors.go it crosses the client → service → cli/mcp

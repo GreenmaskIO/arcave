@@ -16,6 +16,7 @@ package cdcbackend
 
 import (
 	"encoding/json"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"path"
 	"testing"
 
@@ -148,7 +149,7 @@ func TestSnapshotter_Restore_SnapshotDeletedBehindArcave(t *testing.T) {
 
 	// Assert
 	require.Error(t, err)
-	var exit *model.ContainerExitError
+	var exit *composemodel.ContainerExitError
 	require.ErrorAs(t, err, &exit, "restic itself must be what refused: %v", err)
 	assert.Contains(t, err.Error(), payload.SnapshotObjectID, "the failure must name the snapshot restic could not find")
 	t.Logf("restic refused with: %v", err)

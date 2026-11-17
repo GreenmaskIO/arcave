@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"io/fs"
 	"reflect"
@@ -45,7 +46,7 @@ func TestRunner_run_Stdio(t *testing.T) {
 	containers := &mockRunner{}
 	containers.On("RunOneShot", mock.Anything, matchRestic("backup")).
 		Run(func(args mock.Arguments) {
-			spec := args.Get(1).(model.OneShotSpec)
+			spec := args.Get(1).(composemodel.OneShotSpec)
 			fmt.Fprint(spec.Exec.Stderr, "cat: broken pipe")
 			serveErr = spec.Exec.Serve(context.Background(), stream)
 		}).Return(nil).Once()
@@ -64,7 +65,7 @@ func TestRunner_run_Stdio(t *testing.T) {
 	assert.Equal(t, demoImage, spec.Image)
 	assert.Equal(t, []string{"/run/arcave/stdio.sh", "entrypoint"}, spec.Entrypoint)
 	assert.Equal(t, []string{"backup", "/m", "--json"}, spec.Cmd)
-	assert.Equal(t, []model.OneShotFile{
+	assert.Equal(t, []composemodel.OneShotFile{
 		{Path: "/run/arcave", Mode: fs.ModeDir | fs.ModeSticky | 0o777},
 		{Path: "/run/arcave/stdio.sh", Mode: 0o755, Content: stdioScript},
 	}, spec.Files)
@@ -149,14 +150,14 @@ func TestPruner_Forget_Stdio(t *testing.T) {
 
 // matchStdio matches a stdio run of args in the demo image.
 func matchStdio(args []string) any {
-	return mock.MatchedBy(func(spec model.OneShotSpec) bool {
+	return mock.MatchedBy(func(spec composemodel.OneShotSpec) bool {
 		return isStdioSpec(spec) && spec.Image == demoImage &&
 			slices.Equal(spec.Cmd, args)
 	})
 }
 
 // isStdioSpec reports whether spec reaches its repository over the exec bridge.
-func isStdioSpec(spec model.OneShotSpec) bool {
+func isStdioSpec(spec composemodel.OneShotSpec) bool {
 	return spec.Exec != nil &&
 		slices.Equal(spec.Exec.Cmd, []string{stdioScriptPath, "bridge"}) &&
 		slices.Equal(spec.Entrypoint, []string{stdioScriptPath, "entrypoint"}) &&

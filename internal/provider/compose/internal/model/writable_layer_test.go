@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 func TestParseLayerOwner(t *testing.T) {
@@ -31,7 +33,7 @@ func TestParseLayerOwner(t *testing.T) {
 	}{
 		{name: "both labels name the origin", labels: origin.Labels(), want: origin, wantOK: true},
 		{name: "no labels name none", labels: nil},
-		{name: "one label alone names none", labels: map[string]string{string(SystemLabelArcaveProject): "app"}},
+		{name: "one label alone names none", labels: map[string]string{string(model.SystemLabelArcaveProject): "app"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

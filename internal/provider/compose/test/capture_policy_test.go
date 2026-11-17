@@ -16,6 +16,7 @@ package test
 
 import (
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,7 +134,7 @@ func TestRollback_CapturesWhatTheLabelsSay(t *testing.T) {
 	labels := env.labels(t, "app")
 	assert.Equal(t, "/src,/scratch", labels[string(model.CaptureLabelMountsExclude)])
 	assert.Equal(t, "false; origin=label; source=arcave.mounts.exclude=/src,/scratch on service app",
-		labels[string(model.NewMountStampLabel("/src"))])
+		labels[string(composemodel.NewMountStampLabel("/src"))])
 }
 
 // labels are the labels of service's first replica, as the daemon holds them.

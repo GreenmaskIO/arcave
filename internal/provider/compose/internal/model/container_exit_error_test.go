@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package model_test
+package model
 
 import (
 	"errors"
@@ -21,24 +21,22 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 func TestContainerExitError_Error(t *testing.T) {
 	tests := []struct {
 		name string
-		err  model.ContainerExitError
+		err  ContainerExitError
 		want string
 	}{
 		{
 			name: "no output names only image and status",
-			err:  model.ContainerExitError{Image: "busybox", StatusCode: 137},
+			err:  ContainerExitError{Image: "busybox", StatusCode: 137},
 			want: "busybox container exited with status 137",
 		},
 		{
 			name: "output renders only the last line as a tail",
-			err:  model.ContainerExitError{Image: "busybox", StatusCode: 1, Output: []string{"first", "rm: permission denied"}},
+			err:  ContainerExitError{Image: "busybox", StatusCode: 1, Output: []string{"first", "rm: permission denied"}},
 			want: "busybox container exited with status 1: rm: permission denied",
 		},
 	}
@@ -59,10 +57,10 @@ func TestContainerExitError_Error(t *testing.T) {
 func TestContainerExitError_ErrorsAs(t *testing.T) {
 	// Arrange
 	wrapped := fmt.Errorf("restore mount: %w",
-		&model.ContainerExitError{Image: "busybox", StatusCode: 2, Output: []string{"a", "b", "c"}})
+		&ContainerExitError{Image: "busybox", StatusCode: 2, Output: []string{"a", "b", "c"}})
 
 	// Act
-	var exitErr *model.ContainerExitError
+	var exitErr *ContainerExitError
 	ok := errors.As(wrapped, &exitErr)
 
 	// Assert

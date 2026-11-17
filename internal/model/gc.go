@@ -81,15 +81,6 @@ const (
 	GarbageCollectorKindDockerLayerTags GarbageCollectorKind = "docker-layer-tags"
 )
 
-// GarbageCollectorKinds lists every collector kind.
-func GarbageCollectorKinds() []GarbageCollectorKind {
-	return []GarbageCollectorKind{
-		GarbageCollectorKindSavepointDirectory, GarbageCollectorKindSafetySnapshotRetention,
-		GarbageCollectorKindResticRepositories, GarbageCollectorKindOCIBlobs, GarbageCollectorKindOCIImages,
-		GarbageCollectorKindDockerLayerTags,
-	}
-}
-
 // GarbageAction is what a gc that deletes does to one object.
 type GarbageAction string
 
@@ -141,22 +132,6 @@ func (m GarbageCollectRequest) Validate() error {
 		}
 	}
 	return nil
-}
-
-// TaggedImage is one tag the daemon holds, with the image it names and that image's origin;
-// Origin is zero for an image whose labels name none.
-type TaggedImage struct {
-	Ref     ImageRef
-	ImageID ImageDigestID
-	Origin  LayerOrigin
-}
-
-// ContainerImage is what one container, running or not, was created from.
-type ContainerImage struct {
-	ContainerID string
-	// Ref is the reference the container was created with.
-	Ref     ImageRef
-	ImageID ImageDigestID
 }
 
 // GarbageStat is one collector's finding over one scope. Every kind reports the same
@@ -452,4 +427,13 @@ type GarbageCollectResult struct {
 func (m GarbageCollectResult) IsPartial() bool {
 	total := m.Total
 	return total.Failed > 0 || total.Aborted > 0 || total.Unjudged > 0 || total.DeleteFailed > 0 || total.NotRun > 0
+}
+
+// GarbageCollectorKinds lists every collector kind.
+func GarbageCollectorKinds() []GarbageCollectorKind {
+	return []GarbageCollectorKind{
+		GarbageCollectorKindSavepointDirectory, GarbageCollectorKindSafetySnapshotRetention,
+		GarbageCollectorKindResticRepositories, GarbageCollectorKindOCIBlobs, GarbageCollectorKindOCIImages,
+		GarbageCollectorKindDockerLayerTags,
+	}
 }

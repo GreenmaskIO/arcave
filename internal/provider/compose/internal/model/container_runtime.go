@@ -14,7 +14,9 @@
 
 package model
 
-import "github.com/moby/moby/api/types/system"
+import (
+	"github.com/moby/moby/api/types/system"
+)
 
 // podmanEngine is the component Podman's `docker version` names itself by.
 const podmanEngine = "Podman Engine"

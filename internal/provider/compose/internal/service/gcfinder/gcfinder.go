@@ -17,6 +17,7 @@ package gcfinder
 
 import (
 	"context"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/greenmaskio/storages"
 
@@ -34,8 +35,8 @@ import (
 // daemon is all a gc asks of the daemon.
 type daemon interface {
 	Ping(ctx context.Context) error
-	ListLayerImages(ctx context.Context) ([]model.TaggedImage, error)
-	ListContainerImages(ctx context.Context) ([]model.ContainerImage, error)
+	ListLayerImages(ctx context.Context) ([]composemodel.TaggedImage, error)
+	ListContainerImages(ctx context.Context) ([]composemodel.ContainerImage, error)
 	RemoveImageRef(ctx context.Context, ref model.ImageRef) error
 }
 

@@ -19,7 +19,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // mockDaemon is the daemon as the collector reads it.
@@ -31,12 +31,12 @@ func (m *mockDaemon) Ping(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
 
-func (m *mockDaemon) ListLayerImages(ctx context.Context) ([]model.TaggedImage, error) {
+func (m *mockDaemon) ListLayerImages(ctx context.Context) ([]composemodel.TaggedImage, error) {
 	args := m.Called(ctx)
-	return args.Get(0).([]model.TaggedImage), args.Error(1)
+	return args.Get(0).([]composemodel.TaggedImage), args.Error(1)
 }
 
-func (m *mockDaemon) ListContainerImages(ctx context.Context) ([]model.ContainerImage, error) {
+func (m *mockDaemon) ListContainerImages(ctx context.Context) ([]composemodel.ContainerImage, error) {
 	args := m.Called(ctx)
-	return args.Get(0).([]model.ContainerImage), args.Error(1)
+	return args.Get(0).([]composemodel.ContainerImage), args.Error(1)
 }

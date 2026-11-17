@@ -112,7 +112,7 @@ func TestVacant_Build_RebuildsDivergentReplicasBeforeTheRestore(t *testing.T) {
 		runner.On("Create", mock.Anything, target, demoRestoredVolumes).Return(nil).Once(),
 		inspector.On("Introspect", mock.Anything).Return(composetest.DemoScaledIntrospection(), nil).Once(),
 		rebuilder.On("RecreateWithImage", mock.Anything, composetest.DemoSecondContainerID,
-			model.ReplicaIdentity{Name: composetest.DemoContainerName(2), Number: 2}, composetest.DemoRestoredTag(2)).Return("rebuilt", nil).Once(),
+			composemodel.ReplicaIdentity{Name: composetest.DemoContainerName(2), Number: 2}, composetest.DemoRestoredTag(2)).Return("rebuilt", nil).Once(),
 		backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once(),
 	)
 	svc := newComposeWorkload(Deps{ComposeRunner: runner, ComposeInspector: inspector, ContainerRebuilder: rebuilder})
@@ -194,7 +194,7 @@ func TestVacant_Discard(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange: demo_db outlived the teardown and stays; demo_cache is the build's own.
 			now := composetest.DemoAbsentIntrospection()
-			now.Project.Volumes = append(now.Project.Volumes, model.NamedVolume{Key: "demo_cache", Name: "demo_cache"})
+			now.Project.Volumes = append(now.Project.Volumes, composemodel.NamedVolume{Key: "demo_cache", Name: "demo_cache"})
 			runner := &composetest.MockComposeRunner{}
 			inspector := &composetest.MockInspector{}
 			remover := &composetest.MockVolumeRemover{}

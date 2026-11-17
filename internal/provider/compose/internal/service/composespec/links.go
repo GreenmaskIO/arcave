@@ -24,11 +24,11 @@ import (
 	"github.com/docker/compose/v5/pkg/api"
 	"github.com/moby/moby/api/types/container"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // applyLinks declares the links compose wrote back as links: and external_links:.
-func (a assembly) applyLinks(cfg *types.ServiceConfig, replica model.Container) {
+func (a assembly) applyLinks(cfg *types.ServiceConfig, replica composemodel.Container) {
 	cfg.Links, cfg.ExternalLinks = a.declaredLinks(linkEntries(replica.Inspect), replica.Number)
 }
 

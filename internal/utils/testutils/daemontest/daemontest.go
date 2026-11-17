@@ -31,6 +31,7 @@ import (
 
 	"github.com/docker/compose/v5/pkg/api"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/client"
 	"github.com/moby/moby/client/pkg/versions"
 	"github.com/stretchr/testify/assert"
@@ -49,6 +50,9 @@ var issuedSuffixes sync.Map
 
 // anonymousVolumeLabel is what the daemon stamps on a volume it created for a container.
 const anonymousVolumeLabel = "com.docker.volume.anonymous"
+
+// podmanEngine is the component Podman's `docker version` names itself by.
+const podmanEngine = "Podman Engine"
 
 // ryukDisabled is the variable testcontainers reads before it starts its reaper.
 const ryukDisabled = "TESTCONTAINERS_RYUK_DISABLED"
@@ -145,7 +149,9 @@ func IsPodman(ctx context.Context, daemon client.APIClient) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("read the daemon version: %w", err)
 	}
-	return model.NewContainerRuntime(version.Version, version.Components).Kind == model.ContainerRuntimePodman, nil
+	return slices.ContainsFunc(version.Components, func(component system.ComponentVersion) bool {
+		return component.Name == podmanEngine
+	}), nil
 }
 
 // SkipWithoutVolumeSubpath skips on a Docker older than the API that mounts a volume at a subpath.

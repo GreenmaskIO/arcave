@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -82,7 +82,7 @@ func TestRunner_run(t *testing.T) {
 			containers := &mockRunner{}
 			containers.On("RunOneShot", mock.Anything, matchRestic("backup")).
 				Run(func(args mock.Arguments) {
-					spec := args.Get(1).(model.OneShotSpec)
+					spec := args.Get(1).(composemodel.OneShotSpec)
 					writeLines(spec.Stdout, tt.stdout)
 					writeLines(spec.Stderr, tt.stderr)
 				}).Return(nil).Once()
@@ -112,11 +112,11 @@ func TestRunner_run_ReportsResticsOwnDiagnosis(t *testing.T) {
 	// Arrange
 	// The container error carries a line that is not the diagnosis, so the
 	// message can only have come from the stream this run parsed.
-	exit := &model.ContainerExitError{Image: demoImage, StatusCode: 3, Output: []string{backupStatusLine}}
+	exit := &composemodel.ContainerExitError{Image: demoImage, StatusCode: 3, Output: []string{backupStatusLine}}
 	containers := &mockRunner{}
 	containers.On("RunOneShot", mock.Anything, matchRestic("backup")).
 		Run(func(args mock.Arguments) {
-			spec := args.Get(1).(model.OneShotSpec)
+			spec := args.Get(1).(composemodel.OneShotSpec)
 			writeLines(spec.Stderr, []string{backupItemErrorLine, backupExitErrorLine})
 		}).Return(exit).Once()
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -128,7 +128,7 @@ func TestRunner_run_ReportsResticsOwnDiagnosis(t *testing.T) {
 	// Assert
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "at least one source file could not be read")
-	var exitErr *model.ContainerExitError
+	var exitErr *composemodel.ContainerExitError
 	require.ErrorAs(t, err, &exitErr, "the container error must survive the wrap")
 	assert.EqualValues(t, 3, exitErr.StatusCode)
 	containers.AssertExpectations(t)
@@ -138,7 +138,7 @@ func TestRunner_run_ReportsResticsOwnDiagnosis(t *testing.T) {
 // restic — still reports the container's own exit.
 func TestRunner_run_ReportsAnUnnarratedFailure(t *testing.T) {
 	// Arrange
-	exit := &model.ContainerExitError{Image: demoImage, StatusCode: 137}
+	exit := &composemodel.ContainerExitError{Image: demoImage, StatusCode: 137}
 	containers := &mockRunner{}
 	containers.On("RunOneShot", mock.Anything, matchRestic("backup")).Return(exit).Once()
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -160,7 +160,7 @@ func TestRunner_run_UnterminatedLastLine(t *testing.T) {
 	containers := &mockRunner{}
 	containers.On("RunOneShot", mock.Anything, matchRestic("backup")).
 		Run(func(args mock.Arguments) {
-			spec := args.Get(1).(model.OneShotSpec)
+			spec := args.Get(1).(composemodel.OneShotSpec)
 			_, _ = spec.Stdout.Write([]byte(backupSummaryLine))
 		}).Return(nil).Once()
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -248,7 +248,7 @@ func TestRunner_runStatus(t *testing.T) {
 			containers := &mockRunner{}
 			containers.On("RunOneShot", mock.Anything, matchRestic(tt.args[0])).
 				Run(func(args mock.Arguments) {
-					writeLines(args.Get(1).(model.OneShotSpec).Stdout, []string{tt.line})
+					writeLines(args.Get(1).(composemodel.OneShotSpec).Stdout, []string{tt.line})
 				}).Return(nil).Once()
 			events := &eventRecorder{}
 			ctx, root := progress.New(events, func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }).Begin(zerolog.Nop().WithContext(context.Background()),

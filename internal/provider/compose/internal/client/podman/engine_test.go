@@ -16,6 +16,7 @@ package podman
 
 import (
 	"context"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -34,10 +35,10 @@ import (
 
 // isVolumeExportSpec reports whether spec is the export of demo_pgdata, whole: a tar of
 // the volume mounted read-only, unconfined, keeping no log, its output the caller's.
-func isVolumeExportSpec(spec model.OneShotSpec) bool {
+func isVolumeExportSpec(spec composemodel.OneShotSpec) bool {
 	hasOutput := spec.Stdout != nil && spec.Stderr != nil
 	spec.Stdout, spec.Stderr = nil, nil
-	return hasOutput && assert.ObjectsAreEqual(model.OneShotSpec{
+	return hasOutput && assert.ObjectsAreEqual(composemodel.OneShotSpec{
 		Image:       "busybox",
 		Cmd:         []string{"tar", "-c", "-f", "-", "-C", "/arcave-data", "."},
 		Binds:       []string{"demo_pgdata:/arcave-data:ro"},
@@ -95,18 +96,18 @@ func TestEngine_OpenVolume_Stream(t *testing.T) {
 		{name: "the archive streams out"},
 		{
 			name:       "a tar that fails saying nothing",
-			runErr:     &model.ContainerExitError{Image: "busybox", StatusCode: 1},
+			runErr:     &composemodel.ContainerExitError{Image: "busybox", StatusCode: 1},
 			wantSuffix: "export volume demo_pgdata: busybox container exited with status 1",
 		},
 		{
 			name:       "a tar that fails",
-			runErr:     &model.ContainerExitError{Image: "busybox", StatusCode: 1},
+			runErr:     &composemodel.ContainerExitError{Image: "busybox", StatusCode: 1},
 			stderr:     "tar: ./pgdata: Permission denied\n",
 			wantSuffix: "(stderr: tar: ./pgdata: Permission denied)",
 		},
 		{
 			name:       "a tar that fails at length, its first bytes",
-			runErr:     &model.ContainerExitError{Image: "busybox", StatusCode: 1},
+			runErr:     &composemodel.ContainerExitError{Image: "busybox", StatusCode: 1},
 			stderr:     strings.Repeat("x", maxExportStderrBytes+1024),
 			wantSuffix: "(stderr: " + strings.Repeat("x", maxExportStderrBytes) + ")",
 		},
@@ -117,7 +118,7 @@ func TestEngine_OpenVolume_Stream(t *testing.T) {
 			runner := &mockOneShotRunner{}
 			runner.On("RunOneShot", mock.Anything, mock.MatchedBy(isVolumeExportSpec)).
 				Run(func(args mock.Arguments) {
-					spec := args.Get(1).(model.OneShotSpec)
+					spec := args.Get(1).(composemodel.OneShotSpec)
 					_, _ = io.WriteString(spec.Stdout, "tar-bytes")
 					_, _ = io.WriteString(spec.Stderr, tt.stderr)
 				}).Return(tt.runErr).Once()
@@ -133,7 +134,7 @@ func TestEngine_OpenVolume_Stream(t *testing.T) {
 			require.NoError(t, closeErr)
 			assert.Equal(t, "tar-bytes", string(got))
 			if tt.runErr != nil {
-				var exitErr *model.ContainerExitError
+				var exitErr *composemodel.ContainerExitError
 				require.ErrorAs(t, readErr, &exitErr)
 				assert.Equal(t, int64(1), exitErr.StatusCode)
 				assert.ErrorContains(t, readErr, "export volume demo_pgdata: ")
@@ -154,7 +155,7 @@ func TestEngine_OpenVolume_ClosedEarly(t *testing.T) {
 	runner.On("RunOneShot", mock.Anything, mock.MatchedBy(isVolumeExportSpec)).
 		Run(func(args mock.Arguments) {
 			ctx := args.Get(0).(context.Context)
-			spec := args.Get(1).(model.OneShotSpec)
+			spec := args.Get(1).(composemodel.OneShotSpec)
 			_, _ = io.WriteString(spec.Stdout, strings.Repeat("x", 1<<20))
 			<-ctx.Done()
 			close(stopped)

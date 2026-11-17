@@ -25,13 +25,13 @@ import (
 	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // RecreateWithImage rebuilds a stopped container from imageRef under the given name and replica
 // number, keeping its labels, host config and endpoints; its anonymous volumes are dropped.
 func (e *Engine) RecreateWithImage(
-	ctx context.Context, containerID string, identity model.ReplicaIdentity, imageRef string,
+	ctx context.Context, containerID string, identity composemodel.ReplicaIdentity, imageRef string,
 ) (string, error) {
 	if identity.Name == "" || identity.Number < 1 {
 		return "", fmt.Errorf("container %s: no replica identity to rebuild it as", containerID)

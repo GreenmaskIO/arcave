@@ -24,7 +24,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // The stdio transport's layout in every restic container. stdioDir is
@@ -54,7 +54,7 @@ type RepositoryServer interface {
 // Transport is how restic reaches a repository: a StdioTransport or a TCPTransport.
 type Transport interface {
 	// newOneShotSpec is the container running run against objectID's repository.
-	newOneShotSpec(objectID string, run resticRun) model.OneShotSpec
+	newOneShotSpec(objectID string, run resticRun) composemodel.OneShotSpec
 }
 
 // resticRun is one restic command's container, whatever the transport.
@@ -74,8 +74,8 @@ type StdioTransport struct {
 	Server RepositoryServer
 }
 
-func (s StdioTransport) newOneShotSpec(objectID string, run resticRun) model.OneShotSpec {
-	return model.OneShotSpec{
+func (s StdioTransport) newOneShotSpec(objectID string, run resticRun) composemodel.OneShotSpec {
+	return composemodel.OneShotSpec{
 		Image:      run.image,
 		Files:      newStdioFiles(),
 		Entrypoint: []string{stdioScriptPath, "entrypoint"},
@@ -87,7 +87,7 @@ func (s StdioTransport) newOneShotSpec(objectID string, run resticRun) model.One
 		Binds:  run.cmd.binds,
 		Stdout: run.stdout,
 		Stderr: run.stderr,
-		Exec: &model.OneShotExec{
+		Exec: &composemodel.OneShotExec{
 			Cmd:    []string{stdioScriptPath, "bridge"},
 			Stderr: bridgeLog{log: run.log},
 			Serve: func(ctx context.Context, stream io.ReadWriteCloser) error {
@@ -98,8 +98,8 @@ func (s StdioTransport) newOneShotSpec(objectID string, run resticRun) model.One
 }
 
 // newStdioFiles is what every stdio container is created with: stdio.sh in its directory.
-func newStdioFiles() []model.OneShotFile {
-	return []model.OneShotFile{
+func newStdioFiles() []composemodel.OneShotFile {
+	return []composemodel.OneShotFile{
 		{Path: stdioDir, Mode: fs.ModeDir | fs.ModeSticky | 0o777},
 		{Path: stdioScriptPath, Mode: 0o755, Content: stdioScript},
 	}
@@ -127,8 +127,8 @@ type TCPTransport struct {
 	HostNetwork bool
 }
 
-func (s TCPTransport) newOneShotSpec(objectID string, run resticRun) model.OneShotSpec {
-	return model.OneShotSpec{
+func (s TCPTransport) newOneShotSpec(objectID string, run resticRun) composemodel.OneShotSpec {
+	return composemodel.OneShotSpec{
 		Image: run.image,
 		Cmd:   run.cmd.args,
 		Env: []string{

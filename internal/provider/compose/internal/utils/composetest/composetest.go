@@ -20,6 +20,7 @@ package composetest
 import (
 	"bytes"
 	"context"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 	"sync"
@@ -116,14 +117,14 @@ func (m *MockContainerControl) AwaitHealthProbes(ctx context.Context, ids []stri
 // MockImageBackend doubles the image backend, both ways.
 type MockImageBackend struct{ mock.Mock }
 
-func (m *MockImageBackend) CaptureImage(ctx context.Context, req model.ImageCaptureRequest) (model.Image, error) {
+func (m *MockImageBackend) CaptureImage(ctx context.Context, req composemodel.ImageCaptureRequest) (model.Image, error) {
 	args := m.Called(ctx, req)
 	image, _ := args.Get(0).(model.Image)
 	return image, args.Error(1)
 }
 
 func (m *MockImageBackend) CaptureWritableLayer(
-	ctx context.Context, req model.WritableLayerCaptureRequest,
+	ctx context.Context, req composemodel.WritableLayerCaptureRequest,
 ) (model.WritableLayer, error) {
 	args := m.Called(ctx, req)
 	layer, _ := args.Get(0).(model.WritableLayer)
@@ -131,7 +132,7 @@ func (m *MockImageBackend) CaptureWritableLayer(
 }
 
 func (m *MockImageBackend) RestoreWritableLayer(
-	ctx context.Context, req model.WritableLayerRestoreRequest,
+	ctx context.Context, req composemodel.WritableLayerRestoreRequest,
 ) (model.WritableLayerRestoreResult, error) {
 	args := m.Called(ctx, req)
 	result, _ := args.Get(0).(model.WritableLayerRestoreResult)

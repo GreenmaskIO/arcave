@@ -19,6 +19,7 @@ package composespec
 import (
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"slices"
 	"strconv"
 	"strings"
@@ -65,7 +66,7 @@ func NewAssembler(stamps EngineStamps) *Assembler { return &Assembler{engineStam
 
 // assembly is what rendering one service reads beyond the service itself.
 type assembly struct {
-	introspection model.IntrospectionResult
+	introspection composemodel.IntrospectionResult
 	engineStamps  EngineStamps
 	networkKeys   map[string]string
 	known         map[string]bool
@@ -81,7 +82,7 @@ type assembly struct {
 	foreignNames map[string]string
 }
 
-func newAssembly(introspection model.IntrospectionResult, engineStamps EngineStamps) assembly {
+func newAssembly(introspection composemodel.IntrospectionResult, engineStamps EngineStamps) assembly {
 	a := assembly{
 		introspection: introspection,
 		engineStamps:  engineStamps,
@@ -117,7 +118,7 @@ func newAssembly(introspection model.IntrospectionResult, engineStamps EngineSta
 }
 
 // Assemble builds the compose spec of the introspected compose project.
-func (s *Assembler) Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error) {
+func (s *Assembler) Assemble(ctx context.Context, introspection composemodel.IntrospectionResult) (*types.Project, error) {
 	if len(introspection.Project.Services) == 0 {
 		return nil, fmt.Errorf("compose project %q has no services to act on", introspection.Project.Name)
 	}
@@ -216,7 +217,7 @@ func hasHealthCheck(config *container.Config) bool {
 
 // newVolumes renders the newVolumes: section. Name is always explicit: it is the docker
 // name the capture was taken from, and compose must not prefix it a second time.
-func newVolumes(introspected []model.NamedVolume) types.Volumes {
+func newVolumes(introspected []composemodel.NamedVolume) types.Volumes {
 	volumes := make(types.Volumes, len(introspected))
 	for _, volume := range introspected {
 		if volume.External {
@@ -237,7 +238,7 @@ func newVolumes(introspected []model.NamedVolume) types.Volumes {
 // newNetworks renders the newNetworks: section, foreign ones keyed by docker name and external.
 // Address pools are declared only where a container holds a static address.
 func newNetworks(
-	introspected []model.Network, keys map[string]string, static map[string]bool, ipFamiliesStamped bool,
+	introspected []composemodel.Network, keys map[string]string, static map[string]bool, ipFamiliesStamped bool,
 ) types.Networks {
 	owned := make(map[string]bool, len(introspected))
 	networks := make(types.Networks, len(keys))
@@ -335,7 +336,7 @@ func newIPAMPools(from []network.IPAMConfig) []*types.IPAMPool {
 
 // staticAddressNetworks are the docker names of the networks in which any replica holds a
 // static address.
-func staticAddressNetworks(services []model.Service) map[string]bool {
+func staticAddressNetworks(services []composemodel.Service) map[string]bool {
 	static := map[string]bool{}
 	for _, svc := range services {
 		for _, replica := range svc.Containers {
@@ -362,7 +363,7 @@ func hasStaticAddress(endpoint *network.EndpointSettings) bool {
 
 // networkKeys maps a network's docker name to its key in the project: a foreign network
 // keys under its name, the engine's own bridge network under none.
-func networkKeys(introspected []model.Network, services []model.Service, bridgeNetwork string) map[string]string {
+func networkKeys(introspected []composemodel.Network, services []composemodel.Service, bridgeNetwork string) map[string]string {
 	keys := make(map[string]string, len(introspected))
 	for _, n := range introspected {
 		keys[n.Name] = n.Key
@@ -384,7 +385,7 @@ func networkKeys(introspected []model.Network, services []model.Service, bridgeN
 
 // projectOrigin recovers the directory and files compose stamps on what it
 // creates: without them the docker CLI no longer finds the compose project from its path.
-func projectOrigin(services []model.Service) (workingDir string, files []string) {
+func projectOrigin(services []composemodel.Service) (workingDir string, files []string) {
 	for _, svc := range services {
 		for _, replica := range svc.Containers {
 			if dir := replica.Labels[api.WorkingDirLabel]; dir != "" && workingDir == "" {

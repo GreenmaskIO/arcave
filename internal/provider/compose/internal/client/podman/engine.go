@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 
@@ -40,7 +41,7 @@ var volumeExportCmd = []string{"tar", "-c", "-f", "-", "-C", volumeExportMount, 
 
 // oneShotRunner runs a volume's export container; *docker.Engine satisfies it.
 type oneShotRunner interface {
-	RunOneShot(ctx context.Context, spec model.OneShotSpec) error
+	RunOneShot(ctx context.Context, spec composemodel.OneShotSpec) error
 }
 
 // Engine is the docker.Engine for a Podman daemon, whose archive API rewrites every
@@ -70,7 +71,7 @@ func (e *Engine) OpenVolume(ctx context.Context, src model.MountSource) (io.Read
 	group.Go(func() error {
 		// A log would hold the archive again, so tar's complaint is read off the attach.
 		stderr := &boundedBuffer{limit: maxExportStderrBytes}
-		err := e.runner.RunOneShot(ctx, model.OneShotSpec{
+		err := e.runner.RunOneShot(ctx, composemodel.OneShotSpec{
 			Image:       docker.VolumeToolsImage,
 			Cmd:         volumeExportCmd,
 			Binds:       []string{src.Source + ":" + volumeExportMount + ":ro"},

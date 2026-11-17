@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
 
 	"github.com/greenmaskio/storages"
@@ -89,7 +90,7 @@ func TestDeleteOps(t *testing.T) {
 		},
 		{
 			name:     "an image reference already gone counts as deleted, freeing nothing",
-			errs:     []error{fmt.Errorf("remove: %w", model.ErrImageRefNotFound), nil, nil},
+			errs:     []error{fmt.Errorf("remove: %w", composemodel.ErrImageRefNotFound), nil, nil},
 			cancelAt: -1,
 			want: model.GarbageDeletion{Deleted: []model.GarbageDeleted{
 				{Target: "a", Bytes: utils.New(int64(0))}, {Target: "b", Bytes: utils.New(int64(2))}, {Target: "c"},

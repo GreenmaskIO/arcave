@@ -28,6 +28,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"os"
 	"sort"
 	"sync"
@@ -343,7 +344,7 @@ func (e *env) oracleSnapshots(t *testing.T, vol model.Volume) []oracleSnapshot {
 	t.Helper()
 
 	var stdout, stderr bytes.Buffer
-	err := e.engine.RunOneShot(e.ctx, model.OneShotSpec{
+	err := e.engine.RunOneShot(e.ctx, composemodel.OneShotSpec{
 		Image: e.opts.Image,
 		Cmd:   []string{"snapshots", "--json"},
 		Env: []string{
@@ -535,7 +536,7 @@ func busybox(t *testing.T, engine *dockerclient.Engine, name, script string) str
 	t.Helper()
 
 	var stdout, stderr bytes.Buffer
-	err := engine.RunOneShot(context.Background(), model.OneShotSpec{
+	err := engine.RunOneShot(context.Background(), composemodel.OneShotSpec{
 		Image:  busyboxImage,
 		Cmd:    []string{"sh", "-c", script},
 		Binds:  []string{name + ":/data"},

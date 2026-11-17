@@ -17,6 +17,7 @@ package workload
 import (
 	"context"
 	"errors"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
 	"time"
 
@@ -200,7 +201,7 @@ func TestProvider_Inspect_DiscardsAFailedColdStart(t *testing.T) {
 	// Arrange: demo_db outlived the project; demo_cache is the failed build's own.
 	record := composetest.DemoRecord()
 	now := composetest.DemoAbsentIntrospection()
-	now.Project.Volumes = append(now.Project.Volumes, model.NamedVolume{Key: "demo_cache", Name: "demo_cache"})
+	now.Project.Volumes = append(now.Project.Volumes, composemodel.NamedVolume{Key: "demo_cache", Name: "demo_cache"})
 	repo := &composetest.MockSavepointRepo{}
 	store := composetest.NewDirStore(t)
 	registry := &composetest.MockRegistry{}
@@ -258,14 +259,14 @@ func TestProvider_Inspect_DiscardsAFailedColdStart(t *testing.T) {
 func TestProvider_Inspect_ReapsTheOrphanedAnonymousVolume(t *testing.T) {
 	// Arrange
 	anonVol := model.Volume{ObjectID: "volume-anon-app-1-scratch", Backend: model.SnapshotBackendFullCopy}
-	introspection := model.IntrospectionResult{Project: model.Project{
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: composetest.DemoProject,
-		Services: []model.Service{{
+		Services: []composemodel.Service{{
 			Name: "app",
-			Volumes: []model.ServiceVolume{
+			Volumes: []composemodel.ServiceVolume{
 				{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/scratch", VolumeName: "9f8e7d", Replica: 1},
 			},
-			Containers: []model.Container{{Name: "demo-app-1", Number: 1}},
+			Containers: []composemodel.Container{{Name: "demo-app-1", Number: 1}},
 		}},
 	}}
 	record := composetest.DemoRecord()

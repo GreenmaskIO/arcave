@@ -34,6 +34,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strconv"
 	"time"
@@ -133,7 +134,7 @@ func (e *Engine) Ping(ctx context.Context) error {
 // model.ContainerExitError carrying the container's own output. It is the
 // exported face of the mechanism in oneshot.go, for the backends that run their
 // own containers.
-func (e *Engine) RunOneShot(ctx context.Context, spec model.OneShotSpec) error {
+func (e *Engine) RunOneShot(ctx context.Context, spec composemodel.OneShotSpec) error {
 	return runOneShotContainer(ctx, e.api, spec)
 }
 
@@ -302,7 +303,7 @@ func matchMount(containers []container.Summary, replica int, target string) (mou
 // It is the wipe *policy* — which image, which command, which bind — over the
 // reusable one-shot container mechanism in oneshot.go, and exchanges no stdio.
 func wipeVolume(ctx context.Context, api dockerAPI, src model.MountSource) error {
-	return runOneShotContainer(ctx, api, model.OneShotSpec{
+	return runOneShotContainer(ctx, api, composemodel.OneShotSpec{
 		Image: VolumeToolsImage,
 		// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
 		Cmd: []string{"find", wipeMountPath, "-mindepth", "1", "-maxdepth", "1",

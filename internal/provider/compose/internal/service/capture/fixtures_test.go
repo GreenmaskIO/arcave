@@ -16,6 +16,7 @@ package capture
 
 import (
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/stretchr/testify/mock"
 
@@ -46,8 +47,8 @@ func demoVolume() model.Volume {
 }
 
 // demoContainerRef is demoService's one replica, as a capture request addresses it.
-func demoContainerRef() model.ContainerRef {
-	return model.ContainerRef{
+func demoContainerRef() composemodel.ContainerRef {
+	return composemodel.ContainerRef{
 		Service: demoService, Replica: 1, ID: demoContainerID, Name: demoContainerName(1),
 		UpstreamImageID: demoUpstreamID, UpstreamImageRef: demoBaseImage,
 	}
@@ -59,8 +60,8 @@ func demoContainerName(n int) string {
 }
 
 // demoImageCaptureRequest is the one upstream demoContainerRef runs on.
-func demoImageCaptureRequest() model.ImageCaptureRequest {
-	return model.ImageCaptureRequest{
+func demoImageCaptureRequest() composemodel.ImageCaptureRequest {
+	return composemodel.ImageCaptureRequest{
 		Image: model.Image{
 			ID: demoUpstreamID, Refs: []string{demoBaseImage}, RepoDigests: []string{"postgres@sha256:dd"}, SizeBytes: 1 << 20,
 		},

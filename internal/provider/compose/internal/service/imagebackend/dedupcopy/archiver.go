@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 
 	"github.com/greenmaskio/storages"
@@ -99,7 +100,7 @@ func (s *Archiver) Store(
 	for _, required := range requiredMetadata {
 		if !seen[required] {
 			return imagebackend.StoredSize{}, fmt.Errorf("%w: the archive carries no %s",
-				model.ErrUnsupportedImageArchive, required)
+				composemodel.ErrUnsupportedImageArchive, required)
 		}
 	}
 	if err := imagebackend.WriteManifest(ctx, dst, manifest); err != nil {
@@ -128,7 +129,7 @@ func (s *Archiver) storeMember(
 	}
 	return imagebackend.Member{}, 0, fmt.Errorf(
 		"%w: member %q is neither a blob nor metadata; a daemon older than Docker 25 exports this shape",
-		model.ErrUnsupportedImageArchive, name)
+		composemodel.ErrUnsupportedImageArchive, name)
 }
 
 // Load renders the archive back out of the blob store and the capture's metadata.
@@ -144,7 +145,7 @@ func (s *Archiver) Load(
 	}
 	if manifest.ImageID != imageID {
 		return fmt.Errorf("%w: the capture holds image %s, the record names %s",
-			model.ErrSavepointImageMissing, manifest.ImageID, imageID)
+			composemodel.ErrSavepointImageMissing, manifest.ImageID, imageID)
 	}
 
 	tarWriter := tar.NewWriter(archive)
@@ -188,26 +189,26 @@ func (s *Archiver) openMember(
 	case imagebackend.KindBlob:
 		if !validDigest(member.Digest) {
 			return nil, 0, fmt.Errorf("%w: member %q names digest %q",
-				model.ErrUnsupportedImageArchive, member.Name, member.Digest)
+				composemodel.ErrUnsupportedImageArchive, member.Name, member.Digest)
 		}
 		body, size, err := s.blobs.open(ctx, member.Digest)
 		if err != nil {
-			return nil, 0, fmt.Errorf("%w: %w", model.ErrSavepointImageMissing, err)
+			return nil, 0, fmt.Errorf("%w: %w", composemodel.ErrSavepointImageMissing, err)
 		}
 		return body, size, nil
 	case imagebackend.KindMetadata:
 		if !isMetadataName(member.Name) {
 			return nil, 0, fmt.Errorf("%w: %q is not a metadata member",
-				model.ErrUnsupportedImageArchive, member.Name)
+				composemodel.ErrUnsupportedImageArchive, member.Name)
 		}
 		body, size, err := openSized(ctx, src, member.Name)
 		if err != nil {
-			return nil, 0, fmt.Errorf("%w: %w", model.ErrSavepointImageMissing, err)
+			return nil, 0, fmt.Errorf("%w: %w", composemodel.ErrSavepointImageMissing, err)
 		}
 		return body, size, nil
 	default:
 		return nil, 0, fmt.Errorf("%w: member %q is of unknown kind %q",
-			model.ErrUnsupportedImageArchive, member.Name, member.Kind)
+			composemodel.ErrUnsupportedImageArchive, member.Name, member.Kind)
 	}
 }
 

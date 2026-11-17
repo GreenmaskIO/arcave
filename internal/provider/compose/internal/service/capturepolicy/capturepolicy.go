@@ -20,6 +20,7 @@ package capturepolicy
 import (
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"maps"
 	"path"
 	"slices"
@@ -67,42 +68,42 @@ type serviceLabels struct {
 	name string
 	// rawLabels are the service's labels as set, for the sources that name them.
 	rawLabels            map[string]string
-	capture              *model.CaptureDecision
+	capture              *composemodel.CaptureDecision
 	volumeBackend        *model.SnapshotBackendKind
 	excludedTargets      []string
 	includedTargets      []string
 	backendByTarget      map[string]model.SnapshotBackendKind
-	writableLayerCapture *model.CaptureDecision
+	writableLayerCapture *composemodel.CaptureDecision
 	writableLayerBackend *model.ImageBackendKind
-	imageCapture         *model.CaptureDecision
+	imageCapture         *composemodel.CaptureDecision
 	mode                 *model.CaptureMode
 }
 
 // volumeLabels is one named volume's arcave.* labels, parsed; a nil field is unset.
 type volumeLabels struct {
-	capture *model.CaptureDecision
+	capture *composemodel.CaptureDecision
 	backend *model.SnapshotBackendKind
 }
 
 // Resolve decides every resource of the compose project from its labels and defaults, a bind or
 // anonymous volume by its service's; a label it cannot act on is model.ErrInvalidCapturePolicy.
 func Resolve(
-	ctx context.Context, introspection model.IntrospectionResult, defaults CaptureDefaults,
-) (model.CapturePolicy, error) {
-	capturePolicy := model.CapturePolicy{
+	ctx context.Context, introspection composemodel.IntrospectionResult, defaults CaptureDefaults,
+) (composemodel.CapturePolicy, error) {
+	capturePolicy := composemodel.CapturePolicy{
 		VolumeBackend:        defaults.VolumeBackend,
 		WritableLayerBackend: defaults.WritableLayerBackend,
 		Mode:                 defaults.Mode,
-		Services:             map[string]model.ServiceDecision{},
-		NamedVolumes:         map[string]model.VolumeDecision{},
-		Mounts:               map[model.MountRef]model.VolumeDecision{},
+		Services:             map[string]composemodel.ServiceDecision{},
+		NamedVolumes:         map[string]composemodel.VolumeDecision{},
+		Mounts:               map[composemodel.MountRef]composemodel.VolumeDecision{},
 	}
 
 	services := map[string]serviceLabels{}
 	for _, service := range introspection.Project.Services {
 		labels, err := parseServiceLabels(ctx, service, findImageLabels(introspection, service))
 		if err != nil {
-			return model.CapturePolicy{}, err
+			return composemodel.CapturePolicy{}, err
 		}
 		services[service.Name] = labels
 		capturePolicy.Services[service.Name] = labels.decideService(defaults)
@@ -111,9 +112,9 @@ func Resolve(
 				continue
 			}
 			if err := refuseAnonymousVolumeLabels(mount, service.Name); err != nil {
-				return model.CapturePolicy{}, err
+				return composemodel.CapturePolicy{}, err
 			}
-			ref := model.MountRef{Service: service.Name, Replica: mount.Replica, Target: mount.Target}
+			ref := composemodel.MountRef{Service: service.Name, Replica: mount.Replica, Target: mount.Target}
 			capturePolicy.Mounts[ref] = labels.decideMount(mount, defaults)
 		}
 	}
@@ -121,7 +122,7 @@ func Resolve(
 	for _, named := range introspection.Project.Volumes {
 		decision, err := decideNamed(ctx, named, services, defaults)
 		if err != nil {
-			return model.CapturePolicy{}, err
+			return composemodel.CapturePolicy{}, err
 		}
 		capturePolicy.NamedVolumes[named.Name] = decision
 	}
@@ -130,10 +131,10 @@ func Resolve(
 
 // ResolveWithoutLabels decides every resource by the defaults alone, every label ignored.
 func ResolveWithoutLabels(
-	ctx context.Context, introspection model.IntrospectionResult, defaults CaptureDefaults,
-) (model.CapturePolicy, error) {
+	ctx context.Context, introspection composemodel.IntrospectionResult, defaults CaptureDefaults,
+) (composemodel.CapturePolicy, error) {
 	unlabelled := introspection
-	unlabelled.Project.Services = make([]model.Service, len(introspection.Project.Services))
+	unlabelled.Project.Services = make([]composemodel.Service, len(introspection.Project.Services))
 	for serviceIdx, service := range introspection.Project.Services {
 		service.Labels = nil
 		service.Volumes = slices.Clone(service.Volumes)
@@ -146,7 +147,7 @@ func ResolveWithoutLabels(
 		}
 		unlabelled.Project.Services[serviceIdx] = service
 	}
-	unlabelled.Project.Volumes = make([]model.NamedVolume, len(introspection.Project.Volumes))
+	unlabelled.Project.Volumes = make([]composemodel.NamedVolume, len(introspection.Project.Volumes))
 	for volumeIdx, named := range introspection.Project.Volumes {
 		named.Labels = nil
 		unlabelled.Project.Volumes[volumeIdx] = named
@@ -157,7 +158,7 @@ func ResolveWithoutLabels(
 }
 
 // findImageLabels are the labels of the image the service's first replica runs on.
-func findImageLabels(introspection model.IntrospectionResult, service model.Service) map[string]string {
+func findImageLabels(introspection composemodel.IntrospectionResult, service composemodel.Service) map[string]string {
 	if len(service.Containers) == 0 {
 		return nil
 	}
@@ -171,13 +172,13 @@ func findImageLabels(introspection model.IntrospectionResult, service model.Serv
 // isMountOwnedByService reports whether a mount is decided per service: a bind or an
 // anonymous volume, not inherited through volumes_from. A named volume is decided once
 // for every service mounting it.
-func isMountOwnedByService(mount model.ServiceVolume) bool {
+func isMountOwnedByService(mount composemodel.ServiceVolume) bool {
 	isOwnType := mount.Type == model.VolumeTypeBind || mount.Type == model.VolumeTypeAnon
 	return isOwnType && mount.InheritedFrom == ""
 }
 
 // refuseAnonymousVolumeLabels refuses any arcave.* label on an anonymous volume's mount request.
-func refuseAnonymousVolumeLabels(mount model.ServiceVolume, serviceName string) error {
+func refuseAnonymousVolumeLabels(mount composemodel.ServiceVolume, serviceName string) error {
 	if mount.Type != model.VolumeTypeAnon || mount.Volume == nil {
 		return nil
 	}
@@ -198,7 +199,7 @@ func refuseAnonymousVolumeLabels(mount model.ServiceVolume, serviceName string) 
 // the mounts it has.
 func parseServiceLabels(
 	ctx context.Context,
-	service model.Service,
+	service composemodel.Service,
 	imageLabels map[string]string,
 ) (serviceLabels, error) {
 	where := "service " + service.Name
@@ -275,9 +276,9 @@ func parseServiceLabels(
 
 // decideService decides a service's writable layer and image — its own label, else the
 // service's arcave.capture, else the config — and its capture mode, its label else the config.
-func (sl serviceLabels) decideService(defaults CaptureDefaults) model.ServiceDecision {
+func (sl serviceLabels) decideService(defaults CaptureDefaults) composemodel.ServiceDecision {
 	writableLayerConfig := newConfigDecision(defaults.SavepointCapture.WritableLayers, "writable_layers")
-	writableLayer := model.WritableLayerDecision{
+	writableLayer := composemodel.WritableLayerDecision{
 		CaptureDecision: sl.decideWithFallback(sl.writableLayerCapture, writableLayerConfig),
 		Backend:         defaults.WritableLayerBackend,
 	}
@@ -289,7 +290,7 @@ func (sl serviceLabels) decideService(defaults CaptureDefaults) model.ServiceDec
 	if sl.mode != nil {
 		mode = *sl.mode
 	}
-	return model.ServiceDecision{
+	return composemodel.ServiceDecision{
 		WritableLayer: writableLayer,
 		Image:         image,
 		Mode:          mode,
@@ -298,7 +299,7 @@ func (sl serviceLabels) decideService(defaults CaptureDefaults) model.ServiceDec
 
 // decideMount decides one bind or anonymous mount of the service, most specific first:
 // the target lists, the service's defaults, the config.
-func (sl serviceLabels) decideMount(mount model.ServiceVolume, defaults CaptureDefaults) model.VolumeDecision {
+func (sl serviceLabels) decideMount(mount composemodel.ServiceVolume, defaults CaptureDefaults) composemodel.VolumeDecision {
 	configDecision := newConfigDecision(defaults.SavepointCapture.BindVolumes, "volumes.bind")
 	if mount.Type == model.VolumeTypeAnon {
 		configDecision = newConfigDecision(defaults.SavepointCapture.AnonymousVolumes, "volumes.anonymous")
@@ -315,19 +316,19 @@ func (sl serviceLabels) decideMount(mount model.ServiceVolume, defaults CaptureD
 			backend = *sl.volumeBackend
 		}
 	}
-	return model.VolumeDecision{CaptureDecision: capture, Backend: backend}
+	return composemodel.VolumeDecision{CaptureDecision: capture, Backend: backend}
 }
 
 // decideByTargetLists is what arcave.mounts.exclude and .include say of a target, if
 // either does.
-func (sl serviceLabels) decideByTargetLists(target string) (model.CaptureDecision, bool) {
+func (sl serviceLabels) decideByTargetLists(target string) (composemodel.CaptureDecision, bool) {
 	switch {
 	case slices.Contains(sl.excludedTargets, target):
 		return newLabelDecision(false, sl.formatListSource(model.CaptureLabelMountsExclude)), true
 	case slices.Contains(sl.includedTargets, target):
 		return newLabelDecision(true, sl.formatListSource(model.CaptureLabelMountsInclude)), true
 	default:
-		return model.CaptureDecision{}, false
+		return composemodel.CaptureDecision{}, false
 	}
 }
 
@@ -344,8 +345,8 @@ func (sl serviceLabels) formatListSource(key model.CaptureLabel) string {
 
 // decideWithFallback is decision when set, else what decideByService says.
 func (sl serviceLabels) decideWithFallback(
-	decision *model.CaptureDecision, configDecision model.CaptureDecision,
-) model.CaptureDecision {
+	decision *composemodel.CaptureDecision, configDecision composemodel.CaptureDecision,
+) composemodel.CaptureDecision {
 	if decision != nil {
 		return *decision
 	}
@@ -353,7 +354,7 @@ func (sl serviceLabels) decideWithFallback(
 }
 
 // decideByService is the service's arcave.capture, else configDecision.
-func (sl serviceLabels) decideByService(configDecision model.CaptureDecision) model.CaptureDecision {
+func (sl serviceLabels) decideByService(configDecision composemodel.CaptureDecision) composemodel.CaptureDecision {
 	if sl.capture != nil {
 		return *sl.capture
 	}
@@ -363,18 +364,18 @@ func (sl serviceLabels) decideByService(configDecision model.CaptureDecision) mo
 // decideNamed decides a named volume, most specific first: its own label, what the
 // services mounting it say of its target, their arcave.capture, the config.
 func decideNamed(
-	ctx context.Context, named model.NamedVolume, services map[string]serviceLabels, defaults CaptureDefaults,
-) (model.VolumeDecision, error) {
+	ctx context.Context, named composemodel.NamedVolume, services map[string]serviceLabels, defaults CaptureDefaults,
+) (composemodel.VolumeDecision, error) {
 	ownLabels, err := parseVolumeLabels(ctx, named.Labels, "volume "+named.Name)
 	if err != nil {
-		return model.VolumeDecision{}, err
+		return composemodel.VolumeDecision{}, err
 	}
 	listedDecision, listedBackend, err := decideNamedByTargetLists(named, services)
 	if err != nil {
-		return model.VolumeDecision{}, err
+		return composemodel.VolumeDecision{}, err
 	}
 
-	decision := model.VolumeDecision{
+	decision := composemodel.VolumeDecision{
 		CaptureDecision: newConfigDecision(defaults.SavepointCapture.NamedVolumes, "volumes.named"),
 		Backend:         defaults.VolumeBackend,
 	}
@@ -401,10 +402,10 @@ func decideNamed(
 // target: left out if any leaves it out, else taken if any takes it, and the backend
 // they name, which they must agree on.
 func decideNamedByTargetLists(
-	named model.NamedVolume, services map[string]serviceLabels,
-) (*model.CaptureDecision, *model.SnapshotBackendKind, error) {
+	named composemodel.NamedVolume, services map[string]serviceLabels,
+) (*composemodel.CaptureDecision, *model.SnapshotBackendKind, error) {
 	var (
-		capture       *model.CaptureDecision
+		capture       *composemodel.CaptureDecision
 		agreedBackend *model.SnapshotBackendKind
 		agreedBy      string
 	)
@@ -419,7 +420,7 @@ func decideNamedByTargetLists(
 		}
 		if agreedBackend != nil && *agreedBackend != backend {
 			return nil, nil, fmt.Errorf("%w: services %s and %s name different backends for volume %s",
-				model.ErrInvalidCapturePolicy, agreedBy, ref.Service, named.Name)
+				composemodel.ErrInvalidCapturePolicy, agreedBy, ref.Service, named.Name)
 		}
 		agreedBackend, agreedBy = &backend, ref.Service
 	}
@@ -430,7 +431,7 @@ func decideNamedByTargetLists(
 // says of it: taken if any takes it, left out if all leave it out.
 func decideByServicesCapture(
 	refs []model.ServiceReference, services map[string]serviceLabels,
-) (model.CaptureDecision, bool) {
+) (composemodel.CaptureDecision, bool) {
 	excluded := len(refs) > 0
 	for _, ref := range refs {
 		capture := services[ref.Service].capture
@@ -444,21 +445,21 @@ func decideByServicesCapture(
 	if excluded {
 		return newLabelDecision(false, formatLabelSource(model.CaptureLabelCapture, "false", "every service mounting it")), true
 	}
-	return model.CaptureDecision{}, false
+	return composemodel.CaptureDecision{}, false
 }
 
 // newConfigDecision is the config's decision for a kind: left out when off, naming the
 // key that says so.
-func newConfigDecision(capture bool, key string) model.CaptureDecision {
+func newConfigDecision(capture bool, key string) composemodel.CaptureDecision {
 	if !capture {
-		return model.NewConfigDecision(false, fmt.Sprintf("capture.%s=false in the config", key))
+		return composemodel.NewConfigDecision(false, fmt.Sprintf("capture.%s=false in the config", key))
 	}
-	return model.NewConfigDecision(true, "")
+	return composemodel.NewConfigDecision(true, "")
 }
 
 // newLabelDecision is a decision a label made.
-func newLabelDecision(capture bool, source string) model.CaptureDecision {
-	return model.CaptureDecision{Capture: capture, Origin: model.OriginLabel, Source: source}
+func newLabelDecision(capture bool, source string) composemodel.CaptureDecision {
+	return composemodel.CaptureDecision{Capture: capture, Origin: composemodel.OriginLabel, Source: source}
 }
 
 // formatLabelSource is how every decision a label made names it: "<key>=<value> on <where>".
@@ -513,7 +514,7 @@ func joinLabels(labels []model.CaptureLabel) string {
 }
 
 // parseCaptureLabel reads a "true"/"false" label into a decision naming it.
-func parseCaptureLabel(labels map[string]string, key model.CaptureLabel, where string) (*model.CaptureDecision, error) {
+func parseCaptureLabel(labels map[string]string, key model.CaptureLabel, where string) (*composemodel.CaptureDecision, error) {
 	value, ok := labels[string(key)]
 	if !ok {
 		return nil, nil
@@ -544,7 +545,7 @@ func parseVolumeBackend(labels map[string]string, key model.CaptureLabel, where 
 }
 
 // parseTargets reads a comma-separated target list.
-func parseTargets(service model.Service, labels map[string]string, key model.CaptureLabel) ([]string, error) {
+func parseTargets(service composemodel.Service, labels map[string]string, key model.CaptureLabel) ([]string, error) {
 	value, ok := labels[string(key)]
 	if !ok {
 		return nil, nil
@@ -566,9 +567,9 @@ func parseTargets(service model.Service, labels map[string]string, key model.Cap
 
 // requireMountedTarget refuses a target that is not one of the service's binds,
 // anonymous volumes or named volume mounts.
-func requireMountedTarget(service model.Service, key model.CaptureLabel, value, target string) error {
+func requireMountedTarget(service composemodel.Service, key model.CaptureLabel, value, target string) error {
 	where := "service " + service.Name
-	volumeIdx := slices.IndexFunc(service.Volumes, func(mount model.ServiceVolume) bool {
+	volumeIdx := slices.IndexFunc(service.Volumes, func(mount composemodel.ServiceVolume) bool {
 		return mount.Target == target
 	})
 	switch {
@@ -582,5 +583,5 @@ func requireMountedTarget(service model.Service, key model.CaptureLabel, value, 
 
 // newInvalidLabelError is model.ErrInvalidCapturePolicy naming the label and why.
 func newInvalidLabelError(where string, key model.CaptureLabel, value, why string) error {
-	return fmt.Errorf("%w: %s=%q on %s: %s", model.ErrInvalidCapturePolicy, key, value, where, why)
+	return fmt.Errorf("%w: %s=%q on %s: %s", composemodel.ErrInvalidCapturePolicy, key, value, where, why)
 }

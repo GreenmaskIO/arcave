@@ -41,7 +41,7 @@ type specParser interface {
 
 // layerRestorer loads a writable layer out of the store under a tag of its own.
 type layerRestorer interface {
-	RestoreWritableLayer(ctx context.Context, req model.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error)
+	RestoreWritableLayer(ctx context.Context, req composemodel.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error)
 }
 
 // imageLookup tells whether the daemon holds an image under a reference.
@@ -148,7 +148,7 @@ func (s *Preparer) PrepareHeld(
 // NewOverwritten names the leftover volumes savepoint overwrites; under
 // model.LeftoverVolumesRefuse any is model.ErrLeftoverVolumes, unless recovering.
 func (s *Preparer) NewOverwritten(
-	introspection model.IntrospectionResult, savepoint model.Savepoint, recovering bool,
+	introspection composemodel.IntrospectionResult, savepoint model.Savepoint, recovering bool,
 ) ([]string, error) {
 	leftover := leftoverVolumes(composemodel.OwnedVolumes(introspection), savepoint)
 	if len(leftover) > 0 && s.leftoverVolumes == model.LeftoverVolumesRefuse && !recovering {
@@ -172,7 +172,7 @@ func leftoverVolumes(owned map[string]bool, savepoint model.Savepoint) []string 
 // happens before anything is stopped.
 func (s *Preparer) loadSavepointSpec(ctx context.Context, savepoint model.Savepoint) (*types.Project, error) {
 	if savepoint.Spec == nil {
-		return nil, fmt.Errorf("%w: %s", model.ErrSavepointNoSpec, savepoint.ID)
+		return nil, fmt.Errorf("%w: %s", composemodel.ErrSavepointNoSpec, savepoint.ID)
 	}
 	if savepoint.Spec.Format != model.SpecFormatComposeYAML {
 		return nil, fmt.Errorf("savepoint %s carries a compose spec in unknown format %q", savepoint.ID, savepoint.Spec.Format)

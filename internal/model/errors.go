@@ -43,8 +43,6 @@ var (
 	ErrRetainRecentNegative = errors.New("retain-recent count must be zero or positive")
 	// ErrRetainForNegative is returned when the retain-for duration is negative.
 	ErrRetainForNegative = errors.New("retain-for duration must be zero or positive")
-	// ErrImageRefNotFound reports an image reference the daemon does not hold.
-	ErrImageRefNotFound = errors.New("image reference not found")
 	// ErrProjectLocked is returned when another arcave process is already running a
 	// mutating workflow in this project.
 	ErrProjectLocked = errors.New("another arcave command is already running in this project")
@@ -103,27 +101,12 @@ var (
 	// it with the offending value.
 	ErrInvalidDigestID = errors.New("invalid image digest id")
 
-	// ErrSavepointNoSpec refuses a rollback to a savepoint that carries no compose
-	// spec: there is nothing to rebuild the compose project from.
-	ErrSavepointNoSpec = errors.New("savepoint carries no compose spec")
-
-	// ErrSavepointImageMissing reports a record naming a writable-layer capture
-	// whose archive the store does not hold.
-	ErrSavepointImageMissing = errors.New("savepoint image archive is missing")
-
-	// ErrUnsupportedImageArchive reports that an image archive uses a format
-	// this operation does not support (e.g. Docker 24 legacy layout).
-	ErrUnsupportedImageArchive = errors.New("unsupported image archive format")
-
 	// ErrLeftoverVolumes refuses a rollback into a compose project that is not running
 	// but still owns volumes the rollback would overwrite.
 	ErrLeftoverVolumes = errors.New("compose project is not running but its volumes survive")
 
 	// ErrUnsupportedDaemon reports a Docker daemon older than arcave supports.
 	ErrUnsupportedDaemon = errors.New("unsupported docker daemon")
-
-	// ErrInvalidCapturePolicy reports an arcave.* label arcave cannot act on.
-	ErrInvalidCapturePolicy = errors.New("invalid capture policy label")
 
 	// ErrComposeProjectAbsent reports a compose project the daemon holds no container of.
 	ErrComposeProjectAbsent = errors.New("no containers found")

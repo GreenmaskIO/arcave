@@ -16,6 +16,7 @@ package composetest
 
 import (
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"strings"
 	"time"
 
@@ -78,23 +79,23 @@ func DemoRecord() model.Savepoint {
 
 // DemoIntrospection is the live compose project: one service mounting the named volume, and no
 // container, so no layer is captured.
-func DemoIntrospection() model.IntrospectionResult {
-	return model.IntrospectionResult{Project: model.Project{
+func DemoIntrospection() composemodel.IntrospectionResult {
+	return composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: DemoProject,
-		Services: []model.Service{{
+		Services: []composemodel.Service{{
 			Name: DemoService,
-			Volumes: []model.ServiceVolume{{
+			Volumes: []composemodel.ServiceVolume{{
 				Type: model.VolumeTypeNamed, Source: "db", Target: DemoTarget, VolumeName: DemoVolumeName,
 			}},
 		}},
-		Volumes: []model.NamedVolume{{Key: "db", Name: DemoVolumeName,
+		Volumes: []composemodel.NamedVolume{{Key: "db", Name: DemoVolumeName,
 			UsedBy: []model.ServiceReference{{Service: DemoService, Target: DemoTarget}}}},
 	}}
 }
 
 // DemoContainerRef is DemoService's one replica, as a capture request addresses it.
-func DemoContainerRef() model.ContainerRef {
-	return model.ContainerRef{
+func DemoContainerRef() composemodel.ContainerRef {
+	return composemodel.ContainerRef{
 		Service: DemoService, Replica: 1, ID: DemoContainerID, Name: DemoContainerName(1),
 		UpstreamImageID: DemoUpstreamID, UpstreamImageRef: DemoBaseImage,
 	}
@@ -114,8 +115,8 @@ func DemoContainerInspect() container.InspectResponse {
 }
 
 // DemoImageCaptureRequest is the one upstream DemoIntrospectionWithContainers names.
-func DemoImageCaptureRequest() model.ImageCaptureRequest {
-	return model.ImageCaptureRequest{
+func DemoImageCaptureRequest() composemodel.ImageCaptureRequest {
+	return composemodel.ImageCaptureRequest{
 		Image: model.Image{
 			ID: DemoUpstreamID, Refs: []string{DemoBaseImage}, RepoDigests: []string{"postgres@sha256:dd"}, SizeBytes: 1 << 20,
 		},
@@ -125,11 +126,11 @@ func DemoImageCaptureRequest() model.ImageCaptureRequest {
 
 // DemoIntrospectionWithContainers is DemoIntrospection with the daemon holding one container
 // for DemoService: what a capture of layers sees.
-func DemoIntrospectionWithContainers() model.IntrospectionResult {
+func DemoIntrospectionWithContainers() composemodel.IntrospectionResult {
 	introspection := DemoIntrospection()
-	introspection.Project.Services = []model.Service{{
+	introspection.Project.Services = []composemodel.Service{{
 		Name: DemoService,
-		Containers: []model.Container{{
+		Containers: []composemodel.Container{{
 			ID:      DemoContainerID,
 			Name:    DemoContainerName(1),
 			Number:  1,
@@ -146,14 +147,14 @@ func DemoIntrospectionWithContainers() model.IntrospectionResult {
 }
 
 // LabelledIntrospection is DemoIntrospectionWithContainers, its one service carrying labels.
-func LabelledIntrospection(labels map[string]string) model.IntrospectionResult {
+func LabelledIntrospection(labels map[string]string) composemodel.IntrospectionResult {
 	introspection := DemoIntrospectionWithContainers()
 	introspection.Project.Services[0].Labels = labels
 	return introspection
 }
 
 // AssemblerFor assembles introspection into DemoAssembled.
-func AssemblerFor(introspection model.IntrospectionResult) *MockAssembler {
+func AssemblerFor(introspection composemodel.IntrospectionResult) *MockAssembler {
 	assembler := &MockAssembler{}
 	assembler.On("Assemble", mock.Anything, introspection).Return(DemoAssembled, nil)
 	return assembler
@@ -200,9 +201,9 @@ const (
 
 // DemoScaledIntrospection is DemoIntrospectionWithContainers with DemoService
 // scaled to two replicas.
-func DemoScaledIntrospection() model.IntrospectionResult {
+func DemoScaledIntrospection() composemodel.IntrospectionResult {
 	introspection := DemoIntrospectionWithContainers()
-	introspection.Project.Services[0].Containers = append(introspection.Project.Services[0].Containers, model.Container{
+	introspection.Project.Services[0].Containers = append(introspection.Project.Services[0].Containers, composemodel.Container{
 		ID:      DemoSecondContainerID,
 		Name:    DemoContainerName(2),
 		Number:  2,
@@ -230,7 +231,7 @@ func DemoScaledRecord() model.Savepoint {
 
 // DemoAbsentIntrospection is what the inspector reports once the compose project was
 // taken down: no service, its named volume left behind.
-func DemoAbsentIntrospection() model.IntrospectionResult {
+func DemoAbsentIntrospection() composemodel.IntrospectionResult {
 	introspection := DemoIntrospection()
 	introspection.Project.Services = nil
 	introspection.Project.Volumes[0].UsedBy = nil

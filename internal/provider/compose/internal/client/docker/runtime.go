@@ -20,7 +20,7 @@ import (
 
 	"github.com/moby/moby/client"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // versionReader is the one call ReadRuntime makes.
@@ -29,10 +29,10 @@ type versionReader interface {
 }
 
 // ReadRuntime asks the daemon which engine it is (model.NewContainerRuntime).
-func ReadRuntime(ctx context.Context, api versionReader) (model.ContainerRuntime, error) {
+func ReadRuntime(ctx context.Context, api versionReader) (composemodel.ContainerRuntime, error) {
 	version, err := api.ServerVersion(ctx, client.ServerVersionOptions{})
 	if err != nil {
-		return model.ContainerRuntime{}, fmt.Errorf("read the daemon version: %w", err)
+		return composemodel.ContainerRuntime{}, fmt.Errorf("read the daemon version: %w", err)
 	}
-	return model.NewContainerRuntime(version.Version, version.Components), nil
+	return composemodel.NewContainerRuntime(version.Version, version.Components), nil
 }

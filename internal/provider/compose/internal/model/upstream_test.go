@@ -22,23 +22,21 @@ import (
 	"github.com/moby/moby/api/types/image"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
-const (
-	upstreamID  = ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
-	upstreamRef = "postgres:16"
-	layerID     = ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
-	layerRef    = "arcave/demo-db-1-postgres-16:sp-019e7044-8fd0-7000-8000-000000000000"
-)
+// layerRef is a restored layer tag.
+const layerRef = "arcave/demo-db-1-postgres-16:sp-019e7044-8fd0-7000-8000-000000000000"
 
 func TestResolveUpstream(t *testing.T) {
 	tests := []struct {
 		name   string
-		image  ImageDigestID
+		image  model.ImageDigestID
 		ref    string
 		labels map[string]string
 		noConf bool
-		wantID ImageDigestID
+		wantID model.ImageDigestID
 		want   string
 		wantOK bool
 	}{
@@ -50,13 +48,13 @@ func TestResolveUpstream(t *testing.T) {
 		{
 			name:  "a layer naming its upstream by label",
 			image: layerID, ref: layerRef,
-			labels: map[string]string{string(SystemLabelBaseImageID): upstreamID.String(), string(SystemLabelBaseImageRef): upstreamRef},
+			labels: map[string]string{string(model.SystemLabelBaseImageID): upstreamID.String(), string(model.SystemLabelBaseImageRef): upstreamRef},
 			wantID: upstreamID, want: upstreamRef, wantOK: true,
 		},
 		{
 			name:  "a layer whose label is no digest",
 			image: layerID, ref: layerRef,
-			labels: map[string]string{string(SystemLabelBaseImageID): "postgres:16"},
+			labels: map[string]string{string(model.SystemLabelBaseImageID): "postgres:16"},
 		},
 		{
 			name:  "a container on its upstream as Podman spells it",
@@ -66,7 +64,7 @@ func TestResolveUpstream(t *testing.T) {
 		{
 			name:  "a layer as Podman spells its tag",
 			image: layerID, ref: "docker.io/" + layerRef,
-			labels: map[string]string{string(SystemLabelBaseImageID): upstreamID.String(), string(SystemLabelBaseImageRef): upstreamRef},
+			labels: map[string]string{string(model.SystemLabelBaseImageID): upstreamID.String(), string(model.SystemLabelBaseImageRef): upstreamRef},
 			wantID: upstreamID, want: upstreamRef, wantOK: true,
 		},
 		{
@@ -89,7 +87,7 @@ func TestResolveUpstream(t *testing.T) {
 			if !tt.noConf {
 				c.Inspect.Config = &container.Config{Image: tt.ref}
 			}
-			res := IntrospectionResult{Images: map[ImageDigestID]image.InspectResponse{
+			res := IntrospectionResult{Images: map[model.ImageDigestID]image.InspectResponse{
 				tt.image: {
 					ID:     tt.image.String(),
 					Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Labels: tt.labels}},
@@ -106,3 +104,9 @@ func TestResolveUpstream(t *testing.T) {
 		})
 	}
 }
+
+const (
+	upstreamID  = model.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	upstreamRef = "postgres:16"
+	layerID     = model.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+)

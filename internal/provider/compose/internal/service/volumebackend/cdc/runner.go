@@ -24,7 +24,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -86,7 +86,7 @@ type resticProblem struct {
 // ContainerRunner is all this file needs of the engine: one throwaway container
 // per restic command. The volume half of VolumeRunner is the snapshotter's.
 type ContainerRunner interface {
-	RunOneShot(ctx context.Context, spec model.OneShotSpec) error
+	RunOneShot(ctx context.Context, spec composemodel.OneShotSpec) error
 }
 
 // repositories is what reaching any repository through restic takes.

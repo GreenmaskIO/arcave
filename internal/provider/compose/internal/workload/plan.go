@@ -18,7 +18,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/hold"
@@ -35,7 +34,7 @@ type capturePlan struct {
 }
 
 // newCapturePlan wraps plan of the introspected project in the handle core holds a capture by.
-func (s *composeWorkload) newCapturePlan(plan composemodel.Plan, introspection model.IntrospectionResult) capturePlan {
+func (s *composeWorkload) newCapturePlan(plan composemodel.Plan, introspection composemodel.IntrospectionResult) capturePlan {
 	return capturePlan{
 		service:              s,
 		plan:                 plan,

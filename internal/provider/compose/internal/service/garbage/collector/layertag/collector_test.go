@@ -17,6 +17,7 @@ package layertag
 import (
 	"context"
 	"errors"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"strings"
 	"testing"
 
@@ -40,18 +41,18 @@ func TestCollector_Find(t *testing.T) {
 		otherProject = gctest.RestoredLayerRef(repository, "019e843e-1650-7000-8000-000000000003")
 		unowned      = gctest.RestoredLayerRef(repository, "019e843e-1650-7000-8000-000000000004")
 	)
-	origin := model.LayerOrigin{ArcaveProject: "app", ComposeProject: "demo"}
+	origin := composemodel.LayerOrigin{ArcaveProject: "app", ComposeProject: "demo"}
 	ctx := context.Background()
 	daemon := &mockDaemon{}
-	daemon.On("ListLayerImages", mock.Anything).Return([]model.TaggedImage{
+	daemon.On("ListLayerImages", mock.Anything).Return([]composemodel.TaggedImage{
 		{Ref: unused, ImageID: gctest.Digest("1"), Origin: origin},
 		{Ref: usedByRef, ImageID: gctest.Digest("2"), Origin: origin},
 		{Ref: usedByID, ImageID: gctest.Digest("3"), Origin: origin},
-		{Ref: lookalike, ImageID: gctest.Digest("4"), Origin: model.LayerOrigin{ArcaveProject: "app", ComposeProject: "demo-db"}},
-		{Ref: otherProject, ImageID: gctest.Digest("5"), Origin: model.LayerOrigin{ArcaveProject: "other", ComposeProject: "demo"}},
+		{Ref: lookalike, ImageID: gctest.Digest("4"), Origin: composemodel.LayerOrigin{ArcaveProject: "app", ComposeProject: "demo-db"}},
+		{Ref: otherProject, ImageID: gctest.Digest("5"), Origin: composemodel.LayerOrigin{ArcaveProject: "other", ComposeProject: "demo"}},
 		{Ref: unowned, ImageID: gctest.Digest("6")},
 	}, nil).Once()
-	daemon.On("ListContainerImages", mock.Anything).Return([]model.ContainerImage{
+	daemon.On("ListContainerImages", mock.Anything).Return([]composemodel.ContainerImage{
 		{ContainerID: "c1", Ref: usedByRef, ImageID: gctest.Digest("2")},
 		{ContainerID: "c2", Ref: model.ImageRef("sha256:" + strings.Repeat("3", 64)), ImageID: gctest.Digest("3")},
 	}, nil).Once()
@@ -102,7 +103,7 @@ func TestCollector_Probe(t *testing.T) {
 func TestCollector_Find_DaemonError(t *testing.T) {
 	// Arrange
 	daemon := &mockDaemon{}
-	daemon.On("ListLayerImages", mock.Anything).Return([]model.TaggedImage(nil), errors.New("boom")).Once()
+	daemon.On("ListLayerImages", mock.Anything).Return([]composemodel.TaggedImage(nil), errors.New("boom")).Once()
 
 	// Act
 	_, err := New(daemon, "app").Find(context.Background(), garbage.DaemonScope{})

@@ -17,6 +17,7 @@ package test
 import (
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"net"
 	"os"
@@ -152,7 +153,7 @@ func (e *imageRollbackEnv) storedMounts(t *testing.T, containerID string) []libp
 
 	runtime, err := dockerclient.ReadRuntime(e.ctx, e.daemon)
 	require.NoError(t, err)
-	if runtime.Kind != model.ContainerRuntimePodman {
+	if runtime.Kind != composemodel.ContainerRuntimePodman {
 		return nil
 	}
 	stored, err := newLibpodClient(t, e.daemon, runtime.Version).InspectContainer(e.ctx, containerID)

@@ -15,6 +15,7 @@
 package captureplan
 
 import (
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,34 +27,34 @@ import (
 func TestFindBackupVolumes(t *testing.T) {
 	tests := []struct {
 		name          string
-		project       model.Project
+		project       composemodel.Project
 		want          []model.Volume
 		wantSkipped   []model.SkippedVolume
 		wantUncovered []string
 	}{
 		{
 			name: "named comes from the project level, bind and anon from the service level",
-			project: model.Project{
+			project: composemodel.Project{
 				Name: "demo",
-				Services: []model.Service{
+				Services: []composemodel.Service{
 					{
 						Name: "app",
-						Volumes: []model.ServiceVolume{
+						Volumes: []composemodel.ServiceVolume{
 							{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg", ReadOnly: true},
 							{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/scratch"},
 						},
 					},
 					{
 						Name: "db",
-						Volumes: []model.ServiceVolume{
+						Volumes: []composemodel.ServiceVolume{
 							// A named mount is a reference to the unit taken below, never a
 							// unit of its own — otherwise a shared volume is captured twice.
 							{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data", VolumeName: "demo_pgdata"},
-							{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/data", Replica: 1, Volume: &model.VolumeMount{Subpath: "inner"}},
+							{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/data", Replica: 1, Volume: &composemodel.VolumeMount{Subpath: "inner"}},
 						},
 					},
 				},
-				Volumes: []model.NamedVolume{
+				Volumes: []composemodel.NamedVolume{
 					{Key: "pgdata", Name: "demo_pgdata", UsedBy: []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}}},
 				},
 			},
@@ -89,11 +90,11 @@ func TestFindBackupVolumes(t *testing.T) {
 		},
 		{
 			name: "every replica's anonymous volume is a unit of its own",
-			project: model.Project{
+			project: composemodel.Project{
 				Name: "demo",
-				Services: []model.Service{{
+				Services: []composemodel.Service{{
 					Name: "worker",
-					Volumes: []model.ServiceVolume{
+					Volumes: []composemodel.ServiceVolume{
 						{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: 1},
 						{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: 2},
 					},
@@ -118,23 +119,23 @@ func TestFindBackupVolumes(t *testing.T) {
 		},
 		{
 			name: "a mount inherited through volumes_from is its source's unit, or none from outside the project",
-			project: model.Project{
+			project: composemodel.Project{
 				Name: "demo",
-				Services: []model.Service{
+				Services: []composemodel.Service{
 					{
 						Name: "app",
-						Volumes: []model.ServiceVolume{
+						Volumes: []composemodel.ServiceVolume{
 							{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/data", Replica: 1, InheritedFrom: "c-data-1"},
 							{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/vpn", Target: "/vpn", InheritedFrom: "c-vpn"},
 						},
-						Containers: []model.Container{{ID: "c-app-1", Number: 1}},
+						Containers: []composemodel.Container{{ID: "c-app-1", Number: 1}},
 					},
 					{
 						Name: "data",
-						Volumes: []model.ServiceVolume{
+						Volumes: []composemodel.ServiceVolume{
 							{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/data", Replica: 1},
 						},
-						Containers: []model.Container{{ID: "c-data-1", Number: 1}},
+						Containers: []composemodel.Container{{ID: "c-data-1", Number: 1}},
 					},
 				},
 			},
@@ -153,17 +154,17 @@ func TestFindBackupVolumes(t *testing.T) {
 		},
 		{
 			name: "every mount of a shared volume travels with the one unit",
-			project: model.Project{
+			project: composemodel.Project{
 				Name: "demo",
-				Services: []model.Service{
-					{Name: "api", Volumes: []model.ServiceVolume{
+				Services: []composemodel.Service{
+					{Name: "api", Volumes: []composemodel.ServiceVolume{
 						{Type: model.VolumeTypeNamed, Source: "assets", Target: "/srv/assets", VolumeName: "demo_assets"},
 					}},
-					{Name: "web", Volumes: []model.ServiceVolume{
+					{Name: "web", Volumes: []composemodel.ServiceVolume{
 						{Type: model.VolumeTypeNamed, Source: "assets", Target: "/usr/share/nginx/html", VolumeName: "demo_assets"},
 					}},
 				},
-				Volumes: []model.NamedVolume{{
+				Volumes: []composemodel.NamedVolume{{
 					Key:  "assets",
 					Name: "demo_assets",
 					UsedBy: []model.ServiceReference{
@@ -188,9 +189,9 @@ func TestFindBackupVolumes(t *testing.T) {
 		},
 		{
 			name: "external and unmounted named volumes are captured too",
-			project: model.Project{
+			project: composemodel.Project{
 				Name: "demo",
-				Volumes: []model.NamedVolume{
+				Volumes: []composemodel.NamedVolume{
 					{Key: "orphan", Name: "demo_orphan"},
 					{Key: "shared", Name: "shared_pgdata", External: true},
 				},
@@ -203,9 +204,9 @@ func TestFindBackupVolumes(t *testing.T) {
 		{
 			// One case per skipped type, asserting the whole SkippedVolume.
 			name: "every type that is not named, bind or anon is skipped with its reason",
-			project: model.Project{
+			project: composemodel.Project{
 				Name: "demo",
-				Services: []model.Service{{Name: "app", Volumes: []model.ServiceVolume{
+				Services: []composemodel.Service{{Name: "app", Volumes: []composemodel.ServiceVolume{
 					{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/scratch"},
 					{Type: model.VolumeTypeNPipe, RawType: "npipe", Target: `\\.\pipe\docker_engine`},
 					{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1", Target: "/srv/assets"},
@@ -225,9 +226,9 @@ func TestFindBackupVolumes(t *testing.T) {
 		},
 		{
 			name: "a skipped mount beside a captured one costs the unit nothing",
-			project: model.Project{
+			project: composemodel.Project{
 				Name: "demo",
-				Services: []model.Service{{Name: "app", Volumes: []model.ServiceVolume{
+				Services: []composemodel.Service{{Name: "app", Volumes: []composemodel.ServiceVolume{
 					{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/scratch"},
 					{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg"},
 				}}},
@@ -246,9 +247,9 @@ func TestFindBackupVolumes(t *testing.T) {
 		{
 			// Units dedup by identity; skips do not.
 			name: "two tmpfs mounts are two skips",
-			project: model.Project{
+			project: composemodel.Project{
 				Name: "demo",
-				Services: []model.Service{{Name: "app", Volumes: []model.ServiceVolume{
+				Services: []composemodel.Service{{Name: "app", Volumes: []composemodel.ServiceVolume{
 					{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/scratch"},
 					{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run"},
 				}}},
@@ -263,16 +264,16 @@ func TestFindBackupVolumes(t *testing.T) {
 		{
 			// Only the writable layer of a service mounting nothing is held.
 			name: "a service mounting nothing, or only what is skipped, is not covered",
-			project: model.Project{
+			project: composemodel.Project{
 				Name: "demo",
-				Services: []model.Service{
+				Services: []composemodel.Service{
 					{Name: "web"},
-					{Name: "db", Volumes: []model.ServiceVolume{{Type: model.VolumeTypeNamed, RawType: "volume", Source: "data", VolumeName: "demo_data", Target: "/data"}}},
-					{Name: "vpn", Volumes: []model.ServiceVolume{
+					{Name: "db", Volumes: []composemodel.ServiceVolume{{Type: model.VolumeTypeNamed, RawType: "volume", Source: "data", VolumeName: "demo_data", Target: "/data"}}},
+					{Name: "vpn", Volumes: []composemodel.ServiceVolume{
 						{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/vpn", Target: "/vpn", InheritedFrom: "outside"},
 					}},
 				},
-				Volumes: []model.NamedVolume{{Key: "data", Name: "demo_data",
+				Volumes: []composemodel.NamedVolume{{Key: "data", Name: "demo_data",
 					UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}}},
 			},
 			want: []model.Volume{{
@@ -290,13 +291,13 @@ func TestFindBackupVolumes(t *testing.T) {
 		},
 		{
 			name: "two services binding the same host path stay two units",
-			project: model.Project{
+			project: composemodel.Project{
 				Name: "demo",
-				Services: []model.Service{
-					{Name: "api", Volumes: []model.ServiceVolume{
+				Services: []composemodel.Service{
+					{Name: "api", Volumes: []composemodel.ServiceVolume{
 						{Type: model.VolumeTypeBind, Source: "/host/cfg", Target: "/etc/cfg"},
 					}},
-					{Name: "web", Volumes: []model.ServiceVolume{
+					{Name: "web", Volumes: []composemodel.ServiceVolume{
 						{Type: model.VolumeTypeBind, Source: "/host/cfg", Target: "/etc/cfg"},
 					}},
 				},
@@ -323,7 +324,7 @@ func TestFindBackupVolumes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, notCovered, err := findBackupVolumes(model.IntrospectionResult{Project: tt.project}, model.CapturePolicy{VolumeBackend: model.SnapshotBackendFullCopy})
+			got, notCovered, err := findBackupVolumes(composemodel.IntrospectionResult{Project: tt.project}, composemodel.CapturePolicy{VolumeBackend: model.SnapshotBackendFullCopy})
 
 			// Assert
 			require.NoError(t, err)
@@ -340,20 +341,20 @@ func TestFindBackupVolumes(t *testing.T) {
 // would have each overwrite the other, so the operation stops and names both.
 func TestFindBackupVolumes_ObjectIDCollision(t *testing.T) {
 	// Arrange
-	introspection := model.IntrospectionResult{Project: model.Project{
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: "demo",
-		Services: []model.Service{
-			{Name: "app", Volumes: []model.ServiceVolume{
+		Services: []composemodel.Service{
+			{Name: "app", Volumes: []composemodel.ServiceVolume{
 				{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/data", Target: "/var/lib/data"},
 			}},
-			{Name: "app-var", Volumes: []model.ServiceVolume{
+			{Name: "app-var", Volumes: []composemodel.ServiceVolume{
 				{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/other", Target: "/lib/data"},
 			}},
 		},
 	}}
 
 	// Act
-	got, notCovered, err := findBackupVolumes(introspection, model.CapturePolicy{VolumeBackend: model.SnapshotBackendFullCopy})
+	got, notCovered, err := findBackupVolumes(introspection, composemodel.CapturePolicy{VolumeBackend: model.SnapshotBackendFullCopy})
 
 	// Assert
 	require.ErrorIs(t, err, errObjectIDCollision)
@@ -368,18 +369,18 @@ func TestFindBackupVolumes_ObjectIDCollision(t *testing.T) {
 // arm: it is project config, not a constant of this package.
 func TestFindBackupVolumes_StampsTheGivenBackend(t *testing.T) {
 	// Arrange
-	introspection := model.IntrospectionResult{Project: model.Project{
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: "demo",
-		Services: []model.Service{{
+		Services: []composemodel.Service{{
 			Name:    "app",
-			Volumes: []model.ServiceVolume{{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg"}},
+			Volumes: []composemodel.ServiceVolume{{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg"}},
 		}},
-		Volumes: []model.NamedVolume{{Key: "db", Name: "demo_db",
+		Volumes: []composemodel.NamedVolume{{Key: "db", Name: "demo_db",
 			UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}}},
 	}}
 
 	// Act
-	got, _, err := findBackupVolumes(introspection, model.CapturePolicy{VolumeBackend: model.SnapshotBackendCDC})
+	got, _, err := findBackupVolumes(introspection, composemodel.CapturePolicy{VolumeBackend: model.SnapshotBackendCDC})
 
 	// Assert
 	require.NoError(t, err)
@@ -410,29 +411,29 @@ func assertOneArmPerType(t *testing.T, volumes []model.Volume) {
 // reason and source.
 func TestFindBackupVolumes_AppliesThePolicy(t *testing.T) {
 	// Arrange
-	introspection := model.IntrospectionResult{Project: model.Project{
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: "demo",
-		Services: []model.Service{
-			{Name: "app", Volumes: []model.ServiceVolume{
+		Services: []composemodel.Service{
+			{Name: "app", Volumes: []composemodel.ServiceVolume{
 				{Type: model.VolumeTypeBind, RawType: "bind", Source: "/src", Target: "/app"},
 				{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: 1},
 			}},
-			{Name: "db", Volumes: []model.ServiceVolume{
+			{Name: "db", Volumes: []composemodel.ServiceVolume{
 				{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/data", VolumeName: "demo_pgdata"},
 			}},
 		},
-		Volumes: []model.NamedVolume{{Key: "pgdata", Name: "demo_pgdata",
+		Volumes: []composemodel.NamedVolume{{Key: "pgdata", Name: "demo_pgdata",
 			UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}}},
 	}}
-	excluded := model.VolumeDecision{CaptureDecision: model.CaptureDecision{Source: "a label"}}
-	policy := model.CapturePolicy{
+	excluded := composemodel.VolumeDecision{CaptureDecision: composemodel.CaptureDecision{Source: "a label"}}
+	policy := composemodel.CapturePolicy{
 		VolumeBackend: model.SnapshotBackendFullCopy,
-		Mounts: map[model.MountRef]model.VolumeDecision{
+		Mounts: map[composemodel.MountRef]composemodel.VolumeDecision{
 			{Service: "app", Target: "/app"}: excluded,
 			{Service: "app", Replica: 1, Target: "/cache"}: {
-				CaptureDecision: model.CaptureDecision{Capture: true}, Backend: model.SnapshotBackendCDC},
+				CaptureDecision: composemodel.CaptureDecision{Capture: true}, Backend: model.SnapshotBackendCDC},
 		},
-		NamedVolumes: map[string]model.VolumeDecision{"demo_pgdata": excluded},
+		NamedVolumes: map[string]composemodel.VolumeDecision{"demo_pgdata": excluded},
 	}
 
 	// Act

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/moby/moby/api/types/mount"
 	"github.com/rs/zerolog"
@@ -53,7 +54,7 @@ var inheritedSkipReason = skipReason{model.SkipReasonInheritedFromOutside, "inhe
 // covers, and the mounts and services it leaves out. Every workflow comes through
 // here, so create and rollback cannot differ.
 func resolveBackupVolumes(
-	ctx context.Context, introspection model.IntrospectionResult, capturePolicy model.CapturePolicy,
+	ctx context.Context, introspection composemodel.IntrospectionResult, capturePolicy composemodel.CapturePolicy,
 ) ([]model.Volume, model.NotCovered, error) {
 	volumes, notCovered, err := findBackupVolumes(introspection, capturePolicy)
 	if err != nil {
@@ -89,7 +90,7 @@ func resolveBackupVolumes(
 // findBackupVolumes decides, as capturePolicy says, which units a savepoint captures with
 // which backend, and what it leaves out; two units rendering one ObjectID are an error.
 func findBackupVolumes(
-	introspection model.IntrospectionResult, capturePolicy model.CapturePolicy,
+	introspection composemodel.IntrospectionResult, capturePolicy composemodel.CapturePolicy,
 ) ([]model.Volume, model.NotCovered, error) {
 	var (
 		volumes []model.Volume
@@ -170,7 +171,7 @@ func findBackupVolumes(
 				continue
 			}
 
-			decision := capturePolicy.DecideMount(model.MountRef{
+			decision := capturePolicy.DecideMount(composemodel.MountRef{
 				Service: service.Name,
 				Replica: serviceVolume.Replica,
 				Target:  serviceVolume.Target,
@@ -221,7 +222,7 @@ func findBackupVolumes(
 }
 
 // newSkippedVolume reports one mount of service left out for reason.
-func newSkippedVolume(service string, serviceVolume model.ServiceVolume, reason skipReason) model.SkippedVolume {
+func newSkippedVolume(service string, serviceVolume composemodel.ServiceVolume, reason skipReason) model.SkippedVolume {
 	skipped := model.SkippedVolume{
 		Service: service,
 		Target:  serviceVolume.Target,
@@ -236,7 +237,7 @@ func newSkippedVolume(service string, serviceVolume model.ServiceVolume, reason 
 }
 
 // projectContainers are the ids of the project's replicas.
-func projectContainers(services []model.Service) map[string]bool {
+func projectContainers(services []composemodel.Service) map[string]bool {
 	ids := map[string]bool{}
 	for _, service := range services {
 		for _, container := range service.Containers {
@@ -295,7 +296,7 @@ func reasonFor(volumeType model.VolumeType) skipReason {
 
 // newBindProperties and newAnonProperties each fill their arm or return nil, so
 // exactly one arm of the Volume literal above ends up non-nil.
-func newBindProperties(service string, serviceVolume model.ServiceVolume) *model.VolumePropertiesBind {
+func newBindProperties(service string, serviceVolume composemodel.ServiceVolume) *model.VolumePropertiesBind {
 	if serviceVolume.Type != model.VolumeTypeBind {
 		return nil
 	}
@@ -307,7 +308,7 @@ func newBindProperties(service string, serviceVolume model.ServiceVolume) *model
 	}
 }
 
-func newAnonProperties(service string, serviceVolume model.ServiceVolume) *model.VolumePropertiesAnon {
+func newAnonProperties(service string, serviceVolume composemodel.ServiceVolume) *model.VolumePropertiesAnon {
 	if serviceVolume.Type != model.VolumeTypeAnon {
 		return nil
 	}

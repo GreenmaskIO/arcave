@@ -23,7 +23,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // perReplicaFields differ between replicas by construction.
@@ -31,7 +31,7 @@ var perReplicaFields = []string{"ContainerName", "Hostname"}
 
 // warnOnDivergentReplicas reports, once per service, the fields in which a later
 // replica differs from the first one the spec was rendered off.
-func (a assembly) warnOnDivergentReplicas(ctx context.Context, svc model.Service, firstConfig types.ServiceConfig) {
+func (a assembly) warnOnDivergentReplicas(ctx context.Context, svc composemodel.Service, firstConfig types.ServiceConfig) {
 	var diverged []string
 	for _, replica := range svc.Containers[min(1, len(svc.Containers)):] {
 		replicaConfig := a.newBaseConfig(svc)

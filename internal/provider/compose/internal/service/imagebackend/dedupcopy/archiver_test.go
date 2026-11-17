@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 	"sync"
@@ -152,7 +153,7 @@ func TestArchiver_Store_RefusesAnArchiveItCannotAddress(t *testing.T) {
 			_, err := dedupcopy.New(blobs).Store(ctx, capture, imageID, bytes.NewReader(tt.archive(t)))
 
 			// Assert
-			require.ErrorIs(t, err, model.ErrUnsupportedImageArchive)
+			require.ErrorIs(t, err, composemodel.ErrUnsupportedImageArchive)
 			assert.ErrorContains(t, err, tt.wantMsg, "the other gate fired")
 		})
 	}
@@ -220,7 +221,7 @@ func TestArchiver_Load_RefusesWhatItCannotAddress(t *testing.T) {
 					{Name: "blobs/sha256/x", Kind: imagebackend.KindBlob, Digest: "../../escape"},
 				},
 			},
-			wantErr:  model.ErrUnsupportedImageArchive,
+			wantErr:  composemodel.ErrUnsupportedImageArchive,
 			contains: "../../escape",
 		},
 		{
@@ -229,7 +230,7 @@ func TestArchiver_Load_RefusesWhatItCannotAddress(t *testing.T) {
 				ImageID: imageID, Format: imagebackend.FormatBlobs,
 				Members: []imagebackend.Member{{Name: "../secret", Kind: imagebackend.KindMetadata}},
 			},
-			wantErr: model.ErrUnsupportedImageArchive,
+			wantErr: composemodel.ErrUnsupportedImageArchive,
 		},
 		{
 			name: "a kind this build does not know",
@@ -237,7 +238,7 @@ func TestArchiver_Load_RefusesWhatItCannotAddress(t *testing.T) {
 				ImageID: imageID, Format: imagebackend.FormatBlobs,
 				Members: []imagebackend.Member{{Name: indexName, Kind: "layer-v9"}},
 			},
-			wantErr: model.ErrUnsupportedImageArchive,
+			wantErr: composemodel.ErrUnsupportedImageArchive,
 		},
 		{
 			name: "a capture holding another image",
@@ -245,7 +246,7 @@ func TestArchiver_Load_RefusesWhatItCannotAddress(t *testing.T) {
 				ImageID: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Format: imagebackend.FormatBlobs,
 				Members: []imagebackend.Member{{Name: indexName, Kind: imagebackend.KindMetadata}},
 			},
-			wantErr: model.ErrSavepointImageMissing,
+			wantErr: composemodel.ErrSavepointImageMissing,
 		},
 	}
 

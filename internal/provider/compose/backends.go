@@ -16,6 +16,7 @@ package compose
 
 import (
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/greenmaskio/storages"
 
@@ -56,7 +57,7 @@ func newBackendRegistry(
 // newImageBackend builds the image backend over both archivers a writable layer may name;
 // images are always deduplicated, which needs a daemon of Docker 25 or newer.
 func newImageBackend(
-	composeProjectStore storages.Navigator, origin model.LayerOrigin, engine *docker.Engine,
+	composeProjectStore storages.Navigator, origin composemodel.LayerOrigin, engine *docker.Engine,
 ) (*imagebackend.Copier, error) {
 	blobStore, err := composeProjectStore.SubStorage(dedupcopy.NamespaceBlobs, true)
 	if err != nil {

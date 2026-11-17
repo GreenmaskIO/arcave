@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 
@@ -84,7 +85,7 @@ func ReadManifest(ctx context.Context, imageStore storages.Reader, format Format
 	}
 	if manifest.Format != format {
 		return Manifest{}, fmt.Errorf("%w: the capture was stored as %q, this backend reads %q",
-			model.ErrUnsupportedImageArchive, manifest.Format, format)
+			composemodel.ErrUnsupportedImageArchive, manifest.Format, format)
 	}
 	return manifest, nil
 }
@@ -95,7 +96,7 @@ func readManifest(ctx context.Context, imageStore storages.Reader) (Manifest, er
 	src, err := imageStore.GetObject(ctx, manifestName)
 	if err != nil {
 		if errors.Is(err, storages.ErrFileNotFound) {
-			return Manifest{}, fmt.Errorf("%w: %s: %w", model.ErrSavepointImageMissing, manifestName, err)
+			return Manifest{}, fmt.Errorf("%w: %s: %w", composemodel.ErrSavepointImageMissing, manifestName, err)
 		}
 		return Manifest{}, fmt.Errorf("read %s: %w", manifestName, err)
 	}
@@ -110,7 +111,7 @@ func readManifest(ctx context.Context, imageStore storages.Reader) (Manifest, er
 		return Manifest{}, fmt.Errorf("decode %s: %w", manifestName, err)
 	}
 	if len(manifest.Members) == 0 {
-		return Manifest{}, fmt.Errorf("%w: %s names no members", model.ErrSavepointImageMissing, manifestName)
+		return Manifest{}, fmt.Errorf("%w: %s names no members", composemodel.ErrSavepointImageMissing, manifestName)
 	}
 	return manifest, nil
 }

@@ -16,6 +16,7 @@ package workload
 
 import (
 	"context"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -43,12 +44,12 @@ type savepointRepository interface {
 
 // composeIntrospector reads the live compose project as the daemon holds it.
 type composeIntrospector interface {
-	Introspect(ctx context.Context) (model.IntrospectionResult, error)
+	Introspect(ctx context.Context) (composemodel.IntrospectionResult, error)
 }
 
 // projectAssembler builds a compose project's spec out of its introspection.
 type projectAssembler interface {
-	Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error)
+	Assemble(ctx context.Context, introspection composemodel.IntrospectionResult) (*types.Project, error)
 }
 
 // specCodec moves a spec through the artifact a savepoint commits; Parse is compose's loader, so
@@ -61,9 +62,9 @@ type specCodec interface {
 // imageBackend commits writable layers into the store and keeps the images they were taken over,
 // and loads a layer back out of the store under a tag of its own.
 type imageBackend interface {
-	CaptureImage(ctx context.Context, req model.ImageCaptureRequest) (model.Image, error)
-	CaptureWritableLayer(ctx context.Context, req model.WritableLayerCaptureRequest) (model.WritableLayer, error)
-	RestoreWritableLayer(ctx context.Context, req model.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error)
+	CaptureImage(ctx context.Context, req composemodel.ImageCaptureRequest) (model.Image, error)
+	CaptureWritableLayer(ctx context.Context, req composemodel.WritableLayerCaptureRequest) (model.WritableLayer, error)
+	RestoreWritableLayer(ctx context.Context, req composemodel.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error)
 }
 
 // composeRunner is the compose project's lifecycle: stop it for a capture and start it after, tear
@@ -91,7 +92,7 @@ type volumeRemover interface {
 // containerRebuilder recreates one built container from another image as the replica a
 // savepoint recorded, which compose's one image per service cannot express.
 type containerRebuilder interface {
-	RecreateWithImage(ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string) (string, error)
+	RecreateWithImage(ctx context.Context, containerID string, as composemodel.ReplicaIdentity, imageRef string) (string, error)
 }
 
 // imageLookup tells whether the daemon holds an image under a reference.

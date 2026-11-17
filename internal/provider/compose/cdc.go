@@ -17,6 +17,7 @@ package compose
 import (
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"time"
 
 	"github.com/greenmaskio/storages"
@@ -143,10 +144,10 @@ func shutdownResticServer(ctx context.Context, server *echo.Echo) {
 // runtime profile: a call added here must depend on nothing podman.API changes.
 type resticDaemon interface {
 	Ping(ctx context.Context) error
-	ListLayerImages(ctx context.Context) ([]model.TaggedImage, error)
-	ListContainerImages(ctx context.Context) ([]model.ContainerImage, error)
+	ListLayerImages(ctx context.Context) ([]composemodel.TaggedImage, error)
+	ListContainerImages(ctx context.Context) ([]composemodel.ContainerImage, error)
 	RemoveImageRef(ctx context.Context, ref model.ImageRef) error
-	RunOneShot(ctx context.Context, spec model.OneShotSpec) error
+	RunOneShot(ctx context.Context, spec composemodel.OneShotSpec) error
 	HostLoopbackShared(ctx context.Context) (bool, error)
 }
 

@@ -16,6 +16,7 @@ package captureplan
 
 import (
 	"context"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"slices"
 
 	"github.com/moby/moby/api/types/image"
@@ -34,11 +35,11 @@ const dockerManifestList = "application/vnd.docker.distribution.manifest.list.v2
 
 // newContainerRefs lists every replica of every service, in service order,
 // each with its upstream resolved.
-func newContainerRefs(ctx context.Context, introspection model.IntrospectionResult) []model.ContainerRef {
-	var refs []model.ContainerRef
+func newContainerRefs(ctx context.Context, introspection composemodel.IntrospectionResult) []composemodel.ContainerRef {
+	var refs []composemodel.ContainerRef
 	for _, svc := range introspection.Project.Services {
 		for _, container := range svc.Containers {
-			ref := model.ContainerRef{Service: svc.Name, Replica: container.Number, ID: container.ID, Name: container.Name}
+			ref := composemodel.ContainerRef{Service: svc.Name, Replica: container.Number, ID: container.ID, Name: container.Name}
 			ref.UpstreamImageID, ref.UpstreamImageRef = resolveUpstream(ctx, introspection, container)
 			refs = append(refs, ref)
 		}
@@ -49,16 +50,16 @@ func newContainerRefs(ctx context.Context, introspection model.IntrospectionResu
 // newLayerCaptures returns the replicas whose writable layer capturePolicy takes, each with
 // its backend, and the ones it leaves out.
 func newLayerCaptures(
-	ctx context.Context, containers []model.ContainerRef, capturePolicy model.CapturePolicy,
-) ([]model.WritableLayerCaptureRequest, []model.SkippedWritableLayer) {
+	ctx context.Context, containers []composemodel.ContainerRef, capturePolicy composemodel.CapturePolicy,
+) ([]composemodel.WritableLayerCaptureRequest, []model.SkippedWritableLayer) {
 	var (
-		layers  []model.WritableLayerCaptureRequest
+		layers  []composemodel.WritableLayerCaptureRequest
 		skipped []model.SkippedWritableLayer
 	)
 	for _, ref := range containers {
 		decision := capturePolicy.DecideService(ref.Service).WritableLayer
 		if decision.Capture {
-			layers = append(layers, model.WritableLayerCaptureRequest{
+			layers = append(layers, composemodel.WritableLayerCaptureRequest{
 				Container: ref,
 				Backend:   decision.Backend,
 			})
@@ -80,10 +81,10 @@ func newLayerCaptures(
 // imageCaptureContainers returns the containers whose image capturePolicy takes, and one
 // skip per service it leaves out.
 func imageCaptureContainers(
-	ctx context.Context, containers []model.ContainerRef, capturePolicy model.CapturePolicy,
-) ([]model.ContainerRef, []model.SkippedImage) {
+	ctx context.Context, containers []composemodel.ContainerRef, capturePolicy composemodel.CapturePolicy,
+) ([]composemodel.ContainerRef, []model.SkippedImage) {
 	var (
-		taken   []model.ContainerRef
+		taken   []composemodel.ContainerRef
 		skipped []model.SkippedImage
 	)
 	// kept are the upstreams some service takes: one is not reported skipped for another.
@@ -115,13 +116,13 @@ func imageCaptureContainers(
 
 // resolveUpstream is model.ResolveUpstream, with what it cannot say logged:
 // a container off the image compose created it on, and a layer naming no upstream.
-func resolveUpstream(ctx context.Context, introspection model.IntrospectionResult, container model.Container) (model.ImageDigestID, string) {
+func resolveUpstream(ctx context.Context, introspection composemodel.IntrospectionResult, container composemodel.Container) (model.ImageDigestID, string) {
 	if container.Inspect.Config == nil {
 		return "", ""
 	}
 	warnOnComposeImageMismatch(ctx, introspection, container)
 
-	id, ref, ok := model.ResolveUpstream(introspection, container)
+	id, ref, ok := composemodel.ResolveUpstream(introspection, container)
 	if !ok {
 		zerolog.Ctx(ctx).Info().Str("container", container.ID).Str("image", container.Inspect.Config.Image).
 			Msg("the writable layer names no image it was taken over; only the writable layer is captured")
@@ -130,7 +131,7 @@ func resolveUpstream(ctx context.Context, introspection model.IntrospectionResul
 }
 
 // newUnresolvedImages returns the containers whose upstream resolveUpstream could not name.
-func newUnresolvedImages(introspection model.IntrospectionResult, containers []model.ContainerRef) []model.UnresolvedImage {
+func newUnresolvedImages(introspection composemodel.IntrospectionResult, containers []composemodel.ContainerRef) []model.UnresolvedImage {
 	images := map[string]string{}
 	for _, svc := range introspection.Project.Services {
 		for _, container := range svc.Containers {
@@ -155,7 +156,7 @@ func newUnresolvedImages(introspection model.IntrospectionResult, containers []m
 // created it from; the image is still what the capture goes by. Under the containerd
 // image store a container names a multi-platform index and compose one manifest in it,
 // which tells nothing, so an index is not compared.
-func warnOnComposeImageMismatch(ctx context.Context, introspection model.IntrospectionResult, container model.Container) {
+func warnOnComposeImageMismatch(ctx context.Context, introspection composemodel.IntrospectionResult, container composemodel.Container) {
 	imageID := container.ImageID()
 	created, ok := container.Labels[composeImageLabel]
 	if !ok || imageID == "" || created == imageID.String() || isImageIndex(introspection.Images[imageID]) {
@@ -181,16 +182,16 @@ func isImageIndex(inspect image.InspectResponse) bool {
 
 // newImageCaptures lists the distinct images the containers run on, described from
 // the introspected daemon; one the daemon no longer holds is named by reference.
-func newImageCaptures(introspection model.IntrospectionResult, containers []model.ContainerRef) []model.ImageCaptureRequest {
-	var reqs []model.ImageCaptureRequest
+func newImageCaptures(introspection composemodel.IntrospectionResult, containers []composemodel.ContainerRef) []composemodel.ImageCaptureRequest {
+	var reqs []composemodel.ImageCaptureRequest
 	for _, ref := range containers {
-		if ref.UpstreamImageID == "" || slices.ContainsFunc(reqs, func(req model.ImageCaptureRequest) bool {
+		if ref.UpstreamImageID == "" || slices.ContainsFunc(reqs, func(req composemodel.ImageCaptureRequest) bool {
 			return req.Image.ID == ref.UpstreamImageID
 		}) {
 			continue
 		}
 		inspect, existsInDaemon := introspection.Images[ref.UpstreamImageID]
-		reqs = append(reqs, model.ImageCaptureRequest{
+		reqs = append(reqs, composemodel.ImageCaptureRequest{
 			Image: model.Image{
 				ID:          ref.UpstreamImageID,
 				Refs:        newImageRefs(ref.UpstreamImageRef, inspect.RepoTags),

@@ -15,6 +15,7 @@
 package composespec
 
 import (
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"strings"
 	"testing"
 	"time"
@@ -232,11 +233,11 @@ func TestAssembly_dropEngineStamps(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			imageID := "sha256:" + strings.Repeat("d", 64)
-			replica := model.Container{Inspect: container.InspectResponse{
+			replica := composemodel.Container{Inspect: container.InspectResponse{
 				Image:  imageID,
 				Config: &container.Config{Hostname: "db", Image: "app:1"},
 			}}
-			introspection := model.IntrospectionResult{Images: map[model.ImageDigestID]image.InspectResponse{
+			introspection := composemodel.IntrospectionResult{Images: map[model.ImageDigestID]image.InspectResponse{
 				model.ImageDigestID(imageID): {ID: imageID, Config: &tt.image},
 			}}
 			cfg := tt.cfg
@@ -266,7 +267,7 @@ func TestAssembly_dropEngineStamps_NothingStamped(t *testing.T) {
 	want := cfg
 
 	// Act
-	newAssembly(model.IntrospectionResult{}, EngineStamps{}).dropEngineStamps(&cfg, model.Container{})
+	newAssembly(composemodel.IntrospectionResult{}, EngineStamps{}).dropEngineStamps(&cfg, composemodel.Container{})
 
 	// Assert
 	assert.Equal(t, want, cfg)

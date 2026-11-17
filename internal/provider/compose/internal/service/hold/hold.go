@@ -144,10 +144,10 @@ type stopTrigger struct {
 	services    []string
 	allServices bool
 	// pausedOnEntry are their replicas found frozen, resumed so that compose can stop them.
-	pausedOnEntry []model.ContainerRef
+	pausedOnEntry []composemodel.ContainerRef
 	// resumed are the replicas the other triggers resume after the capture, whose health the
 	// start waits out first.
-	resumed []model.ContainerRef
+	resumed []composemodel.ContainerRef
 }
 
 // beforeCapture resumes the frozen replicas, puts the services down and returns the containers
@@ -195,8 +195,8 @@ func (t stopTrigger) afterCapture(revertCtx context.Context) error {
 // every frozen one of them after it.
 type pauseTrigger struct {
 	control       ContainerControl
-	running       []model.ContainerRef
-	pausedOnEntry []model.ContainerRef
+	running       []composemodel.ContainerRef
+	pausedOnEntry []composemodel.ContainerRef
 }
 
 // beforeCapture freezes the running replicas.
@@ -220,7 +220,7 @@ func (t pauseTrigger) afterCapture(revertCtx context.Context) error {
 // liveTrigger holds the live services by nothing, and resumes their replicas found frozen.
 type liveTrigger struct {
 	control       ContainerControl
-	pausedOnEntry []model.ContainerRef
+	pausedOnEntry []composemodel.ContainerRef
 }
 
 // beforeCapture leaves the services running.
@@ -236,7 +236,7 @@ func (t liveTrigger) afterCapture(revertCtx context.Context) error {
 // unpauseReplicas resumes whichever of replicas is frozen, warning on the step of ctx of each of
 // foreign by format.
 func unpauseReplicas(
-	ctx context.Context, control ContainerControl, replicas, foreign []model.ContainerRef, format string,
+	ctx context.Context, control ContainerControl, replicas, foreign []composemodel.ContainerRef, format string,
 ) error {
 	if len(replicas) == 0 {
 		return nil
@@ -261,8 +261,8 @@ func newServiceNames(services []composemodel.ServiceHold) []string {
 }
 
 // newRunningReplicas are the services' running replicas.
-func newRunningReplicas(services []composemodel.ServiceHold) []model.ContainerRef {
-	var running []model.ContainerRef
+func newRunningReplicas(services []composemodel.ServiceHold) []composemodel.ContainerRef {
+	var running []composemodel.ContainerRef
 	for _, service := range services {
 		running = append(running, service.Running...)
 	}
@@ -270,8 +270,8 @@ func newRunningReplicas(services []composemodel.ServiceHold) []model.ContainerRe
 }
 
 // newPausedOnEntry are the services' replicas found frozen.
-func newPausedOnEntry(services []composemodel.ServiceHold) []model.ContainerRef {
-	var paused []model.ContainerRef
+func newPausedOnEntry(services []composemodel.ServiceHold) []composemodel.ContainerRef {
+	var paused []composemodel.ContainerRef
 	for _, service := range services {
 		paused = append(paused, service.PausedOnEntry()...)
 	}
@@ -279,7 +279,7 @@ func newPausedOnEntry(services []composemodel.ServiceHold) []model.ContainerRef 
 }
 
 // newContainerIDs are the replicas' container ids.
-func newContainerIDs(replicas []model.ContainerRef) []string {
+func newContainerIDs(replicas []composemodel.ContainerRef) []string {
 	ids := make([]string, 0, len(replicas))
 	for _, ref := range replicas {
 		ids = append(ids, ref.ID)
@@ -288,6 +288,6 @@ func newContainerIDs(replicas []model.ContainerRef) []string {
 }
 
 // newReplicaName is how a warning names a replica: <service>-<replica>.
-func newReplicaName(ref model.ContainerRef) string {
+func newReplicaName(ref composemodel.ContainerRef) string {
 	return fmt.Sprintf("%s-%d", ref.Service, ref.Replica)
 }

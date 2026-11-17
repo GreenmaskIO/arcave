@@ -22,6 +22,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
 
 	dockercontext "github.com/docker/cli/cli/context/docker"
@@ -373,7 +374,7 @@ func busybox(t *testing.T, engine *dockerclient.Engine, name, script string) str
 	t.Helper()
 
 	var stdout, stderr bytes.Buffer
-	err := engine.RunOneShot(context.Background(), model.OneShotSpec{
+	err := engine.RunOneShot(context.Background(), composemodel.OneShotSpec{
 		Image:  busyboxImage,
 		Cmd:    []string{"sh", "-c", script},
 		Binds:  []string{name + ":/data"},

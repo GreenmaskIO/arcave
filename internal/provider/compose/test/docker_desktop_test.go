@@ -30,7 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
@@ -138,7 +138,7 @@ func TestDockerDesktop_RecreateWithImage_KeepsTheHostPath(t *testing.T) {
 
 	// Act
 	rebuilt, err := profile.Engine.RecreateWithImage(context.Background(), id,
-		model.ReplicaIdentity{Name: name, Number: 1}, busyboxImage)
+		composemodel.ReplicaIdentity{Name: name, Number: 1}, busyboxImage)
 
 	// Assert
 	require.NoError(t, err)
@@ -199,7 +199,7 @@ func newDesktopDaemon(t *testing.T) *client.Client {
 	daemon := daemontest.NewClient(t)
 	answer, err := daemon.Info(context.Background(), client.InfoOptions{})
 	require.NoError(t, err)
-	if !model.IsDockerDesktop(answer.Info) {
+	if !composemodel.IsDockerDesktop(answer.Info) {
 		t.Skipf("the daemon is %q, not Docker Desktop", answer.Info.OperatingSystem)
 	}
 	return daemon

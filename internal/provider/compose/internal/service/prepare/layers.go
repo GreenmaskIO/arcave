@@ -71,7 +71,7 @@ func (s *Preparer) restoreWritableLayers(
 
 			started := time.Now()
 			log.Debug().Msg("writable layer restore started")
-			image, err := s.layerRestorer.RestoreWritableLayer(opCtx, model.WritableLayerRestoreRequest{
+			image, err := s.layerRestorer.RestoreWritableLayer(opCtx, composemodel.WritableLayerRestoreRequest{
 				SnapshotID: savepoint.ID,
 				Layer:      capture,
 				Tag:        restoredLayerTag(composeProject, savepoint.ID, capture),

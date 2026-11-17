@@ -15,6 +15,7 @@
 package composespec
 
 import (
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"sort"
 	"strings"
 
@@ -29,7 +30,7 @@ const defaultBindPropagation = "rprivate"
 
 // newServiceVolumes renders the volumes: of one service, every mount type included:
 // a mount arcave does not capture still has to come back.
-func newServiceVolumes(mounts []model.ServiceVolume) []types.ServiceVolumeConfig {
+func newServiceVolumes(mounts []composemodel.ServiceVolume) []types.ServiceVolumeConfig {
 	if len(mounts) == 0 {
 		return nil
 	}
@@ -42,12 +43,12 @@ func newServiceVolumes(mounts []model.ServiceVolume) []types.ServiceVolumeConfig
 
 // declaredVolumes are the mounts the first replica declares: a later replica's anonymous
 // volume is its own copy of the same declaration.
-func declaredVolumes(svc model.Service) []model.ServiceVolume {
+func declaredVolumes(svc composemodel.Service) []composemodel.ServiceVolume {
 	if len(svc.Containers) == 0 {
 		return svc.Volumes
 	}
 	first := svc.Containers[0].Number
-	declared := make([]model.ServiceVolume, 0, len(svc.Volumes))
+	declared := make([]composemodel.ServiceVolume, 0, len(svc.Volumes))
 	for _, mount := range svc.Volumes {
 		if mount.Type != model.VolumeTypeAnon || mount.Replica == first {
 			declared = append(declared, mount)
@@ -58,7 +59,7 @@ func declaredVolumes(svc model.Service) []model.ServiceVolume {
 
 // newServiceVolume renders one mount. An anonymous volume renders as a bare target:
 // naming the one Down orphaned would make compose reuse it instead of a fresh one.
-func newServiceVolume(mount model.ServiceVolume) types.ServiceVolumeConfig {
+func newServiceVolume(mount composemodel.ServiceVolume) types.ServiceVolumeConfig {
 	config := types.ServiceVolumeConfig{
 		Type:     mount.RawType,
 		Source:   mount.Source,
@@ -90,7 +91,7 @@ func newServiceVolume(mount model.ServiceVolume) types.ServiceVolumeConfig {
 	return config
 }
 
-func newVolumeOptions(from *model.VolumeMount) *types.ServiceVolumeVolume {
+func newVolumeOptions(from *composemodel.VolumeMount) *types.ServiceVolumeVolume {
 	if from == nil {
 		return nil
 	}
@@ -103,7 +104,7 @@ func newVolumeOptions(from *model.VolumeMount) *types.ServiceVolumeVolume {
 
 // newBindOptions renders a bind's options. With none reported, compose creates a missing
 // host path, as it does for a bind declared with no options at all.
-func newBindOptions(from *model.BindMount) *types.ServiceVolumeBind {
+func newBindOptions(from *composemodel.BindMount) *types.ServiceVolumeBind {
 	bind := &types.ServiceVolumeBind{CreateHostPath: true}
 	if from == nil {
 		return bind
@@ -119,8 +120,8 @@ func newBindOptions(from *model.BindMount) *types.ServiceVolumeBind {
 
 // ownVolumes drops the mounts a container inherited through volumes_from: declared as its own,
 // they would be created afresh rather than shared.
-func ownVolumes(mounts []model.ServiceVolume) []model.ServiceVolume {
-	own := make([]model.ServiceVolume, 0, len(mounts))
+func ownVolumes(mounts []composemodel.ServiceVolume) []composemodel.ServiceVolume {
+	own := make([]composemodel.ServiceVolume, 0, len(mounts))
 	for _, mount := range mounts {
 		if mount.InheritedFrom == "" {
 			own = append(own, mount)

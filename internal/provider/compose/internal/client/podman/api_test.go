@@ -17,6 +17,7 @@ package podman
 import (
 	"context"
 	"errors"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -435,7 +436,7 @@ func TestAPI_ContainerInspect_ThroughEngine(t *testing.T) {
 	engine := docker.NewEngine(NewAPI(compat, stored))
 
 	// Act
-	got, err := engine.RecreateWithImage(context.Background(), "c1", model.ReplicaIdentity{
+	got, err := engine.RecreateWithImage(context.Background(), "c1", composemodel.ReplicaIdentity{
 		Name:   "demo-app-2",
 		Number: 2,
 	}, imageRef)

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"maps"
 	"slices"
 	"strconv"
@@ -76,9 +77,9 @@ func TestInspector_Introspect(t *testing.T) {
 	require.Len(t, got.Project.Services, 2)
 	assert.Equal(t, "app", got.Project.Services[0].Name, "services sort by name")
 	assert.Equal(t, "db", got.Project.Services[1].Name)
-	assert.Equal(t, []model.ServiceVolume{
+	assert.Equal(t, []composemodel.ServiceVolume{
 		{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg",
-			ReadOnly: true, Bind: &model.BindMount{CreateHostPath: true}},
+			ReadOnly: true, Bind: &composemodel.BindMount{CreateHostPath: true}},
 		{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/mnt/data",
 			VolumeName: ownedName},
 	}, got.Project.Services[0].Volumes, "mounts sort by target")
@@ -91,7 +92,7 @@ func TestInspector_Introspect(t *testing.T) {
 		{Service: "db", Target: "/var/lib/postgresql/data", ReadOnly: true},
 	}, got.Project.Volumes[1].UsedBy, "users sort by (service, target)")
 
-	assert.Equal(t, []model.Network{{Key: "back", Name: "demo_back",
+	assert.Equal(t, []composemodel.Network{{Key: "back", Name: "demo_back",
 		Inspect: network.Inspect{Name: "demo_back", Labels: map[string]string{api.NetworkLabel: "back"}}}},
 		got.Project.Networks)
 	daemon.AssertExpectations(t)
@@ -214,12 +215,12 @@ func TestInspector_Introspect_ClassifiesMounts(t *testing.T) {
 		name   string
 		mount  container.MountPoint
 		labels map[string]string // what VolumeInspect reports for an unowned volume
-		want   model.ServiceVolume
+		want   composemodel.ServiceVolume
 	}{
 		{
 			name:  "a volume the project owns is named, keyed by its compose key",
 			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
-			want: model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume",
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume",
 				Source: "pgdata", Target: "/data", VolumeName: ownedName},
 		},
 		{
@@ -227,42 +228,42 @@ func TestInspector_Introspect_ClassifiesMounts(t *testing.T) {
 			mount:  mountPoint(mount.TypeVolume, "short-name", "", "/data", false),
 			labels: map[string]string{anonymousVolumeLabel: "true"},
 			// The generated name is carried: a reaper has no other way to name the volume.
-			want: model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume",
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume",
 				Target: "/data", Replica: 1, VolumeName: "short-name"},
 		},
 		{
 			name:  "a generated name is anonymous where the label is missing",
 			mount: mountPoint(mount.TypeVolume, anonName, "", "/data", false),
-			want: model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume",
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume",
 				Target: "/data", Replica: 1, VolumeName: anonName},
 		},
 		{
 			name:  "an unowned, unlabelled volume is an external named one",
 			mount: mountPoint(mount.TypeVolume, "shared", "", "/data", false),
-			want: model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume",
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume",
 				Source: "shared", Target: "shared-placeholder", VolumeName: "shared"},
 		},
 		{
 			name:  "a bind carries the host path and its propagation",
 			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", false),
-			want: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind",
-				Source: "/host/cfg", Target: "/etc/cfg", Bind: &model.BindMount{CreateHostPath: true}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind",
+				Source: "/host/cfg", Target: "/etc/cfg", Bind: &composemodel.BindMount{CreateHostPath: true}},
 		},
 		{
 			name:  "tmpfs",
 			mount: mountPoint(mount.TypeTmpfs, "", "", "/run", false),
-			want:  model.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run"},
+			want:  composemodel.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run"},
 		},
 		{
 			name:  "npipe",
 			mount: mountPoint(mount.TypeNamedPipe, "", `\\.\pipe\d`, "/pipe", false),
-			want: model.ServiceVolume{Type: model.VolumeTypeNPipe, RawType: "npipe",
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNPipe, RawType: "npipe",
 				Target: "/pipe"},
 		},
 		{
 			name:  "an unrecognised type is reported, diagnosed by RawType",
 			mount: mountPoint("newfangled", "", "", "/x", false),
-			want:  model.ServiceVolume{Type: model.VolumeTypeUnknown, RawType: "newfangled", Target: "/x"},
+			want:  composemodel.ServiceVolume{Type: model.VolumeTypeUnknown, RawType: "newfangled", Target: "/x"},
 		},
 	}
 
@@ -289,7 +290,7 @@ func TestInspector_Introspect_ClassifiesMounts(t *testing.T) {
 
 			// Assert
 			require.NoError(t, err)
-			assert.Equal(t, []model.ServiceVolume{want}, got.Project.Services[0].Volumes)
+			assert.Equal(t, []composemodel.ServiceVolume{want}, got.Project.Services[0].Volumes)
 			daemon.AssertExpectations(t)
 		})
 	}
@@ -300,7 +301,7 @@ func TestInspector_Introspect_MountOptions(t *testing.T) {
 		name  string
 		mount container.MountPoint
 		host  container.HostConfig
-		want  model.ServiceVolume
+		want  composemodel.ServiceVolume
 	}{
 		{
 			name:  "the mount API carries a volume's nocopy, subpath and labels",
@@ -309,8 +310,8 @@ func TestInspector_Introspect_MountOptions(t *testing.T) {
 				Target: "/data", VolumeOptions: &mount.VolumeOptions{
 					NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"},
 				}}}},
-			want: model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
-				Target: "/data", VolumeName: ownedName, Volume: &model.VolumeMount{
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+				Target: "/data", VolumeName: ownedName, Volume: &composemodel.VolumeMount{
 					NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"},
 				}},
 		},
@@ -319,38 +320,38 @@ func TestInspector_Introspect_MountOptions(t *testing.T) {
 			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
 			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: ownedName,
 				Target: "/data", VolumeOptions: &mount.VolumeOptions{}}}},
-			want: model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
-				Target: "/data", VolumeName: ownedName, Volume: &model.VolumeMount{}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+				Target: "/data", VolumeName: ownedName, Volume: &composemodel.VolumeMount{}},
 		},
 		{
 			name:  "a volume requested without options has none",
 			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
 			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: ownedName,
 				Target: "/data"}}},
-			want: model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
 				Target: "/data", VolumeName: ownedName},
 		},
 		{
 			name:  "the bind API's nocopy flag",
 			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
 			host:  container.HostConfig{Binds: []string{ownedName + ":/data:rw,nocopy"}},
-			want: model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
-				Target: "/data", VolumeName: ownedName, Volume: &model.VolumeMount{NoCopy: true}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+				Target: "/data", VolumeName: ownedName, Volume: &composemodel.VolumeMount{NoCopy: true}},
 		},
 		{
 			name:  "the bind API's SELinux relabel",
 			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", true),
 			host:  container.HostConfig{Binds: []string{"/host/cfg:/etc/cfg:ro,Z"}},
-			want: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
-				Target: "/etc/cfg", ReadOnly: true, Bind: &model.BindMount{SELinux: "Z", CreateHostPath: true}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
+				Target: "/etc/cfg", ReadOnly: true, Bind: &composemodel.BindMount{SELinux: "Z", CreateHostPath: true}},
 		},
 		{
 			name:  "a bind through the mount API creates no host path unless asked",
 			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", false),
 			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeBind, Source: "/host/cfg",
 				Target: "/etc/cfg"}}},
-			want: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
-				Target: "/etc/cfg", Bind: &model.BindMount{}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
+				Target: "/etc/cfg", Bind: &composemodel.BindMount{}},
 		},
 		{
 			name:  "a bind's recursion and host path creation through the mount API",
@@ -359,31 +360,31 @@ func TestInspector_Introspect_MountOptions(t *testing.T) {
 				Target: "/etc/cfg", BindOptions: &mount.BindOptions{
 					CreateMountpoint: true, ReadOnlyNonRecursive: true,
 				}}}},
-			want: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
-				Target: "/etc/cfg", Bind: &model.BindMount{CreateHostPath: true, Recursive: "writable"}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
+				Target: "/etc/cfg", Bind: &composemodel.BindMount{CreateHostPath: true, Recursive: "writable"}},
 		},
 		{
 			name:  "a bind's source is the path its request names, not the mount's",
 			mount: mountPoint(mount.TypeBind, "", "/host_mnt/srv/cfg", "/etc/cfg", false),
 			host:  container.HostConfig{Binds: []string{"/srv/cfg:/etc/cfg:rw"}},
-			want: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/cfg",
-				Target: "/etc/cfg", Bind: &model.BindMount{CreateHostPath: true}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/cfg",
+				Target: "/etc/cfg", Bind: &composemodel.BindMount{CreateHostPath: true}},
 		},
 		{
 			name:  "a tmpfs mount's size and mode",
 			mount: mountPoint(mount.TypeTmpfs, "", "", "/run", false),
 			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeTmpfs, Target: "/run",
 				TmpfsOptions: &mount.TmpfsOptions{SizeBytes: 1 << 20, Mode: 0o1777}}}},
-			want: model.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run",
-				Tmpfs: &model.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run",
+				Tmpfs: &composemodel.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
 		},
 		{
 			name:  "an image mount's reference and subpath",
 			mount: mountPoint(mount.TypeImage, "", "", "/assets", true),
 			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeImage, Source: "assets:1",
 				Target: "/assets", ReadOnly: true, ImageOptions: &mount.ImageOptions{Subpath: "static"}}}},
-			want: model.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1",
-				Target: "/assets", ReadOnly: true, Image: &model.ImageMount{Subpath: "static"}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1",
+				Target: "/assets", ReadOnly: true, Image: &composemodel.ImageMount{Subpath: "static"}},
 		},
 	}
 
@@ -405,7 +406,7 @@ func TestInspector_Introspect_MountOptions(t *testing.T) {
 
 			// Assert
 			require.NoError(t, err)
-			assert.Equal(t, []model.ServiceVolume{tt.want}, got.Project.Services[0].Volumes)
+			assert.Equal(t, []composemodel.ServiceVolume{tt.want}, got.Project.Services[0].Volumes)
 			daemon.AssertExpectations(t)
 		})
 	}
@@ -576,17 +577,17 @@ func TestInspector_Introspect_AnonymousVolumePerReplica(t *testing.T) {
 		return mountPoint(mount.TypeVolume, name, "", "/cache", false)
 	}
 	data := mountPoint(mount.TypeVolume, ownedName, "", "/data", false)
-	wantAnon := func(name string, replica int) model.ServiceVolume {
-		return model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache",
+	wantAnon := func(name string, replica int) composemodel.ServiceVolume {
+		return composemodel.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache",
 			VolumeName: name, Replica: replica}
 	}
-	wantData := model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+	wantData := composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
 		Target: "/data", VolumeName: ownedName}
 
 	tests := []struct {
 		name     string
 		replicas []replica
-		want     []model.ServiceVolume
+		want     []composemodel.ServiceVolume
 		wantWarn string // the target warned of
 	}{
 		{
@@ -599,7 +600,7 @@ func TestInspector_Introspect_AnonymousVolumePerReplica(t *testing.T) {
 				{id: "c-worker-3", service: "worker", image: testImageID.String(),
 					mounts: []container.MountPoint{cache("anon-3"), data}},
 			},
-			want: []model.ServiceVolume{wantAnon("anon-1", 1), wantAnon("anon-2", 2), wantAnon("anon-3", 3), wantData},
+			want: []composemodel.ServiceVolume{wantAnon("anon-1", 1), wantAnon("anon-2", 2), wantAnon("anon-3", 3), wantData},
 		},
 		{
 			name: "a bind the first replica does not declare is warned of, the anonymous volumes still reported",
@@ -609,7 +610,7 @@ func TestInspector_Introspect_AnonymousVolumePerReplica(t *testing.T) {
 				{id: "c-worker-2", service: "worker", image: testImageID.String(),
 					mounts: []container.MountPoint{cache("anon-2"), mountPoint(mount.TypeBind, "", "/host/logs", "/logs", false)}},
 			},
-			want:     []model.ServiceVolume{wantAnon("anon-1", 1), wantAnon("anon-2", 2)},
+			want:     []composemodel.ServiceVolume{wantAnon("anon-1", 1), wantAnon("anon-2", 2)},
 			wantWarn: "/logs",
 		},
 	}
@@ -735,51 +736,51 @@ func TestInspector_Introspect_InheritedMounts(t *testing.T) {
 }
 
 func TestUndeclaredMounts(t *testing.T) {
-	anon := func(target string) model.ServiceVolume {
-		return model.ServiceVolume{Type: model.VolumeTypeAnon, Target: target}
+	anon := func(target string) composemodel.ServiceVolume {
+		return composemodel.ServiceVolume{Type: model.VolumeTypeAnon, Target: target}
 	}
-	bind := func(target string) model.ServiceVolume {
-		return model.ServiceVolume{Type: model.VolumeTypeBind, Target: target}
+	bind := func(target string) composemodel.ServiceVolume {
+		return composemodel.ServiceVolume{Type: model.VolumeTypeBind, Target: target}
 	}
 
 	tests := []struct {
 		name  string
-		first []model.ServiceVolume
-		own   []model.ServiceVolume
-		want  []model.ServiceVolume
+		first []composemodel.ServiceVolume
+		own   []composemodel.ServiceVolume
+		want  []composemodel.ServiceVolume
 	}{
 		{
 			name:  "the same mounts",
-			first: []model.ServiceVolume{anon("/cache"), bind("/logs")},
-			own:   []model.ServiceVolume{anon("/cache"), bind("/logs")},
+			first: []composemodel.ServiceVolume{anon("/cache"), bind("/logs")},
+			own:   []composemodel.ServiceVolume{anon("/cache"), bind("/logs")},
 		},
 		{
 			name:  "an extra anonymous volume is captured and comes back through the layer",
-			first: []model.ServiceVolume{anon("/cache")},
-			own:   []model.ServiceVolume{anon("/cache"), anon("/extra")},
+			first: []composemodel.ServiceVolume{anon("/cache")},
+			own:   []composemodel.ServiceVolume{anon("/cache"), anon("/extra")},
 		},
 		{
 			name:  "a mount the replica lacks is given back by the spec",
-			first: []model.ServiceVolume{anon("/cache"), bind("/logs")},
-			own:   []model.ServiceVolume{anon("/cache")},
+			first: []composemodel.ServiceVolume{anon("/cache"), bind("/logs")},
+			own:   []composemodel.ServiceVolume{anon("/cache")},
 		},
 		{
 			name:  "an extra bind is neither captured nor in the spec",
-			first: []model.ServiceVolume{anon("/cache")},
-			own:   []model.ServiceVolume{anon("/cache"), bind("/logs")},
-			want:  []model.ServiceVolume{bind("/logs")},
+			first: []composemodel.ServiceVolume{anon("/cache")},
+			own:   []composemodel.ServiceVolume{anon("/cache"), bind("/logs")},
+			want:  []composemodel.ServiceVolume{bind("/logs")},
 		},
 		{
 			name:  "a bind where the first has an anonymous volume",
-			first: []model.ServiceVolume{anon("/cache")},
-			own:   []model.ServiceVolume{bind("/cache")},
-			want:  []model.ServiceVolume{bind("/cache")},
+			first: []composemodel.ServiceVolume{anon("/cache")},
+			own:   []composemodel.ServiceVolume{bind("/cache")},
+			want:  []composemodel.ServiceVolume{bind("/cache")},
 		},
 		{
 			name:  "an anonymous volume where the first has a bind",
-			first: []model.ServiceVolume{bind("/cache")},
-			own:   []model.ServiceVolume{anon("/cache")},
-			want:  []model.ServiceVolume{anon("/cache")},
+			first: []composemodel.ServiceVolume{bind("/cache")},
+			own:   []composemodel.ServiceVolume{anon("/cache")},
+			want:  []composemodel.ServiceVolume{anon("/cache")},
 		},
 	}
 

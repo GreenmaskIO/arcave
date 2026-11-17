@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"net/netip"
 	"strconv"
 	"testing"
@@ -36,9 +37,9 @@ import (
 
 func TestAssembler_Assemble(t *testing.T) {
 	// Arrange
-	introspection := model.IntrospectionResult{Project: model.Project{
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: "demo",
-		Services: []model.Service{
+		Services: []composemodel.Service{
 			{
 				Name:  "db",
 				Image: "postgres:16",
@@ -46,7 +47,7 @@ func TestAssembler_Assemble(t *testing.T) {
 					api.ServiceLabel: "db", "tier": "data",
 					"desktop.docker.io/ports.scheme": "v2", "desktop.docker.io/ports/5432/tcp": ":5432",
 				},
-				Containers: []model.Container{{
+				Containers: []composemodel.Container{{
 					Name: "demo-db-1",
 					Labels: map[string]string{
 						api.WorkingDirLabel:  "/srv/demo",
@@ -57,10 +58,10 @@ func TestAssembler_Assemble(t *testing.T) {
 			{
 				Name:       "web",
 				Image:      "nginx:1",
-				Containers: []model.Container{{Name: "demo-web-1"}, {Name: "demo-web-2"}},
+				Containers: []composemodel.Container{{Name: "demo-web-1"}, {Name: "demo-web-2"}},
 			},
 		},
-		Volumes: []model.NamedVolume{
+		Volumes: []composemodel.NamedVolume{
 			{
 				Key: "pgdata", Name: "demo_pgdata", Driver: "local",
 				DriverOpts: map[string]string{"type": "none"},
@@ -68,7 +69,7 @@ func TestAssembler_Assemble(t *testing.T) {
 			},
 			{Key: "shared", Name: "shared", External: true, Driver: "local"},
 		},
-		Networks: []model.Network{{
+		Networks: []composemodel.Network{{
 			Key:  "back",
 			Name: "demo_back",
 			Inspect: network.Inspect{
@@ -157,25 +158,25 @@ func TestAssembler_Assemble_NetworkPools(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			replica := func(id string, endpoint *network.EndpointSettings) model.Container {
-				return model.Container{Name: id, Inspect: container.InspectResponse{
+			replica := func(id string, endpoint *network.EndpointSettings) composemodel.Container {
+				return composemodel.Container{Name: id, Inspect: container.InspectResponse{
 					ID: id,
 					NetworkSettings: &container.NetworkSettings{
 						Networks: map[string]*network.EndpointSettings{"demo_back": endpoint},
 					},
 				}}
 			}
-			introspection := model.IntrospectionResult{Project: model.Project{
+			introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 				Name: "demo",
-				Services: []model.Service{{
+				Services: []composemodel.Service{{
 					Name:  "web",
 					Image: "nginx:1",
-					Containers: []model.Container{
+					Containers: []composemodel.Container{
 						replica("demo-web-1", &network.EndpointSettings{}),
 						replica("demo-web-2", tt.endpoint),
 					},
 				}},
-				Networks: []model.Network{{Key: "back", Name: "demo_back", Inspect: network.Inspect{IPAM: pools}}},
+				Networks: []composemodel.Network{{Key: "back", Name: "demo_back", Inspect: network.Inspect{IPAM: pools}}},
 			}}
 
 			// Act
@@ -247,12 +248,12 @@ func TestAssembler_Assemble_NetworkIPFamilies(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			introspection := model.IntrospectionResult{Project: model.Project{
+			introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 				Name: "demo",
-				Services: []model.Service{{Name: "app", Containers: []model.Container{{
+				Services: []composemodel.Service{{Name: "app", Containers: []composemodel.Container{{
 					Inspect: container.InspectResponse{ID: "c1"},
 				}}}},
-				Networks: []model.Network{{Key: "back", Name: "demo_back", Inspect: tt.inspect}},
+				Networks: []composemodel.Network{{Key: "back", Name: "demo_back", Inspect: tt.inspect}},
 			}}
 
 			// Act
@@ -272,12 +273,12 @@ func TestAssembler_Assemble_NetworkIPFamilies(t *testing.T) {
 // only the containers name it.
 func TestAssembler_Assemble_ForeignNetwork(t *testing.T) {
 	// Arrange
-	introspection := model.IntrospectionResult{Project: model.Project{
+	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: "demo",
-		Services: []model.Service{{
+		Services: []composemodel.Service{{
 			Name:  "app",
 			Image: "app:1",
-			Containers: []model.Container{{
+			Containers: []composemodel.Container{{
 				Name: "demo-app-1",
 				Inspect: container.InspectResponse{
 					ID: "abc",
@@ -291,7 +292,7 @@ func TestAssembler_Assemble_ForeignNetwork(t *testing.T) {
 				},
 			}},
 		}},
-		Networks: []model.Network{{Key: "back", Name: "demo_back"}},
+		Networks: []composemodel.Network{{Key: "back", Name: "demo_back"}},
 	}}
 
 	// Act
@@ -356,20 +357,20 @@ func TestAssembler_Assemble_DependsOn(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			introspection := model.IntrospectionResult{Project: model.Project{
+			introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 				Name: "demo",
-				Services: []model.Service{
+				Services: []composemodel.Service{
 					{
 						Name:       "app",
 						Image:      "busybox",
 						Labels:     map[string]string{api.DependenciesLabel: tt.label},
-						Containers: []model.Container{{Name: "demo-app-1"}},
+						Containers: []composemodel.Container{{Name: "demo-app-1"}},
 					},
-					{Name: "db", Image: "busybox", Containers: []model.Container{{Name: "demo-db-1", Inspect: container.InspectResponse{
+					{Name: "db", Image: "busybox", Containers: []composemodel.Container{{Name: "demo-db-1", Inspect: container.InspectResponse{
 						ID:     "db-id",
 						Config: &container.Config{Healthcheck: &container.HealthConfig{Test: []string{"CMD", "true"}}},
 					}}}},
-					{Name: "cache", Image: "busybox", Containers: []model.Container{{Name: "demo-cache-1", Inspect: container.InspectResponse{
+					{Name: "cache", Image: "busybox", Containers: []composemodel.Container{{Name: "demo-cache-1", Inspect: container.InspectResponse{
 						ID:     "cache-id",
 						Config: &container.Config{Healthcheck: &container.HealthConfig{Test: []string{"NONE"}}},
 					}}}},
@@ -396,7 +397,7 @@ func TestAssembler_Assemble_DependsOn(t *testing.T) {
 
 func TestAssembler_Assemble_NoServices(t *testing.T) {
 	// Act
-	_, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(context.Background(), model.IntrospectionResult{Project: model.Project{Name: "demo"}})
+	_, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(context.Background(), composemodel.IntrospectionResult{Project: composemodel.Project{Name: "demo"}})
 
 	// Assert
 	require.Error(t, err)
@@ -416,17 +417,17 @@ func TestAssembler_Assemble_WarnsOnDivergentReplicas(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			replica := func(id string, number int, env []string) model.Container {
-				return model.Container{ID: id, Number: number, Inspect: container.InspectResponse{
+			replica := func(id string, number int, env []string) composemodel.Container {
+				return composemodel.Container{ID: id, Number: number, Inspect: container.InspectResponse{
 					ID: id, Name: "/demo-web-" + strconv.Itoa(number), HostConfig: &container.HostConfig{},
 					Config: &container.Config{Image: "nginx:1", Env: env, Hostname: id[:12], Labels: map[string]string{
 						api.ProjectLabel: "demo", api.ServiceLabel: "web", api.ContainerNumberLabel: strconv.Itoa(number),
 					}},
 				}}
 			}
-			introspection := model.IntrospectionResult{Project: model.Project{
+			introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 				Name: "demo",
-				Services: []model.Service{{Name: "web", Containers: []model.Container{
+				Services: []composemodel.Service{{Name: "web", Containers: []composemodel.Container{
 					replica("aaaaaaaaaaaaaaaa", 1, []string{"MODE=a"}),
 					replica("bbbbbbbbbbbbbbbb", 2, tt.env),
 				}}},
@@ -477,8 +478,8 @@ func TestAssembler_Assemble_ForeignNamespace(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			replica := func(id string) model.Container {
-				return model.Container{ID: id, Number: 1, Inspect: container.InspectResponse{
+			replica := func(id string) composemodel.Container {
+				return composemodel.Container{ID: id, Number: 1, Inspect: container.InspectResponse{
 					ID: id, Name: "/demo-app-1", HostConfig: &container.HostConfig{
 						NetworkMode: container.NetworkMode("container:" + vpnID),
 						IpcMode:     container.IpcMode("container:" + vpnID),
@@ -486,9 +487,9 @@ func TestAssembler_Assemble_ForeignNamespace(t *testing.T) {
 					Config: &container.Config{Image: "busybox"},
 				}}
 			}
-			introspection := model.IntrospectionResult{
-				Project: model.Project{Name: "demo", Services: []model.Service{
-					{Name: "app", Containers: []model.Container{replica(goneID)}},
+			introspection := composemodel.IntrospectionResult{
+				Project: composemodel.Project{Name: "demo", Services: []composemodel.Service{
+					{Name: "app", Containers: []composemodel.Container{replica(goneID)}},
 				}},
 				Referenced: tt.referenced,
 			}

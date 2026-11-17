@@ -17,6 +17,7 @@ package fullcopy_test
 import (
 	"bytes"
 	"context"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 	"testing"
@@ -87,7 +88,7 @@ func TestArchiver_Load_RefusesWhatIsNotItsOwn(t *testing.T) {
 				Members: []imagebackend.Member{{Name: "index.json", Kind: imagebackend.KindMetadata}},
 			},
 			imageID: imageID,
-			wantErr: model.ErrUnsupportedImageArchive,
+			wantErr: composemodel.ErrUnsupportedImageArchive,
 		},
 		{
 			name: "a capture holding another image",
@@ -96,12 +97,12 @@ func TestArchiver_Load_RefusesWhatIsNotItsOwn(t *testing.T) {
 				Members: []imagebackend.Member{{Name: "image.tar", Kind: imagebackend.KindArchive}},
 			},
 			imageID: imageID,
-			wantErr: model.ErrSavepointImageMissing,
+			wantErr: composemodel.ErrSavepointImageMissing,
 		},
 		{
 			name:    "a capture with no manifest",
 			imageID: imageID,
-			wantErr: model.ErrSavepointImageMissing,
+			wantErr: composemodel.ErrSavepointImageMissing,
 		},
 	}
 

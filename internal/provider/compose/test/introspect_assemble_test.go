@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"maps"
 	"os"
@@ -69,8 +70,8 @@ type fidelityEngine struct {
 }
 
 // fidelityEngines holds each engine's own truth, stated whole; no comparison relaxes it.
-var fidelityEngines = map[model.ContainerRuntimeKind]fidelityEngine{
-	model.ContainerRuntimeDocker: {
+var fidelityEngines = map[composemodel.ContainerRuntimeKind]fidelityEngine{
+	composemodel.ContainerRuntimeDocker: {
 		busybox: fidelityBusybox,
 		alpine:  fidelityAlpine,
 		redis:   fidelityRedis,
@@ -82,7 +83,7 @@ x-engine: &engine
 	},
 	// Podman stores no tag beside a digest, and stamps each container started with the
 	// oom_score_adj and rlimits of its API process, read from a probe (readEngineStamps).
-	model.ContainerRuntimePodman: {
+	composemodel.ContainerRuntimePodman: {
 		busybox: "busybox" + busyboxDigest,
 		alpine:  "alpine" + alpineDigest,
 		redis:   "redis" + redisDigest,
@@ -109,17 +110,17 @@ type fidelityCase struct {
 	// want is the spec on every engine; wants, one per engine, where their specs differ in
 	// more than fidelityEngines says. A case names exactly one of the two.
 	want  string
-	wants map[model.ContainerRuntimeKind]string
+	wants map[composemodel.ContainerRuntimeKind]string
 	// warns are the warnings Assemble logs, one JSON record each.
 	warns []string
 	// setup runs before the compose project is created; afterUp once it runs.
 	setup   func(t *testing.T, e *fidelityEnv)
 	afterUp func(t *testing.T, e *fidelityEnv)
 	// drift applies to R1 what pass 2 is expected to change, ahead of the comparison with R2.
-	drift func(r *model.IntrospectionResult, runtime model.ContainerRuntimeKind)
+	drift func(r *composemodel.IntrospectionResult, runtime composemodel.ContainerRuntimeKind)
 	// unsupported names, by engine, why that engine refuses to create the case's compose
 	// project at all; the case is skipped there.
-	unsupported map[model.ContainerRuntimeKind]string
+	unsupported map[composemodel.ContainerRuntimeKind]string
 	// knownDefect names the BACKLOG.md row a pass is known to fail on, keyed by the pass or by
 	// <runtime>/<pass>; the pass asserts the failure, so the case turns red once it is fixed.
 	knownDefect map[string]string
@@ -136,7 +137,7 @@ type fidelityEnv struct {
 	assembler *composespec.Assembler
 	codec     *composespec.Codec
 	// runtime is the engine behind the daemon, which decides the want a case is held to.
-	runtime model.ContainerRuntimeKind
+	runtime composemodel.ContainerRuntimeKind
 	// values fill the placeholders of a want known only once something runs.
 	values  map[string]string
 	project string
@@ -185,7 +186,7 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 		values:    map[string]string{},
 	}
 	t.Cleanup(func() { e.cleanup(t) })
-	if e.runtime == model.ContainerRuntimePodman {
+	if e.runtime == composemodel.ContainerRuntimePodman {
 		e.values, err = readEngineStamps(e.ctx, daemon)
 		require.NoError(t, err, "read what the engine stamps")
 	}
@@ -316,7 +317,7 @@ func (e *fidelityEnv) down(t *testing.T, project *types.Project) {
 	daemontest.RemoveProjectNetworks(t, e.daemon, e.project)
 }
 
-func (e *fidelityEnv) introspect(t *testing.T) model.IntrospectionResult {
+func (e *fidelityEnv) introspect(t *testing.T) composemodel.IntrospectionResult {
 	t.Helper()
 
 	res, err := e.inspector.Introspect(e.ctx)
@@ -329,7 +330,7 @@ func (e *fidelityEnv) introspect(t *testing.T) model.IntrospectionResult {
 
 // assemble builds the spec and carries it through its artifact, returning it with the
 // warnings Assemble logged.
-func (e *fidelityEnv) assemble(t *testing.T, res model.IntrospectionResult) (*types.Project, []string) {
+func (e *fidelityEnv) assemble(t *testing.T, res composemodel.IntrospectionResult) (*types.Project, []string) {
 	t.Helper()
 
 	before := len(e.logs.String())

@@ -26,7 +26,7 @@ import (
 
 	"github.com/moby/moby/client"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // tarModeSticky is the sticky bit as tar spells it (c_ISVTX).
@@ -34,7 +34,7 @@ const tarModeSticky = 0o1000
 
 // copyOneShotFiles writes files into the created container containerID, as one
 // archive extracted at its root, every entry owned by root.
-func copyOneShotFiles(ctx context.Context, api dockerAPI, containerID string, files []model.OneShotFile) error {
+func copyOneShotFiles(ctx context.Context, api dockerAPI, containerID string, files []composemodel.OneShotFile) error {
 	archive, err := newOneShotArchive(files)
 	if err != nil {
 		return err
@@ -46,7 +46,7 @@ func copyOneShotFiles(ctx context.Context, api dockerAPI, containerID string, fi
 }
 
 // newOneShotArchive is files as a tar rooted at "/", in their order.
-func newOneShotArchive(files []model.OneShotFile) (*bytes.Buffer, error) {
+func newOneShotArchive(files []composemodel.OneShotFile) (*bytes.Buffer, error) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for _, file := range files {
@@ -61,7 +61,7 @@ func newOneShotArchive(files []model.OneShotFile) (*bytes.Buffer, error) {
 }
 
 // writeOneShotFile writes one entry: a directory, or a file and its content.
-func writeOneShotFile(tw *tar.Writer, file model.OneShotFile) error {
+func writeOneShotFile(tw *tar.Writer, file composemodel.OneShotFile) error {
 	switch {
 	case !path.IsAbs(file.Path) || path.Clean(file.Path) != file.Path || file.Path == "/":
 		return errors.New("not an absolute, clean path below /")
@@ -78,7 +78,7 @@ func writeOneShotFile(tw *tar.Writer, file model.OneShotFile) error {
 }
 
 // newOneShotHeader is file's tar header, rooted at "/" and owned by root.
-func newOneShotHeader(file model.OneShotFile) *tar.Header {
+func newOneShotHeader(file composemodel.OneShotFile) *tar.Header {
 	var (
 		name     = strings.TrimPrefix(file.Path, "/")
 		typeflag = byte(tar.TypeReg)

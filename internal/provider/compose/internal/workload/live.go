@@ -26,7 +26,7 @@ import (
 // liveWorkload is the compose project as one introspection found it.
 type liveWorkload struct {
 	service       *composeWorkload
-	introspection model.IntrospectionResult
+	introspection composemodel.IntrospectionResult
 }
 
 // Absent reports whether the daemon holds no container of the compose project.

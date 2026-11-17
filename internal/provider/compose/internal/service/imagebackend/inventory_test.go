@@ -17,6 +17,7 @@ package imagebackend
 import (
 	"context"
 	"encoding/json"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"strings"
 	"testing"
 	"time"
@@ -104,12 +105,12 @@ func TestReadListedBlobs(t *testing.T) {
 		},
 		{
 			name:    "a missing manifest is a missing image",
-			wantErr: model.ErrSavepointImageMissing,
+			wantErr: composemodel.ErrSavepointImageMissing,
 		},
 		{
 			name:    "a manifest naming no members is a missing image",
 			body:    mustMarshal(t, Manifest{ImageID: inventoryImage, Format: FormatBlobs}),
-			wantErr: model.ErrSavepointImageMissing,
+			wantErr: composemodel.ErrSavepointImageMissing,
 		},
 	}
 	for _, tt := range tests {

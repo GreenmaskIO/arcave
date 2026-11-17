@@ -24,11 +24,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/dockerdesktop"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman/libpod"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend/dedupcopy"
 )
@@ -50,7 +50,7 @@ func TestNew(t *testing.T) {
 	desktopAPI := dockerdesktop.NewAPI(api)
 	desktopEngine := docker.NewEngine(desktopAPI)
 	podmanProfile := Profile{
-		Kind:           model.ContainerRuntimePodman,
+		Kind:           composemodel.ContainerRuntimePodman,
 		API:            podmanAPI,
 		Engine:         podmanEngine,
 		Volumes:        podman.NewEngine(podmanEngine),
@@ -60,7 +60,7 @@ func TestNew(t *testing.T) {
 	}
 	tests := []struct {
 		name     string
-		runtime  model.ContainerRuntime
+		runtime  composemodel.ContainerRuntime
 		info     *system.Info
 		endpoint dockercontext.Endpoint
 		want     Profile
@@ -68,11 +68,11 @@ func TestNew(t *testing.T) {
 	}{
 		{
 			name:     "docker desktop answers inspects through its own API",
-			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimeDocker, Version: "29.8.2"},
+			runtime:  composemodel.ContainerRuntime{Kind: composemodel.ContainerRuntimeDocker, Version: "29.8.2"},
 			info:     &desktopInfo,
 			endpoint: plain,
 			want: Profile{
-				Kind:           model.ContainerRuntimeDocker,
+				Kind:           composemodel.ContainerRuntimeDocker,
 				API:            desktopAPI,
 				Engine:         desktopEngine,
 				Volumes:        desktopEngine,
@@ -83,10 +83,10 @@ func TestNew(t *testing.T) {
 		},
 		{
 			name:     "docker",
-			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimeDocker, Version: "29.8.2"},
+			runtime:  composemodel.ContainerRuntime{Kind: composemodel.ContainerRuntimeDocker, Version: "29.8.2"},
 			endpoint: plain,
 			want: Profile{
-				Kind:           model.ContainerRuntimeDocker,
+				Kind:           composemodel.ContainerRuntimeDocker,
 				API:            api,
 				Engine:         dockerEngine,
 				Volumes:        dockerEngine,
@@ -97,13 +97,13 @@ func TestNew(t *testing.T) {
 		},
 		{
 			name:    "docker behind TLS",
-			runtime: model.ContainerRuntime{Kind: model.ContainerRuntimeDocker, Version: "29.8.2"},
+			runtime: composemodel.ContainerRuntime{Kind: composemodel.ContainerRuntimeDocker, Version: "29.8.2"},
 			endpoint: dockercontext.Endpoint{
 				EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2376"},
 				TLSData:      &clicontext.TLSData{},
 			},
 			want: Profile{
-				Kind:           model.ContainerRuntimeDocker,
+				Kind:           composemodel.ContainerRuntimeDocker,
 				API:            api,
 				Engine:         dockerEngine,
 				Volumes:        dockerEngine,
@@ -114,19 +114,19 @@ func TestNew(t *testing.T) {
 		},
 		{
 			name:     "podman",
-			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
+			runtime:  composemodel.ContainerRuntime{Kind: composemodel.ContainerRuntimePodman, Version: "6.1.4"},
 			endpoint: plain,
 			want:     podmanProfile,
 		},
 		{
 			name:     "podman reporting no version is refused",
-			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman},
+			runtime:  composemodel.ContainerRuntime{Kind: composemodel.ContainerRuntimePodman},
 			endpoint: plain,
 			wantErr:  "reach libpod: no Podman version",
 		},
 		{
 			name:    "podman behind TLS builds the same profile",
-			runtime: model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
+			runtime: composemodel.ContainerRuntime{Kind: composemodel.ContainerRuntimePodman, Version: "6.1.4"},
 			endpoint: dockercontext.Endpoint{
 				EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2376"},
 				TLSData:      &clicontext.TLSData{},
@@ -135,7 +135,7 @@ func TestNew(t *testing.T) {
 		},
 		{
 			name:    "podman behind an https:// host of a context is refused",
-			runtime: model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
+			runtime: composemodel.ContainerRuntime{Kind: composemodel.ContainerRuntimePodman, Version: "6.1.4"},
 			endpoint: dockercontext.Endpoint{
 				EndpointMeta: dockercontext.EndpointMeta{Host: "https://10.0.0.5:2376"},
 				TLSData:      &clicontext.TLSData{},
@@ -144,16 +144,16 @@ func TestNew(t *testing.T) {
 		},
 		{
 			name:     "podman behind an http:// host of a context is refused",
-			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
+			runtime:  composemodel.ContainerRuntime{Kind: composemodel.ContainerRuntimePodman, Version: "6.1.4"},
 			endpoint: dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "http://10.0.0.5:2375"}},
 			wantErr:  "name it tcp://",
 		},
 		{
 			name:     "docker behind an http:// host of a context is not refused",
-			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimeDocker, Version: "29.8.2"},
+			runtime:  composemodel.ContainerRuntime{Kind: composemodel.ContainerRuntimeDocker, Version: "29.8.2"},
 			endpoint: dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "http://10.0.0.5:2375"}},
 			want: Profile{
-				Kind:           model.ContainerRuntimeDocker,
+				Kind:           composemodel.ContainerRuntimeDocker,
 				API:            api,
 				Engine:         dockerEngine,
 				Volumes:        dockerEngine,

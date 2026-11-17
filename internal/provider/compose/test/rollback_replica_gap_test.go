@@ -16,6 +16,7 @@ package test
 
 import (
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
 
 	"github.com/moby/moby/client"
@@ -84,13 +85,13 @@ func TestRollback_KeepsAGapInReplicaNumbering(t *testing.T) {
 }
 
 // workers maps each worker replica's number to its container.
-func (e *imageRollbackEnv) workers(t *testing.T) map[int]model.Container {
+func (e *imageRollbackEnv) workers(t *testing.T) map[int]composemodel.Container {
 	t.Helper()
 
 	res, err := e.inspector.Introspect(e.ctx)
 	require.NoError(t, err)
 	require.Len(t, res.Project.Services, 1)
-	workers := map[int]model.Container{}
+	workers := map[int]composemodel.Container{}
 	for _, c := range res.Project.Services[0].Containers {
 		workers[c.Number] = c
 	}

@@ -37,7 +37,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // oneShotID is the container ID the mocked daemon hands back for every
@@ -56,7 +56,7 @@ func TestRunOneShotContainer_PullsMissingImage(t *testing.T) {
 	expectOneShotRun(api, 0)
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: testImage})
+	err := runOneShotContainer(context.Background(), api, composemodel.OneShotSpec{Image: testImage})
 
 	// Assert
 	require.NoError(t, err)
@@ -82,11 +82,11 @@ func TestRunOneShotContainer_NonZeroExitCarriesLogs(t *testing.T) {
 		Return(io.NopCloser(bytes.NewReader(framed.Bytes())), nil)
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: testImage})
+	err := runOneShotContainer(context.Background(), api, composemodel.OneShotSpec{Image: testImage})
 
 	// Assert
 	require.Error(t, err)
-	var exitErr *model.ContainerExitError
+	var exitErr *composemodel.ContainerExitError
 	require.ErrorAs(t, err, &exitErr, "the exit must surface as a typed error errors.As can recover")
 	assert.Equal(t, testImage, exitErr.Image)
 	assert.Equal(t, int64(137), exitErr.StatusCode)
@@ -109,7 +109,7 @@ func TestRunOneShotContainer_PropagatesCreateError(t *testing.T) {
 		Return(client.ContainerCreateResult{}, errors.New("boom"))
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: testImage})
+	err := runOneShotContainer(context.Background(), api, composemodel.OneShotSpec{Image: testImage})
 
 	// Assert
 	require.Error(t, err)
@@ -128,7 +128,7 @@ func TestRunOneShotContainer_RemovesContainerOnStartFailure(t *testing.T) {
 	api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil)
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: testImage})
+	err := runOneShotContainer(context.Background(), api, composemodel.OneShotSpec{Image: testImage})
 
 	// Assert
 	require.Error(t, err)
@@ -141,23 +141,23 @@ func TestRunOneShotContainer_RemovesContainerOnStartFailure(t *testing.T) {
 func TestRunOneShotContainer_AttachConfig(t *testing.T) {
 	tests := []struct {
 		name       string
-		spec       model.OneShotSpec
+		spec       composemodel.OneShotSpec
 		wantAttach bool
 		wantCfg    container.Config
 	}{
 		{
 			name: "no stdio does not attach at all",
-			spec: model.OneShotSpec{Image: testImage},
+			spec: composemodel.OneShotSpec{Image: testImage},
 		},
 		{
 			name:       "stdin opens and attaches stdin",
-			spec:       model.OneShotSpec{Image: testImage, Stdin: strings.NewReader("")},
+			spec:       composemodel.OneShotSpec{Image: testImage, Stdin: strings.NewReader("")},
 			wantAttach: true,
 			wantCfg:    container.Config{OpenStdin: true, StdinOnce: true, AttachStdin: true},
 		},
 		{
 			name:       "output receivers attach their own streams",
-			spec:       model.OneShotSpec{Image: testImage, Stdout: io.Discard, Stderr: io.Discard},
+			spec:       composemodel.OneShotSpec{Image: testImage, Stdout: io.Discard, Stderr: io.Discard},
 			wantAttach: true,
 			wantCfg:    container.Config{AttachStdout: true, AttachStderr: true},
 		},
@@ -217,7 +217,7 @@ func TestRunOneShotContainer_Stdio(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{
+	err := runOneShotContainer(context.Background(), api, composemodel.OneShotSpec{
 		Image:  testImage,
 		Stdin:  strings.NewReader("to stdin"),
 		Stdout: &stdout,
@@ -277,7 +277,7 @@ func TestRunOneShotContainer_DiscardLog(t *testing.T) {
 			var stderr bytes.Buffer
 
 			// Act
-			err := runOneShotContainer(context.Background(), api, model.OneShotSpec{
+			err := runOneShotContainer(context.Background(), api, composemodel.OneShotSpec{
 				Image:      testImage,
 				DiscardLog: true,
 				Stderr:     &stderr,
@@ -286,7 +286,7 @@ func TestRunOneShotContainer_DiscardLog(t *testing.T) {
 			// Assert
 			assert.Equal(t, "tar: short read\n", stderr.String())
 			if tt.exitCode != 0 {
-				var exitErr *model.ContainerExitError
+				var exitErr *composemodel.ContainerExitError
 				require.ErrorAs(t, err, &exitErr)
 				assert.Equal(t, tt.exitCode, exitErr.StatusCode)
 				assert.Equal(t, []string{"(logs unavailable: " + errNoLog.Error() + ")"}, exitErr.Output)
@@ -322,7 +322,7 @@ func TestRunOneShotContainer_StdioLargePayload(t *testing.T) {
 	// Act
 	done := make(chan error, 1)
 	go func() {
-		done <- runOneShotContainer(context.Background(), api, model.OneShotSpec{
+		done <- runOneShotContainer(context.Background(), api, composemodel.OneShotSpec{
 			Image:  testImage,
 			Stdin:  bytes.NewReader(payload),
 			Stdout: &stdout,
@@ -355,7 +355,7 @@ func TestRunOneShotContainer_StdinReadError(t *testing.T) {
 	api.On("ContainerAttach", mock.Anything, oneShotID, mock.Anything).Return(hj.resp, nil)
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{
+	err := runOneShotContainer(context.Background(), api, composemodel.OneShotSpec{
 		Image: testImage,
 		Stdin: &errReader{err: errors.New("source gone")},
 	})
@@ -387,7 +387,7 @@ func TestRunOneShotContainer_CancellationEndsTheRun(t *testing.T) {
 	// Act
 	done := make(chan error, 1)
 	go func() {
-		done <- runOneShotContainer(ctx, api, model.OneShotSpec{Image: testImage, Stdout: &stdout})
+		done <- runOneShotContainer(ctx, api, composemodel.OneShotSpec{Image: testImage, Stdout: &stdout})
 	}()
 	cancel()
 
@@ -415,7 +415,7 @@ func TestEngine_RunOneShot(t *testing.T) {
 	expectImagePresent(api, resticImage)
 	expectOneShotRun(api, 0)
 
-	spec := model.OneShotSpec{
+	spec := composemodel.OneShotSpec{
 		Image:       resticImage,
 		Cmd:         []string{"init"},
 		Env:         []string{"RESTIC_REPOSITORY=rest:http://arcave:token@host.docker.internal:1/repo1/"},
@@ -447,7 +447,7 @@ func TestEngine_RunOneShot_HostNetwork(t *testing.T) {
 	expectOneShotRun(api, 0)
 
 	// Act
-	err := NewEngine(api).RunOneShot(context.Background(), model.OneShotSpec{Image: testImage, HostNetwork: true})
+	err := NewEngine(api).RunOneShot(context.Background(), composemodel.OneShotSpec{Image: testImage, HostNetwork: true})
 
 	// Assert
 	require.NoError(t, err)
@@ -510,12 +510,12 @@ func TestRunOneShotContainer_Exec(t *testing.T) {
 
 	var execStderr bytes.Buffer
 	served := make(chan string, 1)
-	spec := model.OneShotSpec{
+	spec := composemodel.OneShotSpec{
 		Image:      testImage,
 		Entrypoint: []string{"sh", "-c", "script"},
 		Cmd:        []string{"arg"},
 		Stdout:     io.Discard,
-		Exec: &model.OneShotExec{
+		Exec: &composemodel.OneShotExec{
 			Cmd:    bridgeCmd,
 			Stderr: &execStderr,
 			Serve: func(_ context.Context, stream io.ReadWriteCloser) error {
@@ -566,7 +566,7 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 				expectLogs(api)
 			},
 			verify: func(t *testing.T, err error) {
-				var exitErr *model.ContainerExitError
+				var exitErr *composemodel.ContainerExitError
 				require.ErrorAs(t, err, &exitErr)
 				assert.Equal(t, int64(1), exitErr.StatusCode)
 				assert.NotErrorIs(t, err, execErr)
@@ -581,7 +581,7 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 				expectWait(api, 0)
 			},
 			verify: func(t *testing.T, err error) {
-				var exitErr *model.ContainerExitError
+				var exitErr *composemodel.ContainerExitError
 				assert.NotErrorAs(t, err, &exitErr)
 				assert.ErrorIs(t, err, execErr)
 			},
@@ -638,9 +638,9 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 			api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil)
 			tt.arrange(api)
 			served := make(chan struct{}, 1)
-			spec := model.OneShotSpec{
+			spec := composemodel.OneShotSpec{
 				Image: testImage,
-				Exec: &model.OneShotExec{
+				Exec: &composemodel.OneShotExec{
 					Cmd: bridgeCmd,
 					Serve: func(context.Context, io.ReadWriteCloser) error {
 						served <- struct{}{}
@@ -684,10 +684,10 @@ func TestRunOneShotContainer_ExecFails_ReadsExitedStderr(t *testing.T) {
 		Return(client.ExecCreateResult{}, errors.New("exec refused"))
 	api.On("ContainerInspect", mock.Anything, oneShotID, client.ContainerInspectOptions{}).Return(exited, nil)
 	var stderr bytes.Buffer
-	spec := model.OneShotSpec{
+	spec := composemodel.OneShotSpec{
 		Image:  testImage,
 		Stderr: &stderr,
-		Exec: &model.OneShotExec{
+		Exec: &composemodel.OneShotExec{
 			Cmd: bridgeCmd,
 			Serve: func(context.Context, io.ReadWriteCloser) error {
 				return nil
@@ -699,7 +699,7 @@ func TestRunOneShotContainer_ExecFails_ReadsExitedStderr(t *testing.T) {
 	err := runWithin(t, context.Background(), api, spec)
 
 	// Assert
-	var exitErr *model.ContainerExitError
+	var exitErr *composemodel.ContainerExitError
 	require.ErrorAs(t, err, &exitErr)
 	api.AssertExpectations(t)
 	assert.Equal(t, "Fatal: no password", stderr.String())
@@ -715,9 +715,9 @@ func TestRunOneShotContainer_ExecServeFails(t *testing.T) {
 	api.On("ExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
 		Return(client.ExecCreateResult{ID: execID}, nil)
 	api.On("ExecAttach", mock.Anything, execID, client.ExecAttachOptions{}).Return(exec.resp, nil)
-	spec := model.OneShotSpec{
+	spec := composemodel.OneShotSpec{
 		Image: testImage,
-		Exec: &model.OneShotExec{
+		Exec: &composemodel.OneShotExec{
 			Cmd:   bridgeCmd,
 			Serve: func(context.Context, io.ReadWriteCloser) error { return errors.New("store gone") },
 		},
@@ -753,9 +753,9 @@ func TestRunOneShotContainer_ExecWithoutStdio(t *testing.T) {
 		api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).
 			Run(requireClosedBefore(t, exec, serveDone)).Return(nil),
 	)
-	spec := model.OneShotSpec{
+	spec := composemodel.OneShotSpec{
 		Image: testImage,
-		Exec: &model.OneShotExec{
+		Exec: &composemodel.OneShotExec{
 			Cmd: bridgeCmd,
 			Serve: func(_ context.Context, stream io.ReadWriteCloser) error {
 				defer close(serveDone)
@@ -797,9 +797,9 @@ func TestRunOneShotContainer_ExecCancelledInWait(t *testing.T) {
 	defer cancel()
 	serving := make(chan struct{})
 	serveDone := make(chan struct{})
-	spec := model.OneShotSpec{
+	spec := composemodel.OneShotSpec{
 		Image: testImage,
-		Exec: &model.OneShotExec{
+		Exec: &composemodel.OneShotExec{
 			Cmd: bridgeCmd,
 			Serve: func(_ context.Context, stream io.ReadWriteCloser) error {
 				close(serving)
@@ -855,10 +855,10 @@ func TestRunOneShotContainer_ExecCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	serving := make(chan struct{})
 	serveDone := make(chan error, 1)
-	spec := model.OneShotSpec{
+	spec := composemodel.OneShotSpec{
 		Image:  testImage,
 		Stdout: io.Discard,
-		Exec: &model.OneShotExec{
+		Exec: &composemodel.OneShotExec{
 			Cmd: bridgeCmd,
 			Serve: func(_ context.Context, stream io.ReadWriteCloser) error {
 				close(serving)
@@ -888,7 +888,7 @@ func TestRunOneShotContainer_ExecCancellation(t *testing.T) {
 
 // runWithin runs spec and fails the test if the run does not end in 30s, so a
 // misordered exec fails rather than hangs.
-func runWithin(t *testing.T, ctx context.Context, api *mockAPI, spec model.OneShotSpec) error {
+func runWithin(t *testing.T, ctx context.Context, api *mockAPI, spec composemodel.OneShotSpec) error {
 	t.Helper()
 
 	done := make(chan error, 1)

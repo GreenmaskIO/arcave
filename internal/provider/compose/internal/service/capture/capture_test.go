@@ -196,10 +196,10 @@ func TestCapturer_Capture_WritesUnderTheRequestedID(t *testing.T) {
 		Run(func(args mock.Arguments) { volumeID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
 		Return(model.SnapshotStat{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy}, nil).Once()
 	images := &composetest.MockImageBackend{}
-	images.On("CaptureWritableLayer", mock.Anything, mock.MatchedBy(func(req model.WritableLayerCaptureRequest) bool {
+	images.On("CaptureWritableLayer", mock.Anything, mock.MatchedBy(func(req composemodel.WritableLayerCaptureRequest) bool {
 		return req.Container == demoContainerRef()
 	})).
-		Run(func(args mock.Arguments) { layerID = args.Get(1).(model.WritableLayerCaptureRequest).SnapshotID }).
+		Run(func(args mock.Arguments) { layerID = args.Get(1).(composemodel.WritableLayerCaptureRequest).SnapshotID }).
 		Return(demoWritableLayer(), nil).Once()
 	repo := &composetest.MockSavepointRepo{}
 	repo.On("SaveSpec", mock.Anything, mock.MatchedBy(func(id model.SavepointID) bool { return id.Validate() == nil }), demoSpecBytes).
@@ -212,7 +212,7 @@ func TestCapturer_Capture_WritesUnderTheRequestedID(t *testing.T) {
 	plan := composemodel.Plan{
 		Spec:           demoSpecBytes,
 		Volumes:        []model.VolumeSnapshotBackend{backend},
-		WritableLayers: []model.WritableLayerCaptureRequest{{Container: demoContainerRef()}},
+		WritableLayers: []composemodel.WritableLayerCaptureRequest{{Container: demoContainerRef()}},
 	}
 
 	// Act

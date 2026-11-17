@@ -61,12 +61,12 @@ type containerResumer interface {
 // containerRebuilder recreates one built container from another image as the replica a
 // savepoint recorded, which compose's one image per service cannot express.
 type containerRebuilder interface {
-	RecreateWithImage(ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string) (string, error)
+	RecreateWithImage(ctx context.Context, containerID string, as composemodel.ReplicaIdentity, imageRef string) (string, error)
 }
 
 // composeIntrospector reads the compose project as the daemon holds it.
 type composeIntrospector interface {
-	Introspect(ctx context.Context) (model.IntrospectionResult, error)
+	Introspect(ctx context.Context) (composemodel.IntrospectionResult, error)
 }
 
 // volumeRemover reaps the volumes a teardown orphans, or a failed build created.
@@ -245,7 +245,7 @@ func logRestoredLayers(ctx context.Context, restored []model.WritableLayerRestor
 
 // UnpauseOnEntry resumes the replicas introspection found frozen, ahead of a teardown that does
 // not; a failure is only logged, the teardown going on regardless.
-func (s *Deployer) UnpauseOnEntry(ctx context.Context, introspection model.IntrospectionResult) {
+func (s *Deployer) UnpauseOnEntry(ctx context.Context, introspection composemodel.IntrospectionResult) {
 	var (
 		ids   []string
 		names []string

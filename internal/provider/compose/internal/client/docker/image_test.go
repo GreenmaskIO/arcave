@@ -17,6 +17,7 @@ package docker
 import (
 	"context"
 	"errors"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 	"testing"
@@ -178,13 +179,13 @@ func TestEngine_RemoveImageRef(t *testing.T) {
 		{
 			name:       "one gone before the inspect",
 			inspectErr: cerrdefs.ErrNotFound,
-			wantErr:    model.ErrImageRefNotFound,
+			wantErr:    composemodel.ErrImageRefNotFound,
 		},
 		{
 			name:       "one gone before the removal",
 			wantRemove: true,
 			removeErr:  cerrdefs.ErrNotFound,
-			wantErr:    model.ErrImageRefNotFound,
+			wantErr:    composemodel.ErrImageRefNotFound,
 		},
 		{
 			name:       "an image a container uses is refused, though another reference names it",
@@ -375,8 +376,8 @@ func TestEngine_ListLayerImages(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, []model.TaggedImage{
-		{Ref: layerRef, ImageID: "sha256:aaaa", Origin: model.LayerOrigin{ArcaveProject: "app", ComposeProject: "demo"}},
+	assert.Equal(t, []composemodel.TaggedImage{
+		{Ref: layerRef, ImageID: "sha256:aaaa", Origin: composemodel.LayerOrigin{ArcaveProject: "app", ComposeProject: "demo"}},
 		{Ref: podmanRef, ImageID: "sha256:bbbb"},
 	}, tagged)
 	api.AssertExpectations(t)
@@ -399,7 +400,7 @@ func TestEngine_ListContainerImages(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, []model.ContainerImage{
+	assert.Equal(t, []composemodel.ContainerImage{
 		{ContainerID: "c1", Ref: layerRef, ImageID: "sha256:aaaa"},
 		{ContainerID: "c2", Ref: layerRef, ImageID: "sha256:aaaa"},
 		{ContainerID: "c3", Ref: "sha256:bbbb", ImageID: "sha256:bbbb"},

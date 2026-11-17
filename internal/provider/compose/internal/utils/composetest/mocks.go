@@ -16,6 +16,7 @@ package composetest
 
 import (
 	"context"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/storages"
@@ -46,9 +47,9 @@ func DemoVolume() model.Volume {
 // MockInspector doubles composeIntrospector.
 type MockInspector struct{ mock.Mock }
 
-func (m *MockInspector) Introspect(ctx context.Context) (model.IntrospectionResult, error) {
+func (m *MockInspector) Introspect(ctx context.Context) (composemodel.IntrospectionResult, error) {
 	args := m.Called(ctx)
-	introspection, _ := args.Get(0).(model.IntrospectionResult)
+	introspection, _ := args.Get(0).(composemodel.IntrospectionResult)
 	return introspection, args.Error(1)
 }
 
@@ -63,7 +64,7 @@ func (m *MockVolumeRemover) RemoveVolume(ctx context.Context, name string) error
 type MockContainerRebuilder struct{ mock.Mock }
 
 func (m *MockContainerRebuilder) RecreateWithImage(
-	ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string,
+	ctx context.Context, containerID string, as composemodel.ReplicaIdentity, imageRef string,
 ) (string, error) {
 	args := m.Called(ctx, containerID, as, imageRef)
 	return args.String(0), args.Error(1)
@@ -79,7 +80,7 @@ func (m *MockImageLookup) ImageRefExists(ctx context.Context, ref string) (bool,
 
 type MockAssembler struct{ mock.Mock }
 
-func (m *MockAssembler) Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error) {
+func (m *MockAssembler) Assemble(ctx context.Context, introspection composemodel.IntrospectionResult) (*types.Project, error) {
 	args := m.Called(ctx, introspection)
 	project, _ := args.Get(0).(*types.Project)
 	return project, args.Error(1)

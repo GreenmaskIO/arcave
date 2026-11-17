@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"os"
 	"path/filepath"
 	"sync"
@@ -501,18 +502,18 @@ func (e *cdcEnv) mutate(t *testing.T, v cdcVolume) {
 
 // introspectionOf is what the compose inspector would report for the volumes
 // this test created by hand.
-func introspectionOf(volumes []cdcVolume) model.IntrospectionResult {
-	named := make([]model.NamedVolume, 0, len(volumes))
-	services := make([]model.Service, 0, len(volumes))
+func introspectionOf(volumes []cdcVolume) composemodel.IntrospectionResult {
+	named := make([]composemodel.NamedVolume, 0, len(volumes))
+	services := make([]composemodel.Service, 0, len(volumes))
 	for _, v := range volumes {
-		named = append(named, model.NamedVolume{
+		named = append(named, composemodel.NamedVolume{
 			Key:    v.service,
 			Name:   v.name,
 			UsedBy: []model.ServiceReference{{Service: v.service, Target: v.target}},
 		})
-		services = append(services, model.Service{Name: v.service, Image: busyboxImage})
+		services = append(services, composemodel.Service{Name: v.service, Image: busyboxImage})
 	}
-	return model.IntrospectionResult{Project: model.Project{
+	return composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name:     cdcProject,
 		Services: services,
 		Volumes:  named,
@@ -573,7 +574,7 @@ func (s *stubComposeRunner) Start(context.Context, *types.Project, time.Duration
 // the compose project, so the spec only names the project and its artifact is opaque.
 type stubAssembler struct{ project *types.Project }
 
-func (s stubAssembler) Assemble(context.Context, model.IntrospectionResult) (*types.Project, error) {
+func (s stubAssembler) Assemble(context.Context, composemodel.IntrospectionResult) (*types.Project, error) {
 	return s.project, nil
 }
 
@@ -592,9 +593,11 @@ func (stubVolumeRemover) RemoveVolume(context.Context, string) error { return ni
 
 // stubInspector reports the project this test built by hand, keeping compose
 // file resolution out of a test about the backend.
-type stubInspector struct{ result model.IntrospectionResult }
+type stubInspector struct {
+	result composemodel.IntrospectionResult
+}
 
-func (s stubInspector) Introspect(context.Context) (model.IntrospectionResult, error) {
+func (s stubInspector) Introspect(context.Context) (composemodel.IntrospectionResult, error) {
 	return s.result, nil
 }
 
@@ -698,7 +701,7 @@ func busybox(t *testing.T, engine *dockerclient.Engine, vol, script string) stri
 	t.Helper()
 
 	var stdout, stderr bytes.Buffer
-	err := engine.RunOneShot(context.Background(), model.OneShotSpec{
+	err := engine.RunOneShot(context.Background(), composemodel.OneShotSpec{
 		Image:  busyboxImage,
 		Cmd:    []string{"sh", "-c", script},
 		Binds:  []string{vol + ":/data"},

@@ -27,7 +27,7 @@ import (
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/network"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // nanoCPUs is the unit HostConfig.NanoCPUs counts in; compose spells the same limit in
@@ -36,7 +36,7 @@ const nanoCPUs = 1e9
 
 // newServiceConfig renders one service off its first replica. What the image
 // contributed is declared verbatim.
-func (a assembly) newServiceConfig(svc model.Service) types.ServiceConfig {
+func (a assembly) newServiceConfig(svc composemodel.Service) types.ServiceConfig {
 	cfg := a.newBaseConfig(svc)
 	if len(svc.Containers) > 0 {
 		a.applyReplica(&cfg, svc.Name, svc.Containers[0])
@@ -45,7 +45,7 @@ func (a assembly) newServiceConfig(svc model.Service) types.ServiceConfig {
 }
 
 // newBaseConfig is what the service declares apart from any one replica.
-func (a assembly) newBaseConfig(svc model.Service) types.ServiceConfig {
+func (a assembly) newBaseConfig(svc composemodel.Service) types.ServiceConfig {
 	scale := len(svc.Containers)
 	return types.ServiceConfig{
 		Name:       svc.Name,
@@ -59,7 +59,7 @@ func (a assembly) newBaseConfig(svc model.Service) types.ServiceConfig {
 }
 
 // applyReplica reads one replica's container into cfg.
-func (a assembly) applyReplica(cfg *types.ServiceConfig, service string, replica model.Container) {
+func (a assembly) applyReplica(cfg *types.ServiceConfig, service string, replica composemodel.Container) {
 	applyContainerConfig(cfg, replica.Inspect)
 	a.applyImage(cfg, replica)
 	a.applyHostConfig(cfg, replica.Inspect)
@@ -102,11 +102,11 @@ func applyContainerConfig(cfg *types.ServiceConfig, inspect container.InspectRes
 
 // applyImage declares the upstream rather than the arcave tag a rollback ran the
 // container on. An upstream no registry knows is never pulled.
-func (a assembly) applyImage(cfg *types.ServiceConfig, replica model.Container) {
+func (a assembly) applyImage(cfg *types.ServiceConfig, replica composemodel.Container) {
 	if replica.Inspect.Config != nil && replica.Inspect.Config.Image != "" {
 		cfg.Image = replica.Inspect.Config.Image
 	}
-	id, ref, ok := model.ResolveUpstream(a.introspection, replica)
+	id, ref, ok := composemodel.ResolveUpstream(a.introspection, replica)
 	if !ok {
 		return
 	}

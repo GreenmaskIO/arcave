@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 
@@ -43,7 +44,7 @@ func newOneShotLabels() map[string]string {
 }
 
 // attaches reports whether the run exchanges any stdio with the container.
-func attaches(spec model.OneShotSpec) bool {
+func attaches(spec composemodel.OneShotSpec) bool {
 	return spec.Stdin != nil || spec.Stdout != nil || spec.Stderr != nil
 }
 
@@ -51,7 +52,7 @@ func attaches(spec model.OneShotSpec) bool {
 // copied in before it starts and spec.Exec served while it runs, and always
 // removes it. A non-zero exit, carrying the container's output, outranks an exec
 // that could not start.
-func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotSpec) error {
+func runOneShotContainer(ctx context.Context, api dockerAPI, spec composemodel.OneShotSpec) error {
 	if err := ensureImage(ctx, api, spec.Image); err != nil {
 		return err
 	}
@@ -152,7 +153,7 @@ func ensureImage(ctx context.Context, api dockerAPI, ref string) error {
 }
 
 // newOneShotConfig is the container and host config spec runs under.
-func newOneShotConfig(spec model.OneShotSpec) (*container.Config, *container.HostConfig) {
+func newOneShotConfig(spec composemodel.OneShotSpec) (*container.Config, *container.HostConfig) {
 	cfg := &container.Config{
 		Image:        spec.Image,
 		Entrypoint:   spec.Entrypoint,
@@ -200,7 +201,7 @@ func removeOneShotContainer(ctx context.Context, api dockerAPI, containerID, ima
 
 // attachOneShotContainer attaches to the stdio spec exchanges with containerID.
 func attachOneShotContainer(
-	ctx context.Context, api dockerAPI, containerID string, spec model.OneShotSpec,
+	ctx context.Context, api dockerAPI, containerID string, spec composemodel.OneShotSpec,
 ) (client.HijackedResponse, error) {
 	attached, err := api.ContainerAttach(ctx, containerID, client.ContainerAttachOptions{
 		Stream: true,
@@ -216,7 +217,7 @@ func attachOneShotContainer(
 
 // serveExec starts spec.Exec and runs Exec.Serve on its stream in the background.
 // The returned stop closes the stream and waits for Serve, logging its error.
-func serveExec(ctx context.Context, api dockerAPI, containerID string, spec model.OneShotSpec) (func(), error) {
+func serveExec(ctx context.Context, api dockerAPI, containerID string, spec composemodel.OneShotSpec) (func(), error) {
 	stream, err := openExecStream(ctx, api, containerID, *spec.Exec)
 	if err != nil {
 		return nil, err
@@ -260,7 +261,7 @@ func isContainerRunning(ctx context.Context, api dockerAPI, containerID string) 
 // reading any stdout deadlocks on any payload larger than the pipe buffer — the
 // container blocks writing output nobody drains, arcave blocks writing input nobody
 // reads, and neither ever gets to the other half.
-func exchange(ctx context.Context, attached client.HijackedResponse, spec model.OneShotSpec) error {
+func exchange(ctx context.Context, attached client.HijackedResponse, spec composemodel.OneShotSpec) error {
 	var eg errgroup.Group
 
 	if spec.Stdin != nil {
@@ -338,7 +339,7 @@ func waitOneShotContainer(ctx context.Context, api dockerAPI, containerID, image
 			Str("image", image).
 			Strs("container_output", output).
 			Msg("one-shot container exited non-zero")
-		return &model.ContainerExitError{
+		return &composemodel.ContainerExitError{
 			Image:      image,
 			StatusCode: status.StatusCode,
 			Output:     output,

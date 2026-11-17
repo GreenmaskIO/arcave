@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 func TestEngine_RecreateWithImage(t *testing.T) {
@@ -148,10 +148,10 @@ func TestEngine_RecreateWithImage_AFailedCreateLeavesTheContainerRemoved(t *test
 func TestEngine_RecreateWithImage_RefusesNoReplicaIdentity(t *testing.T) {
 	tests := []struct {
 		name string
-		as   model.ReplicaIdentity
+		as   composemodel.ReplicaIdentity
 	}{
-		{name: "no name", as: model.ReplicaIdentity{Number: 2}},
-		{name: "no number", as: model.ReplicaIdentity{Name: "demo-app-2"}},
+		{name: "no name", as: composemodel.ReplicaIdentity{Number: 2}},
+		{name: "no number", as: composemodel.ReplicaIdentity{Name: "demo-app-2"}},
 	}
 
 	for _, tt := range tests {
@@ -197,8 +197,8 @@ const replacedID = "cfbafac79192d0ea4de513a1b3a6a9d163d3274f32db5214d08c6e483597
 // sameReplica rebuilds builtReplica as the replica it already is; renumbered as
 // the recorded replica 3 compose created as 2.
 var (
-	sameReplica = model.ReplicaIdentity{Name: "demo-app-2", Number: 2}
-	renumbered  = model.ReplicaIdentity{Name: "demo-app-3", Number: 3}
+	sameReplica = composemodel.ReplicaIdentity{Name: "demo-app-2", Number: 2}
+	renumbered  = composemodel.ReplicaIdentity{Name: "demo-app-3", Number: 3}
 )
 
 // builtReplicaLabels is the label map builtReplica reports.

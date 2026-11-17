@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 type fakeVersionReader struct {
@@ -44,13 +44,13 @@ func TestReadRuntime(t *testing.T) {
 	tests := []struct {
 		name    string
 		reader  fakeVersionReader
-		want    model.ContainerRuntime
+		want    composemodel.ContainerRuntime
 		wantErr error
 	}{
 		{
 			name:   "the daemon's answer, named",
 			reader: fakeVersionReader{version: podman},
-			want:   model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
+			want:   composemodel.ContainerRuntime{Kind: composemodel.ContainerRuntimePodman, Version: "6.1.4"},
 		},
 		{name: "a daemon that does not answer", reader: fakeVersionReader{err: unreachable}, wantErr: unreachable},
 	}

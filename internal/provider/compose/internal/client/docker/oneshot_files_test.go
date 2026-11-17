@@ -30,7 +30,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // archivedEntry is what a test reads back of one tar entry.
@@ -70,13 +70,13 @@ func readArchive(t *testing.T, r io.Reader) []archivedEntry {
 func TestNewOneShotArchive(t *testing.T) {
 	tests := []struct {
 		name    string
-		files   []model.OneShotFile
+		files   []composemodel.OneShotFile
 		want    []archivedEntry
 		wantErr string
 	}{
 		{
 			name: "a directory and a file in it, in order, owned by root",
-			files: []model.OneShotFile{
+			files: []composemodel.OneShotFile{
 				{Path: "/run/arcave", Mode: fs.ModeDir | fs.ModeSticky | 0o777},
 				{Path: "/run/arcave/stdio.sh", Mode: 0o755, Content: []byte("#!/bin/sh\n")},
 			},
@@ -87,7 +87,7 @@ func TestNewOneShotArchive(t *testing.T) {
 		},
 		{
 			name: "a plain directory, kept after the file listed first",
-			files: []model.OneShotFile{
+			files: []composemodel.OneShotFile{
 				{Path: "/etc/arcave.conf", Mode: 0o644, Content: []byte("x")},
 				{Path: "/opt/arcave", Mode: fs.ModeDir | 0o755},
 			},
@@ -96,14 +96,14 @@ func TestNewOneShotArchive(t *testing.T) {
 				{name: "opt/arcave/", typeflag: tar.TypeDir, mode: 0o755},
 			},
 		},
-		{name: "a symlink", files: []model.OneShotFile{{Path: "/run/x", Mode: fs.ModeSymlink | 0o777}}, wantErr: "only a directory"},
-		{name: "a setuid file", files: []model.OneShotFile{{Path: "/run/x", Mode: fs.ModeSetuid | 0o755}}, wantErr: "only a directory"},
-		{name: "a relative path", files: []model.OneShotFile{{Path: "run/x"}}, wantErr: "not an absolute"},
-		{name: "an unclean path", files: []model.OneShotFile{{Path: "/run/../etc/x"}}, wantErr: "not an absolute"},
-		{name: "the root itself", files: []model.OneShotFile{{Path: "/", Mode: fs.ModeDir}}, wantErr: "not an absolute"},
+		{name: "a symlink", files: []composemodel.OneShotFile{{Path: "/run/x", Mode: fs.ModeSymlink | 0o777}}, wantErr: "only a directory"},
+		{name: "a setuid file", files: []composemodel.OneShotFile{{Path: "/run/x", Mode: fs.ModeSetuid | 0o755}}, wantErr: "only a directory"},
+		{name: "a relative path", files: []composemodel.OneShotFile{{Path: "run/x"}}, wantErr: "not an absolute"},
+		{name: "an unclean path", files: []composemodel.OneShotFile{{Path: "/run/../etc/x"}}, wantErr: "not an absolute"},
+		{name: "the root itself", files: []composemodel.OneShotFile{{Path: "/", Mode: fs.ModeDir}}, wantErr: "not an absolute"},
 		{
 			name:    "a directory with content",
-			files:   []model.OneShotFile{{Path: "/run/arcave", Mode: fs.ModeDir, Content: []byte("x")}},
+			files:   []composemodel.OneShotFile{{Path: "/run/arcave", Mode: fs.ModeDir, Content: []byte("x")}},
 			wantErr: "a directory with content",
 		},
 	}
@@ -126,7 +126,7 @@ func TestNewOneShotArchive(t *testing.T) {
 // Files are copied in after the create and before the start, so the entrypoint may be one of them.
 func TestRunOneShotContainer_Files(t *testing.T) {
 	// Arrange
-	files := []model.OneShotFile{{Path: "/run/arcave/stdio.sh", Mode: 0o755, Content: []byte("script")}}
+	files := []composemodel.OneShotFile{{Path: "/run/arcave/stdio.sh", Mode: 0o755, Content: []byte("script")}}
 	api := &mockAPI{}
 	copyCall, copied := expectCopy(t, api, nil)
 	mock.InOrder(
@@ -140,7 +140,7 @@ func TestRunOneShotContainer_Files(t *testing.T) {
 	)
 
 	// Act
-	err := runWithin(t, context.Background(), api, model.OneShotSpec{Image: testImage, Files: files})
+	err := runWithin(t, context.Background(), api, composemodel.OneShotSpec{Image: testImage, Files: files})
 
 	// Assert
 	require.NoError(t, err)
@@ -162,9 +162,9 @@ func TestRunOneShotContainer_FilesRefused(t *testing.T) {
 		copyCall,
 		api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil).Once(),
 	)
-	spec := model.OneShotSpec{
+	spec := composemodel.OneShotSpec{
 		Image: testImage,
-		Files: []model.OneShotFile{{Path: "/run/arcave/stdio.sh", Mode: 0o755}},
+		Files: []composemodel.OneShotFile{{Path: "/run/arcave/stdio.sh", Mode: 0o755}},
 	}
 
 	// Act

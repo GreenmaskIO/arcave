@@ -26,11 +26,11 @@ import (
 	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/client"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/dockerdesktop"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman/libpod"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/fullcopy"
@@ -39,7 +39,7 @@ import (
 // Profile is everything that differs by the engine behind the daemon.
 type Profile struct {
 	// Kind is the engine.
-	Kind model.ContainerRuntimeKind
+	Kind composemodel.ContainerRuntimeKind
 	// API is the daemon's Docker API, answering as Docker would; introspection and Engine read through it.
 	API client.APIClient
 	// Engine is what a workflow reaches the daemon through, but for a volume's stream.
@@ -67,10 +67,10 @@ func Read(ctx context.Context, api client.APIClient, endpoint dockercontext.Endp
 // New chooses everything that differs by the engine behind the daemon; libpod is reached through
 // api's own dialer, over TLS when the endpoint is.
 func New(
-	runtime model.ContainerRuntime, info system.Info, api client.APIClient, endpoint dockercontext.Endpoint,
+	runtime composemodel.ContainerRuntime, info system.Info, api client.APIClient, endpoint dockercontext.Endpoint,
 ) (Profile, error) {
 	switch runtime.Kind {
-	case model.ContainerRuntimePodman:
+	case composemodel.ContainerRuntimePodman:
 		if isHTTPHost(endpoint.Host) {
 			return Profile{}, fmt.Errorf("docker endpoint %q: the Docker client cannot attach to a container over an http:// or https:// host, which a Podman volume export needs: name it tcp://", endpoint.Host)
 		}
@@ -90,7 +90,7 @@ func New(
 			Assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
 		}, nil
 	default:
-		if model.IsDockerDesktop(info) {
+		if composemodel.IsDockerDesktop(info) {
 			api = dockerdesktop.NewAPI(api)
 		}
 		engine := docker.NewEngine(api)
@@ -107,14 +107,14 @@ func New(
 }
 
 // readEngine asks the daemon which engine it is and what `docker info` says of it.
-func readEngine(ctx context.Context, api client.APIClient) (model.ContainerRuntime, system.Info, error) {
+func readEngine(ctx context.Context, api client.APIClient) (composemodel.ContainerRuntime, system.Info, error) {
 	runtime, err := docker.ReadRuntime(ctx, api)
 	if err != nil {
-		return model.ContainerRuntime{}, system.Info{}, err
+		return composemodel.ContainerRuntime{}, system.Info{}, err
 	}
 	info, err := api.Info(ctx, client.InfoOptions{})
 	if err != nil {
-		return model.ContainerRuntime{}, system.Info{}, fmt.Errorf("read the daemon info: %w", err)
+		return composemodel.ContainerRuntime{}, system.Info{}, fmt.Errorf("read the daemon info: %w", err)
 	}
 	return runtime, info.Info, nil
 }

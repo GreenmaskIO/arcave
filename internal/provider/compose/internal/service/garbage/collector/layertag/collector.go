@@ -17,6 +17,7 @@ package layertag
 
 import (
 	"context"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"slices"
 	"time"
 
@@ -30,8 +31,8 @@ const probeTimeout = 10 * time.Second
 // layerDaemon is the daemon as the collector reads it.
 type layerDaemon interface {
 	Ping(ctx context.Context) error
-	ListLayerImages(ctx context.Context) ([]model.TaggedImage, error)
-	ListContainerImages(ctx context.Context) ([]model.ContainerImage, error)
+	ListLayerImages(ctx context.Context) ([]composemodel.TaggedImage, error)
+	ListContainerImages(ctx context.Context) ([]composemodel.ContainerImage, error)
 }
 
 // Collector finds the arcave project's arcave/…:sp-<savepoint> tags no container,
@@ -68,8 +69,8 @@ func (s *Collector) Probe(ctx context.Context) error {
 // by image; a tag of no origin or of another compose project is only counted.
 func (s *Collector) Find(ctx context.Context, scope garbage.DaemonScope) (model.GarbageStat, error) {
 	var (
-		tagged               []model.TaggedImage
-		containers           []model.ContainerImage
+		tagged               []composemodel.TaggedImage
+		containers           []composemodel.ContainerImage
 		usedRefs             = map[model.ImageRef]bool{}
 		usedImages           = map[model.ImageDigestID]bool{}
 		ops                  []model.GarbageOp
@@ -91,7 +92,7 @@ func (s *Collector) Find(ctx context.Context, scope garbage.DaemonScope) (model.
 
 	for _, image := range tagged {
 		switch {
-		case image.Origin == model.LayerOrigin{}:
+		case image.Origin == composemodel.LayerOrigin{}:
 			unattributed++
 			continue
 		case image.Origin.ArcaveProject != s.arcaveProject:

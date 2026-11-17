@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"sync"
 
@@ -35,10 +36,10 @@ import (
 type mockRunner struct {
 	mock.Mock
 	mu    sync.Mutex
-	specs []model.OneShotSpec
+	specs []composemodel.OneShotSpec
 }
 
-func (m *mockRunner) RunOneShot(ctx context.Context, spec model.OneShotSpec) error {
+func (m *mockRunner) RunOneShot(ctx context.Context, spec composemodel.OneShotSpec) error {
 	m.mu.Lock()
 	m.specs = append(m.specs, spec)
 	m.mu.Unlock()
@@ -56,15 +57,15 @@ func (m *mockRunner) WipeVolume(ctx context.Context, src model.MountSource) erro
 }
 
 // Specs returns the runs in the order they happened.
-func (m *mockRunner) Specs() []model.OneShotSpec {
+func (m *mockRunner) Specs() []composemodel.OneShotSpec {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]model.OneShotSpec(nil), m.specs...)
+	return append([]composemodel.OneShotSpec(nil), m.specs...)
 }
 
 // matchRestic matches a one-shot run by its restic subcommand.
 func matchRestic(verb string) any {
-	return mock.MatchedBy(func(spec model.OneShotSpec) bool {
+	return mock.MatchedBy(func(spec composemodel.OneShotSpec) bool {
 		return len(spec.Cmd) > 0 && spec.Cmd[0] == verb
 	})
 }
@@ -82,7 +83,7 @@ func (m *mockServer) ServeRepository(ctx context.Context, objectID string, strea
 // on --json.
 func respondWith(lines ...string) func(mock.Arguments) {
 	return func(args mock.Arguments) {
-		spec := args.Get(1).(model.OneShotSpec)
+		spec := args.Get(1).(composemodel.OneShotSpec)
 		for _, line := range lines {
 			fmt.Fprintln(spec.Stdout, line)
 		}

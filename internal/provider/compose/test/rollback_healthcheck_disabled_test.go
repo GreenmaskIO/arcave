@@ -16,6 +16,7 @@ package test
 
 import (
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
@@ -79,7 +80,7 @@ func TestRollback_StartsAServiceWithItsHealthcheckDisabled(t *testing.T) {
 }
 
 // service is the one replica of a service.
-func (e *imageRollbackEnv) service(t *testing.T, name string) model.Container {
+func (e *imageRollbackEnv) service(t *testing.T, name string) composemodel.Container {
 	t.Helper()
 
 	res, err := e.inspector.Introspect(e.ctx)
@@ -91,5 +92,5 @@ func (e *imageRollbackEnv) service(t *testing.T, name string) model.Container {
 		}
 	}
 	require.Failf(t, "service not found", "%s", name)
-	return model.Container{}
+	return composemodel.Container{}
 }

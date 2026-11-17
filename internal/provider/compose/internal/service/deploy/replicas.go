@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"maps"
 	"slices"
 
@@ -89,7 +90,7 @@ func (s *Deployer) rebuildReplica(ctx context.Context, rebuild replicaRebuild) e
 				"it is recreated under the number and name the savepoint recorded")
 		step.Warn(fmt.Sprintf("created as replica %d, recreated as %d", rebuild.created, replica.number))
 	}
-	identity := model.ReplicaIdentity{Name: replica.containerName, Number: replica.number}
+	identity := composemodel.ReplicaIdentity{Name: replica.containerName, Number: replica.number}
 	rebuilt, err := s.containerRebuilder.RecreateWithImage(ctx, rebuild.containerID, identity, replica.image)
 	step.End(err)
 	if err != nil {
@@ -217,7 +218,7 @@ func replicaNumbers(replicas []recordedReplica) []int {
 }
 
 // builtContainers indexes the compose project's containers by service and replica number.
-func builtContainers(introspection model.IntrospectionResult) map[string]map[int]string {
+func builtContainers(introspection composemodel.IntrospectionResult) map[string]map[int]string {
 	built := map[string]map[int]string{}
 	for _, svc := range introspection.Project.Services {
 		for _, container := range svc.Containers {

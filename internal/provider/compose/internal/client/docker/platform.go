@@ -22,7 +22,7 @@ import (
 	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/client"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // HostLoopbackShared reports whether a container run with host networking
@@ -41,5 +41,5 @@ func (e *Engine) HostLoopbackShared(ctx context.Context) (bool, error) {
 // and the daemon's loopback is still the VM's.
 func sharesHostLoopback(localOS string, info system.Info) bool {
 	return localOS == "linux" && info.OSType == "linux" &&
-		!model.IsDockerDesktop(info)
+		!composemodel.IsDockerDesktop(info)
 }

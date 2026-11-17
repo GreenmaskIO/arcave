@@ -25,9 +25,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	dockerclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman/libpod"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/runtimeprofile"
 )
 
@@ -53,7 +53,7 @@ func isPodman(t *testing.T, api *client.Client) bool {
 	t.Helper()
 	runtime, err := dockerclient.ReadRuntime(context.Background(), api)
 	require.NoError(t, err)
-	return runtime.Kind == model.ContainerRuntimePodman
+	return runtime.Kind == composemodel.ContainerRuntimePodman
 }
 
 // sameImageRef reports whether two refs name one image once normalized, the way Docker

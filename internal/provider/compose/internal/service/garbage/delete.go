@@ -17,6 +17,7 @@ package garbage
 import (
 	"context"
 	"errors"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
@@ -101,7 +102,7 @@ func DeleteOps(
 		}
 		opCtx, step := BeginTarget(ctx, op.Target)
 		switch err := del(opCtx, op); {
-		case errors.Is(err, storages.ErrFileNotFound), errors.Is(err, model.ErrImageRefNotFound):
+		case errors.Is(err, storages.ErrFileNotFound), errors.Is(err, composemodel.ErrImageRefNotFound):
 			step.Done(progress.Sample{})
 			deleted = append(deleted, model.GarbageDeleted{
 				Target: op.Target,

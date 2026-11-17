@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"strings"
 	"testing"
 
@@ -303,7 +304,7 @@ func TestTagEraser_Erase(t *testing.T) {
 		},
 		{
 			name: "a tag already gone frees nothing",
-			errs: []error{fmt.Errorf("remove image reference: %w", model.ErrImageRefNotFound), nil},
+			errs: []error{fmt.Errorf("remove image reference: %w", composemodel.ErrImageRefNotFound), nil},
 			want: model.GarbageDeletion{Deleted: []model.GarbageDeleted{
 				{Target: ref, Bytes: utils.New(int64(0))}, {Target: otherRef},
 			}},

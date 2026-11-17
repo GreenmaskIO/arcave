@@ -188,10 +188,10 @@ var demoSpec = &types.Project{Name: "demo"}
 
 // Replicas of the demo services, as the trigger tests name them.
 var (
-	dbReplica1     = model.ContainerRef{Service: "db", Replica: 1, ID: "db1", Name: "demo-db-1"}
-	webReplica1    = model.ContainerRef{Service: "web", Replica: 1, ID: "web1", Name: "demo-web-1"}
-	webReplica2    = model.ContainerRef{Service: "web", Replica: 2, ID: "web2", Name: "demo-web-2"}
-	workerReplica1 = model.ContainerRef{Service: "worker", Replica: 1, ID: "worker1", Name: "demo-worker-1"}
+	dbReplica1     = composemodel.ContainerRef{Service: "db", Replica: 1, ID: "db1", Name: "demo-db-1"}
+	webReplica1    = composemodel.ContainerRef{Service: "web", Replica: 1, ID: "web1", Name: "demo-web-1"}
+	webReplica2    = composemodel.ContainerRef{Service: "web", Replica: 2, ID: "web2", Name: "demo-web-2"}
+	workerReplica1 = composemodel.ContainerRef{Service: "worker", Replica: 1, ID: "worker1", Name: "demo-worker-1"}
 )
 
 func TestStopTrigger_beforeCapture(t *testing.T) {
@@ -201,7 +201,7 @@ func TestStopTrigger_beforeCapture(t *testing.T) {
 		name          string
 		services      []string
 		allServices   bool
-		pausedOnEntry []model.ContainerRef
+		pausedOnEntry []composemodel.ContainerRef
 		unpauseErr    error
 		stopErr       error
 		// wantStop and wantStopServices are the calls expected; neither is no stop at all.
@@ -231,7 +231,7 @@ func TestStopTrigger_beforeCapture(t *testing.T) {
 			name:          "a replica paused on entry is resumed before the stop",
 			services:      []string{"db"},
 			allServices:   true,
-			pausedOnEntry: []model.ContainerRef{dbReplica1},
+			pausedOnEntry: []composemodel.ContainerRef{dbReplica1},
 			wantStop:      true,
 			wantKilled:    []string{"c1"},
 			wantWarnings:  []string{"db-1 was paused: resuming it to stop it"},
@@ -240,7 +240,7 @@ func TestStopTrigger_beforeCapture(t *testing.T) {
 			name:          "a failed resume stops nothing",
 			services:      []string{"db"},
 			allServices:   true,
-			pausedOnEntry: []model.ContainerRef{dbReplica1},
+			pausedOnEntry: []composemodel.ContainerRef{dbReplica1},
 			unpauseErr:    errBoom,
 			wantWarnings:  []string{"db-1 was paused: resuming it to stop it"},
 			wantErr:       "resuming containers: boom",
@@ -307,7 +307,7 @@ func TestStopTrigger_afterCapture(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		resumed  []model.ContainerRef
+		resumed  []composemodel.ContainerRef
 		awaitErr error
 		startErr error
 		// wantAwait are the containers whose health probes are waited on; nil is no wait.
@@ -319,12 +319,12 @@ func TestStopTrigger_afterCapture(t *testing.T) {
 		},
 		{
 			name:      "the resumed replicas' probes are waited on before the start",
-			resumed:   []model.ContainerRef{webReplica1, workerReplica1},
+			resumed:   []composemodel.ContainerRef{webReplica1, workerReplica1},
 			wantAwait: []string{"web1", "worker1"},
 		},
 		{
 			name:      "a failed wait still starts the project",
-			resumed:   []model.ContainerRef{webReplica1},
+			resumed:   []composemodel.ContainerRef{webReplica1},
 			awaitErr:  errBoom,
 			wantAwait: []string{"web1"},
 		},
@@ -373,14 +373,14 @@ func TestStopTrigger_afterCapture(t *testing.T) {
 func TestPauseTrigger_beforeCapture(t *testing.T) {
 	tests := []struct {
 		name      string
-		running   []model.ContainerRef
+		running   []composemodel.ContainerRef
 		pauseErr  error
 		wantPause []string
 		wantErr   string
 	}{
 		{
 			name:      "freezes the running replicas",
-			running:   []model.ContainerRef{webReplica1, webReplica2},
+			running:   []composemodel.ContainerRef{webReplica1, webReplica2},
 			wantPause: []string{"web1", "web2"},
 		},
 		{
@@ -388,7 +388,7 @@ func TestPauseTrigger_beforeCapture(t *testing.T) {
 		},
 		{
 			name:      "a failed pause",
-			running:   []model.ContainerRef{webReplica1},
+			running:   []composemodel.ContainerRef{webReplica1},
 			pauseErr:  errors.New("boom"),
 			wantPause: []string{"web1"},
 			wantErr:   "pausing containers: boom",
@@ -422,8 +422,8 @@ func TestPauseTrigger_beforeCapture(t *testing.T) {
 func TestPauseTrigger_afterCapture(t *testing.T) {
 	tests := []struct {
 		name          string
-		running       []model.ContainerRef
-		pausedOnEntry []model.ContainerRef
+		running       []composemodel.ContainerRef
+		pausedOnEntry []composemodel.ContainerRef
 		unpauseErr    error
 		wantUnpause   []string
 		wantWarnings  []string
@@ -431,13 +431,13 @@ func TestPauseTrigger_afterCapture(t *testing.T) {
 	}{
 		{
 			name:        "resumes its own",
-			running:     []model.ContainerRef{webReplica1},
+			running:     []composemodel.ContainerRef{webReplica1},
 			wantUnpause: []string{"web1"},
 		},
 		{
 			name:          "resumes the ones frozen before it too, with a warning",
-			running:       []model.ContainerRef{webReplica1},
-			pausedOnEntry: []model.ContainerRef{webReplica2},
+			running:       []composemodel.ContainerRef{webReplica1},
+			pausedOnEntry: []composemodel.ContainerRef{webReplica2},
 			wantUnpause:   []string{"web1", "web2"},
 			wantWarnings:  []string{"web-2 was paused before the capture: resuming it"},
 		},
@@ -446,7 +446,7 @@ func TestPauseTrigger_afterCapture(t *testing.T) {
 		},
 		{
 			name:        "a failed resume",
-			running:     []model.ContainerRef{webReplica1},
+			running:     []composemodel.ContainerRef{webReplica1},
 			unpauseErr:  errors.New("boom"),
 			wantUnpause: []string{"web1"},
 			wantErr:     "resuming containers: boom",
@@ -482,7 +482,7 @@ func TestLiveTrigger_afterCapture(t *testing.T) {
 	// Arrange
 	control := &composetest.MockContainerControl{}
 	control.On("UnpauseContainers", mock.Anything, []string{"worker1"}).Return(nil).Once()
-	trigger := liveTrigger{control: control, pausedOnEntry: []model.ContainerRef{workerReplica1}}
+	trigger := liveTrigger{control: control, pausedOnEntry: []composemodel.ContainerRef{workerReplica1}}
 	recorder := &composetest.WarnedRecorder{}
 
 	// Act
@@ -507,31 +507,31 @@ func TestNewTriggersByMode(t *testing.T) {
 		{
 			name: "each group its own trigger, stop then pause then live",
 			services: []composemodel.ServiceHold{
-				{Service: "db", Mode: model.CaptureModeStop, Running: []model.ContainerRef{dbReplica1}},
-				{Service: "web", Mode: model.CaptureModePause, Running: []model.ContainerRef{webReplica1}, Idle: []composemodel.IdleReplica{pausedWeb}},
+				{Service: "db", Mode: model.CaptureModeStop, Running: []composemodel.ContainerRef{dbReplica1}},
+				{Service: "web", Mode: model.CaptureModePause, Running: []composemodel.ContainerRef{webReplica1}, Idle: []composemodel.IdleReplica{pausedWeb}},
 				{Service: "worker", Mode: model.CaptureModeLive, Idle: []composemodel.IdleReplica{pausedWorker}},
 			},
 			want: func(runner ComposeRunner, control ContainerControl) Triggers {
 				return Triggers{
 					stopTrigger{composeRunner: runner, control: control, project: demoSpec, waitTimeout: time.Minute,
 						services: []string{"db"},
-						resumed:  []model.ContainerRef{webReplica1, webReplica2, workerReplica1}},
-					pauseTrigger{control: control, running: []model.ContainerRef{webReplica1},
-						pausedOnEntry: []model.ContainerRef{webReplica2}},
-					liveTrigger{control: control, pausedOnEntry: []model.ContainerRef{workerReplica1}},
+						resumed:  []composemodel.ContainerRef{webReplica1, webReplica2, workerReplica1}},
+					pauseTrigger{control: control, running: []composemodel.ContainerRef{webReplica1},
+						pausedOnEntry: []composemodel.ContainerRef{webReplica2}},
+					liveTrigger{control: control, pausedOnEntry: []composemodel.ContainerRef{workerReplica1}},
 				}
 			},
 		},
 		{
 			name: "every service stop, an unknown mode stopped too",
 			services: []composemodel.ServiceHold{
-				{Service: "db", Mode: model.CaptureModeStop, Running: []model.ContainerRef{dbReplica1}},
+				{Service: "db", Mode: model.CaptureModeStop, Running: []composemodel.ContainerRef{dbReplica1}},
 				{Service: "web", Idle: []composemodel.IdleReplica{exitedWeb, pausedWeb}},
 			},
 			want: func(runner ComposeRunner, control ContainerControl) Triggers {
 				return Triggers{
 					stopTrigger{composeRunner: runner, control: control, project: demoSpec, waitTimeout: time.Minute,
-						services: []string{"db", "web"}, allServices: true, pausedOnEntry: []model.ContainerRef{webReplica2}},
+						services: []string{"db", "web"}, allServices: true, pausedOnEntry: []composemodel.ContainerRef{webReplica2}},
 					pauseTrigger{control: control},
 					liveTrigger{control: control},
 				}
@@ -540,7 +540,7 @@ func TestNewTriggersByMode(t *testing.T) {
 		{
 			name: "every service live: a stop trigger with no service, to start the project after",
 			services: []composemodel.ServiceHold{
-				{Service: "db", Mode: model.CaptureModeLive, Running: []model.ContainerRef{dbReplica1}},
+				{Service: "db", Mode: model.CaptureModeLive, Running: []composemodel.ContainerRef{dbReplica1}},
 			},
 			want: func(runner ComposeRunner, control ContainerControl) Triggers {
 				return Triggers{

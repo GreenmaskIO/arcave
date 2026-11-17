@@ -15,6 +15,7 @@
 package introspect
 
 import (
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"net/netip"
 	"testing"
 	"time"
@@ -52,7 +53,7 @@ func TestNewObservedReplica(t *testing.T) {
 	// Arrange
 	created := time.Date(2026, 11, 7, 14, 0, 0, 0, time.UTC)
 	started := time.Date(2026, 11, 7, 14, 2, 30, 0, time.UTC)
-	replica := model.Container{
+	replica := composemodel.Container{
 		ID:       "c-db-1",
 		Name:     "demo-db-1",
 		Number:   1,
@@ -99,7 +100,7 @@ func TestNewObservedReplica(t *testing.T) {
 
 func TestNewObservedReplica_NoState(t *testing.T) {
 	// Act: an inspect with no state reads as an exit, with nothing else known.
-	got := newObservedReplica(model.Container{ID: "c-db-1", Number: 1})
+	got := newObservedReplica(composemodel.Container{ID: "c-db-1", Number: 1})
 
 	// Assert
 	assert.Equal(t, model.ObservedReplica{

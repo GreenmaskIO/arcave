@@ -28,11 +28,3 @@ type Image struct {
 	// identity is recorded.
 	Stored bool `json:"stored"`
 }
-
-// ImageCaptureRequest is one image to keep. ExistsInDaemon is whether the Docker
-// daemon still held it when the compose project was introspected: only then can its
-// bytes be stored.
-type ImageCaptureRequest struct {
-	Image          Image
-	ExistsInDaemon bool
-}

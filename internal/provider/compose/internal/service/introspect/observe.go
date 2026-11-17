@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"maps"
 	"net/netip"
 	"slices"
@@ -60,7 +61,7 @@ func (s *Inspector) Observe(ctx context.Context) (model.ObservedWorkload, error)
 }
 
 // newObservedReplicas is each container as the daemon reports it.
-func newObservedReplicas(containers []model.Container) []model.ObservedReplica {
+func newObservedReplicas(containers []composemodel.Container) []model.ObservedReplica {
 	replicas := make([]model.ObservedReplica, 0, len(containers))
 	for _, c := range containers {
 		replicas = append(replicas, newObservedReplica(c))
@@ -69,7 +70,7 @@ func newObservedReplicas(containers []model.Container) []model.ObservedReplica {
 }
 
 // newObservedReplica is one container as the daemon reports it.
-func newObservedReplica(c model.Container) model.ObservedReplica {
+func newObservedReplica(c composemodel.Container) model.ObservedReplica {
 	var (
 		inspect = c.Inspect
 		state   = cmp.Or(inspect.State, &container.State{})

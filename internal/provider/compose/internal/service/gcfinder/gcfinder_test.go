@@ -17,6 +17,7 @@ package gcfinder
 import (
 	"context"
 	"errors"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"slices"
 	"testing"
 
@@ -80,11 +81,11 @@ type unreachableDaemon struct{ err error }
 
 func (d unreachableDaemon) Ping(context.Context) error { return d.err }
 
-func (d unreachableDaemon) ListLayerImages(context.Context) ([]model.TaggedImage, error) {
+func (d unreachableDaemon) ListLayerImages(context.Context) ([]composemodel.TaggedImage, error) {
 	return nil, d.err
 }
 
-func (d unreachableDaemon) ListContainerImages(context.Context) ([]model.ContainerImage, error) {
+func (d unreachableDaemon) ListContainerImages(context.Context) ([]composemodel.ContainerImage, error) {
 	return nil, d.err
 }
 

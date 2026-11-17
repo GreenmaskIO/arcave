@@ -19,6 +19,7 @@ package capture
 
 import (
 	"context"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -31,8 +32,8 @@ type SavepointRepository interface {
 
 // ImageBackend commits writable layers into the store and keeps the images they were taken over.
 type ImageBackend interface {
-	CaptureImage(ctx context.Context, req model.ImageCaptureRequest) (model.Image, error)
-	CaptureWritableLayer(ctx context.Context, req model.WritableLayerCaptureRequest) (model.WritableLayer, error)
+	CaptureImage(ctx context.Context, req composemodel.ImageCaptureRequest) (model.Image, error)
+	CaptureWritableLayer(ctx context.Context, req composemodel.WritableLayerCaptureRequest) (model.WritableLayer, error)
 }
 
 // Deps are Capturer's collaborators.

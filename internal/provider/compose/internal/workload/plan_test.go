@@ -57,7 +57,7 @@ func TestCapturePlan_Hold(t *testing.T) {
 			recorder := &composetest.StepRecorder{}
 
 			// Act
-			holding, err := svc.newCapturePlan(composemodel.Plan{Project: composetest.DemoSpec, Services: stopServices}, model.IntrospectionResult{}).Hold(composetest.NewProgressContext(recorder))
+			holding, err := svc.newCapturePlan(composemodel.Plan{Project: composetest.DemoSpec, Services: stopServices}, composemodel.IntrospectionResult{}).Hold(composetest.NewProgressContext(recorder))
 
 			// Assert
 			if tt.wantErr == "" {
@@ -101,7 +101,7 @@ func TestCapturePlan_Release(t *testing.T) {
 			ctx := composetest.NewProgressContext(recorder)
 
 			// Act
-			err := svc.newCapturePlan(composemodel.Plan{Project: composetest.DemoSpec, Services: stopServices}, model.IntrospectionResult{}).Release(ctx, time.Minute)
+			err := svc.newCapturePlan(composemodel.Plan{Project: composetest.DemoSpec, Services: stopServices}, composemodel.IntrospectionResult{}).Release(ctx, time.Minute)
 
 			// Assert
 			if tt.wantErr == "" {
@@ -120,8 +120,8 @@ func TestCapturePlan_Release(t *testing.T) {
 func TestCapturePlan_HoldCaptureRelease(t *testing.T) {
 	errBoom := errors.New("boom")
 	services := []composemodel.ServiceHold{
-		{Service: "db", Mode: model.CaptureModeStop, Running: []model.ContainerRef{dbReplica1}},
-		{Service: "web", Mode: model.CaptureModePause, Running: []model.ContainerRef{webReplica1},
+		{Service: "db", Mode: model.CaptureModeStop, Running: []composemodel.ContainerRef{dbReplica1}},
+		{Service: "web", Mode: model.CaptureModePause, Running: []composemodel.ContainerRef{webReplica1},
 			Idle: []composemodel.IdleReplica{{Ref: webReplica2, State: "paused"}}},
 		{Service: "worker", Mode: model.CaptureModeLive, Idle: []composemodel.IdleReplica{{Ref: workerReplica1, State: "paused"}}},
 	}
@@ -176,7 +176,7 @@ func TestCapturePlan_HoldCaptureRelease(t *testing.T) {
 				Project:  composetest.DemoSpec,
 				Spec:     composetest.DemoSpecBytes,
 				Services: services,
-			}, model.IntrospectionResult{})
+			}, composemodel.IntrospectionResult{})
 			ctx := composetest.NewTestContext()
 
 			// Act
@@ -206,15 +206,15 @@ func TestCapturePlan_HoldCaptureRelease(t *testing.T) {
 
 // Replicas of the demo services.
 var (
-	dbReplica1     = model.ContainerRef{Service: "db", Replica: 1, ID: "db1", Name: "demo-db-1"}
-	webReplica1    = model.ContainerRef{Service: "web", Replica: 1, ID: "web1", Name: "demo-web-1"}
-	webReplica2    = model.ContainerRef{Service: "web", Replica: 2, ID: "web2", Name: "demo-web-2"}
-	workerReplica1 = model.ContainerRef{Service: "worker", Replica: 1, ID: "worker1", Name: "demo-worker-1"}
+	dbReplica1     = composemodel.ContainerRef{Service: "db", Replica: 1, ID: "db1", Name: "demo-db-1"}
+	webReplica1    = composemodel.ContainerRef{Service: "web", Replica: 1, ID: "web1", Name: "demo-web-1"}
+	webReplica2    = composemodel.ContainerRef{Service: "web", Replica: 2, ID: "web2", Name: "demo-web-2"}
+	workerReplica1 = composemodel.ContainerRef{Service: "worker", Replica: 1, ID: "worker1", Name: "demo-worker-1"}
 )
 
 // stopServices is a plan's services, every one held by stop and running.
 var stopServices = []composemodel.ServiceHold{{
 	Service: "db",
 	Mode:    model.CaptureModeStop,
-	Running: []model.ContainerRef{dbReplica1},
+	Running: []composemodel.ContainerRef{dbReplica1},
 }}

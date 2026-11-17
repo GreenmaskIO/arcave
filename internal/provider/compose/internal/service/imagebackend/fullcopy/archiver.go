@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 
 	"github.com/greenmaskio/storages"
@@ -74,13 +75,13 @@ func (s *Archiver) Load(
 	}
 	if manifest.ImageID != imageID {
 		return fmt.Errorf("%w: the capture holds image %s, the record names %s",
-			model.ErrSavepointImageMissing, manifest.ImageID, imageID)
+			composemodel.ErrSavepointImageMissing, manifest.ImageID, imageID)
 	}
 
 	stored, err := src.GetObject(ctx, archiveName)
 	if err != nil {
 		if errors.Is(err, storages.ErrFileNotFound) {
-			return fmt.Errorf("%w: image %s: %w", model.ErrSavepointImageMissing, imageID, err)
+			return fmt.Errorf("%w: image %s: %w", composemodel.ErrSavepointImageMissing, imageID, err)
 		}
 		return fmt.Errorf("read image archive: %w", err)
 	}

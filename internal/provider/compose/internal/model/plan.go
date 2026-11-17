@@ -37,13 +37,13 @@ type Plan struct {
 	// What the capture takes: one backend per volume, the distinct images the captured
 	// services run on, and the writable layers, each with its backend.
 	Volumes        []model.VolumeSnapshotBackend
-	Images         []model.ImageCaptureRequest
-	WritableLayers []model.WritableLayerCaptureRequest
+	Images         []ImageCaptureRequest
+	WritableLayers []WritableLayerCaptureRequest
 
 	// Services are how each service is held still, its replicas as they were found.
 	Services []ServiceHold
 	// Containers are every replica, to name the ones a stop killed.
-	Containers []model.ContainerRef
+	Containers []ContainerRef
 	// NotCovered is what the capture leaves out, as known before the stop.
 	NotCovered model.NotCovered
 	// LabelsIgnored is why the capture follows the config and not the compose project's labels,
@@ -56,19 +56,19 @@ type ServiceHold struct {
 	Service string
 	Mode    model.CaptureMode
 	// Running replicas are the ones a hold acts on; Idle ones are already still.
-	Running []model.ContainerRef
+	Running []ContainerRef
 	Idle    []IdleReplica
 }
 
 // IdleReplica is a replica found not running, or frozen; State is the daemon's word for it.
 type IdleReplica struct {
-	Ref   model.ContainerRef
+	Ref   ContainerRef
 	State string
 }
 
 // PausedOnEntry are the replicas found frozen.
-func (h ServiceHold) PausedOnEntry() []model.ContainerRef {
-	var paused []model.ContainerRef
+func (h ServiceHold) PausedOnEntry() []ContainerRef {
+	var paused []ContainerRef
 	for _, idle := range h.Idle {
 		if idle.State == StatePaused {
 			paused = append(paused, idle.Ref)
@@ -115,7 +115,7 @@ func (p Plan) newKilledContainers(ids []string) []model.KilledContainer {
 	var killedContainers []model.KilledContainer
 	for _, id := range ids {
 		killed := model.KilledContainer{Container: id}
-		if i := slices.IndexFunc(p.Containers, func(c model.ContainerRef) bool { return c.ID == id }); i >= 0 {
+		if i := slices.IndexFunc(p.Containers, func(c ContainerRef) bool { return c.ID == id }); i >= 0 {
 			ref := p.Containers[i]
 			killed = model.KilledContainer{
 				Service:   ref.Service,

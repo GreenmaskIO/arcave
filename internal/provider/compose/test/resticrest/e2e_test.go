@@ -32,9 +32,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/repo"
 )
@@ -64,7 +64,7 @@ const mutateMiB = 12
 // containerRunner is the seam the cdc backend declares; the e2e drives every
 // container through it to prove the one method is enough.
 type containerRunner interface {
-	RunOneShot(ctx context.Context, spec model.OneShotSpec) error
+	RunOneShot(ctx context.Context, spec composemodel.OneShotSpec) error
 }
 
 // hostNetRunner stamps the resolved transport onto every restic spec. The
@@ -74,7 +74,7 @@ type hostNetRunner struct {
 	hostNetwork bool
 }
 
-func (r hostNetRunner) RunOneShot(ctx context.Context, spec model.OneShotSpec) error {
+func (r hostNetRunner) RunOneShot(ctx context.Context, spec composemodel.OneShotSpec) error {
 	spec.HostNetwork = r.hostNetwork
 	return r.containerRunner.RunOneShot(ctx, spec)
 }
@@ -141,7 +141,7 @@ func TestResticEndToEnd(t *testing.T) {
 	// container's own exit.
 	err = resticErr(t, restic, urlBase+"/no-such-prefix/", "", "cat", "config")
 	require.Error(t, err, "an unregistered prefix must not reach a repository")
-	var exitErr *model.ContainerExitError
+	var exitErr *composemodel.ContainerExitError
 	require.ErrorAs(t, err, &exitErr)
 	assert.NotZero(t, exitErr.StatusCode)
 
@@ -235,7 +235,7 @@ func busybox(t *testing.T, runner containerRunner, vol, script string) string {
 	t.Helper()
 
 	var stdout, stderr bytes.Buffer
-	err := runner.RunOneShot(t.Context(), model.OneShotSpec{
+	err := runner.RunOneShot(t.Context(), composemodel.OneShotSpec{
 		Image:  busyboxImage,
 		Cmd:    []string{"sh", "-c", script},
 		Binds:  []string{vol + ":/data"},
@@ -268,7 +268,7 @@ func resticErr(t *testing.T, runner containerRunner, repoURL, vol string, args .
 func resticOut(t *testing.T, runner containerRunner, repoURL, vol string, args ...string) (string, error) {
 	t.Helper()
 
-	spec := model.OneShotSpec{
+	spec := composemodel.OneShotSpec{
 		Image: resticImage,
 		Cmd:   args,
 		Env: []string{
