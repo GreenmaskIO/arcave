@@ -56,7 +56,7 @@ volumes:
   data: {}
 `
 
-// hooksEnv is a compose project of hooksSpec and an arcave project over it, driven by the binary.
+// hooksEnv is a compose project and an arcave project over it, driven by the binary.
 type hooksEnv struct {
 	*imageRollbackEnv
 	root string
@@ -78,6 +78,14 @@ func newHooksEnv(t *testing.T, replicas int, labels map[string]string) *hooksEnv
 		rendered = append(rendered, fmt.Sprintf("      %s: %s", strconv.Quote(key), strconv.Quote(labels[key])))
 	}
 	env.upDocument(t, fmt.Sprintf(hooksSpec, env.project, replicas, strings.Join(rendered, "\n")))
+	return newBinaryEnv(t, env)
+}
+
+// newBinaryEnv is an arcave project over env's compose project, storing to a directory by fullcopy;
+// bringing the compose project up is the caller's.
+func newBinaryEnv(t *testing.T, env *imageRollbackEnv) *hooksEnv {
+	t.Helper()
+
 	root := t.TempDir()
 	runArcave(t, root, nil, "init", "--name", env.project)
 	writeStorageConfig(t, root, startDirectoryStorage(t).file, config.SnapshotBackendFullCopy)
