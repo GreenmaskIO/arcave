@@ -25,7 +25,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/provider/compose/captureplan"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -57,7 +57,7 @@ func TestCapturePlan_Hold(t *testing.T) {
 			recorder := &composetest.StepRecorder{}
 
 			// Act
-			holding, err := svc.newCapturePlan(captureplan.Plan{Project: composetest.DemoSpec, Services: stopServices}, model.IntrospectionResult{}).Hold(composetest.NewProgressContext(recorder))
+			holding, err := svc.newCapturePlan(composemodel.Plan{Project: composetest.DemoSpec, Services: stopServices}, model.IntrospectionResult{}).Hold(composetest.NewProgressContext(recorder))
 
 			// Assert
 			if tt.wantErr == "" {
@@ -91,7 +91,7 @@ func TestHeld_Capture(t *testing.T) {
 		ComposeRunner: runner,
 		Store:         composetest.NewDirStore(t),
 	})
-	plan := captureplan.Plan{
+	plan := composemodel.Plan{
 		Project:    composetest.DemoSpec,
 		Spec:       composetest.DemoSpecBytes,
 		Services:   stopServices,
@@ -142,7 +142,7 @@ func TestCapturePlan_Release(t *testing.T) {
 			ctx := composetest.NewProgressContext(recorder)
 
 			// Act
-			err := svc.newCapturePlan(captureplan.Plan{Project: composetest.DemoSpec, Services: stopServices}, model.IntrospectionResult{}).Release(ctx, time.Minute)
+			err := svc.newCapturePlan(composemodel.Plan{Project: composetest.DemoSpec, Services: stopServices}, model.IntrospectionResult{}).Release(ctx, time.Minute)
 
 			// Assert
 			if tt.wantErr == "" {
@@ -160,11 +160,11 @@ func TestCapturePlan_Release(t *testing.T) {
 // resumed replicas' probes waited on before the start — whether the hold or the capture failed.
 func TestCapturePlan_HoldCaptureRelease(t *testing.T) {
 	errBoom := errors.New("boom")
-	services := []captureplan.ServiceHold{
+	services := []composemodel.ServiceHold{
 		{Service: "db", Mode: model.CaptureModeStop, Running: []model.ContainerRef{dbReplica1}},
 		{Service: "web", Mode: model.CaptureModePause, Running: []model.ContainerRef{webReplica1},
-			Idle: []captureplan.IdleReplica{{Ref: webReplica2, State: "paused"}}},
-		{Service: "worker", Mode: model.CaptureModeLive, Idle: []captureplan.IdleReplica{{Ref: workerReplica1, State: "paused"}}},
+			Idle: []composemodel.IdleReplica{{Ref: webReplica2, State: "paused"}}},
+		{Service: "worker", Mode: model.CaptureModeLive, Idle: []composemodel.IdleReplica{{Ref: workerReplica1, State: "paused"}}},
 	}
 
 	tests := []struct {
@@ -213,7 +213,7 @@ func TestCapturePlan_HoldCaptureRelease(t *testing.T) {
 				ContainerControl: control,
 				Store:            composetest.NewDirStore(t),
 			})
-			plan := svc.newCapturePlan(captureplan.Plan{
+			plan := svc.newCapturePlan(composemodel.Plan{
 				Project:  composetest.DemoSpec,
 				Spec:     composetest.DemoSpecBytes,
 				Services: services,
@@ -276,7 +276,7 @@ var (
 )
 
 // stopServices is a plan's services, every one held by stop and running.
-var stopServices = []captureplan.ServiceHold{{
+var stopServices = []composemodel.ServiceHold{{
 	Service: "db",
 	Mode:    model.CaptureModeStop,
 	Running: []model.ContainerRef{dbReplica1},

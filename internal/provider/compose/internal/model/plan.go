@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package captureplan is one capture of a compose project decided before anything is touched.
-package captureplan
+// Package model is the compose provider's own vocabulary: what its stages hand each other and
+// arcave never reads. Import it as composemodel.
+package model
 
 import (
 	"slices"

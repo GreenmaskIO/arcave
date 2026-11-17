@@ -30,7 +30,8 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/provider/compose/captureplan"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -174,7 +175,7 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 		wantErr   error
 	}{
 		{name: "a savepoint with its layer", savepoint: composetest.DemoRecordWithImages(), found: true},
-		{name: "a record not found", savepoint: composetest.DemoRecordWithImages(), wantErr: errRecordNotFound},
+		{name: "a record not found", savepoint: composetest.DemoRecordWithImages(), wantErr: sessionstore.ErrRecordNotFound},
 		{name: "a record with no spec", savepoint: noSpec, found: true, wantErr: model.ErrSavepointNoSpec},
 		{name: "a layer the daemon will not take", savepoint: composetest.DemoRecordWithImages(), found: true, loadErr: errLoad, wantErr: errLoad},
 	}
@@ -393,7 +394,7 @@ func TestHeld_PrepareSavepoint(t *testing.T) {
 		}).Return(model.WritableLayerRestoreResult{Service: composetest.DemoService, Replica: 1, Tag: tag}, nil).Once(),
 	)
 	svc := New(Deps{SavepointRepo: repo, ImageBackend: images})
-	held := heldWorkload{service: svc, plan: captureplan.Plan{Project: composetest.DemoTargetSpec, Volumes: []model.VolumeSnapshotBackend{backend}}}
+	held := heldWorkload{service: svc, plan: composemodel.Plan{Project: composetest.DemoTargetSpec, Volumes: []model.VolumeSnapshotBackend{backend}}}
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -416,7 +417,7 @@ func TestHeld_Teardown_FailedDown(t *testing.T) {
 	runner.On("Down", mock.Anything, composetest.DemoSpec).Return(errors.New("boom")).Once()
 	holding := heldWorkload{
 		service: New(Deps{ComposeRunner: runner}),
-		plan:    captureplan.Plan{Project: composetest.DemoSpec},
+		plan:    composemodel.Plan{Project: composetest.DemoSpec},
 	}
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -454,7 +455,7 @@ func TestHeld_Teardown_CarriesTheAnonymousVolumes(t *testing.T) {
 		remover.On("RemoveVolume", mock.Anything, "9f8e7d").Return(nil).Once(),
 	)
 	svc := New(Deps{ComposeRunner: runner, VolumeRemover: remover})
-	plan := svc.newCapturePlan(captureplan.Plan{Project: composetest.DemoSpec, Services: []captureplan.ServiceHold{{Service: "app"}}}, introspection)
+	plan := svc.newCapturePlan(composemodel.Plan{Project: composetest.DemoSpec, Services: []composemodel.ServiceHold{{Service: "app"}}}, introspection)
 	ctx := zerolog.Nop().WithContext(context.Background())
 	holding, err := plan.Hold(ctx)
 	require.NoError(t, err)
@@ -489,7 +490,7 @@ func TestHeld_Teardown(t *testing.T) {
 		remover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once(),
 	)
 	svc := New(Deps{ComposeRunner: runner, ComposeInspector: inspector, VolumeRemover: remover})
-	plan := svc.newCapturePlan(captureplan.Plan{Project: composetest.DemoSpec, Services: []captureplan.ServiceHold{{Service: composetest.DemoService}}}, introspection)
+	plan := svc.newCapturePlan(composemodel.Plan{Project: composetest.DemoSpec, Services: []composemodel.ServiceHold{{Service: composetest.DemoService}}}, introspection)
 	ctx := zerolog.Nop().WithContext(context.Background())
 	holding, err := plan.Hold(ctx)
 	require.NoError(t, err)
@@ -1051,7 +1052,7 @@ func TestVacant_Build_Progress(t *testing.T) {
 	runner.On("Create", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, composetest.DemoDeployment(record)), demoRestoredVolumes).Return(nil).Once()
 	runner.On("Start", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, composetest.DemoDeployment(record)), time.Minute).Return(nil).Once()
 	svc := New(Deps{ComposeRunner: runner})
-	held := heldWorkload{service: svc, plan: captureplan.Plan{Project: composetest.DemoTargetSpec}}
+	held := heldWorkload{service: svc, plan: composemodel.Plan{Project: composetest.DemoTargetSpec}}
 	prepared := preparedSavepoint{
 		savepoint:  record,
 		project:    composetest.DemoTargetSpec,

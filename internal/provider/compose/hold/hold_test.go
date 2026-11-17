@@ -27,7 +27,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider/compose/captureplan"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
 )
 
@@ -495,21 +495,21 @@ func TestLiveTrigger_afterCapture(t *testing.T) {
 }
 
 func TestNewTriggersByMode(t *testing.T) {
-	pausedWeb := captureplan.IdleReplica{Ref: webReplica2, State: "paused"}
-	exitedWeb := captureplan.IdleReplica{Ref: webReplica2, State: "exited"}
-	pausedWorker := captureplan.IdleReplica{Ref: workerReplica1, State: "paused"}
+	pausedWeb := composemodel.IdleReplica{Ref: webReplica2, State: "paused"}
+	exitedWeb := composemodel.IdleReplica{Ref: webReplica2, State: "exited"}
+	pausedWorker := composemodel.IdleReplica{Ref: workerReplica1, State: "paused"}
 
 	tests := []struct {
 		name     string
-		services []captureplan.ServiceHold
+		services []composemodel.ServiceHold
 		want     func(runner ComposeRunner, control ContainerControl) Triggers
 	}{
 		{
 			name: "each group its own trigger, stop then pause then live",
-			services: []captureplan.ServiceHold{
+			services: []composemodel.ServiceHold{
 				{Service: "db", Mode: model.CaptureModeStop, Running: []model.ContainerRef{dbReplica1}},
-				{Service: "web", Mode: model.CaptureModePause, Running: []model.ContainerRef{webReplica1}, Idle: []captureplan.IdleReplica{pausedWeb}},
-				{Service: "worker", Mode: model.CaptureModeLive, Idle: []captureplan.IdleReplica{pausedWorker}},
+				{Service: "web", Mode: model.CaptureModePause, Running: []model.ContainerRef{webReplica1}, Idle: []composemodel.IdleReplica{pausedWeb}},
+				{Service: "worker", Mode: model.CaptureModeLive, Idle: []composemodel.IdleReplica{pausedWorker}},
 			},
 			want: func(runner ComposeRunner, control ContainerControl) Triggers {
 				return Triggers{
@@ -524,9 +524,9 @@ func TestNewTriggersByMode(t *testing.T) {
 		},
 		{
 			name: "every service stop, an unknown mode stopped too",
-			services: []captureplan.ServiceHold{
+			services: []composemodel.ServiceHold{
 				{Service: "db", Mode: model.CaptureModeStop, Running: []model.ContainerRef{dbReplica1}},
-				{Service: "web", Idle: []captureplan.IdleReplica{exitedWeb, pausedWeb}},
+				{Service: "web", Idle: []composemodel.IdleReplica{exitedWeb, pausedWeb}},
 			},
 			want: func(runner ComposeRunner, control ContainerControl) Triggers {
 				return Triggers{
@@ -539,7 +539,7 @@ func TestNewTriggersByMode(t *testing.T) {
 		},
 		{
 			name: "every service live: a stop trigger with no service, to start the project after",
-			services: []captureplan.ServiceHold{
+			services: []composemodel.ServiceHold{
 				{Service: "db", Mode: model.CaptureModeLive, Running: []model.ContainerRef{dbReplica1}},
 			},
 			want: func(runner ComposeRunner, control ContainerControl) Triggers {
@@ -557,7 +557,7 @@ func TestNewTriggersByMode(t *testing.T) {
 			// Arrange
 			runner := &composetest.MockComposeRunner{}
 			control := &composetest.MockContainerControl{}
-			plan := captureplan.Plan{Project: demoSpec, Services: tt.services}
+			plan := composemodel.Plan{Project: demoSpec, Services: tt.services}
 
 			// Act
 			triggers := NewTriggersByMode(runner, control, plan, time.Minute)

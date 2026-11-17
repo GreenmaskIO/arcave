@@ -11,6 +11,7 @@ linters:
   enable:
     - errcheck
     - govet
+    - importas
     - ineffassign
     - recvcheck
     - staticcheck
@@ -51,6 +52,13 @@ linters:
         - (*hash/maphash.Hash).Write
         - (*hash/maphash.Hash).WriteByte
         - (*hash/maphash.Hash).WriteString
+    importas:
+      # The compose provider's own model shares its package name with internal/model, which
+      # nearly every importer of it also imports.
+      no-unaliased: true
+      alias:
+        - pkg: github.com/greenmaskio/arcave/internal/provider/compose/internal/model
+          alias: composemodel
     recvcheck:
       # ImageDigestID and SessionID must mix: an unmarshaler has to take a pointer
       # to write through, while every other method reads. The exclusions name the

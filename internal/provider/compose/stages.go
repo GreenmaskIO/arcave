@@ -26,6 +26,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -57,7 +58,7 @@ func (p preparedSavepoint) Summary() provider.PreparedSummary {
 func (l liveWorkload) PrepareSavepoint(
 	ctx context.Context, id model.SavepointID, opts provider.PrepareOptions,
 ) (provider.PreparedSavepoint, error) {
-	savepoint, err := l.service.loadSavepoint(ctx, id)
+	savepoint, err := sessionstore.LoadSavepoint(ctx, l.service.savepointRepo, id)
 	if err != nil {
 		return nil, err
 	}

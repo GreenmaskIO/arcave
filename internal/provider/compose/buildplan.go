@@ -27,15 +27,13 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/provider/compose/captureplan"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 )
 
 // errNoVolumesToBackUp refuses a savepoint that would cover nothing.
 var errNoVolumesToBackUp = errors.New("no stateful volumes found; nothing to capture")
-
-// errRecordNotFound refuses a savepoint id the store holds no committed record of.
-var errRecordNotFound = errors.New("savepoint not found")
 
 // imageSet is what a capture takes of the images, as the policy decides.
 type imageSet struct {
@@ -53,29 +51,29 @@ type imageSet struct {
 // a record of opts.Restoring that cannot be read is not.
 func (s *Provider) buildPlan(
 	ctx context.Context, introspection model.IntrospectionResult, opts provider.CaptureOptions,
-) (captureplan.Plan, error) {
+) (composemodel.Plan, error) {
 	var (
 		restoring     *model.Savepoint
 		capturePolicy model.CapturePolicy
 		labelsIgnored error
-		plan          captureplan.Plan
+		plan          composemodel.Plan
 		err           error
 	)
 	if opts.Restoring != "" {
-		savepoint, err := s.loadSavepoint(ctx, opts.Restoring)
+		savepoint, err := sessionstore.LoadSavepoint(ctx, s.savepointRepo, opts.Restoring)
 		if err != nil {
-			return captureplan.Plan{}, err
+			return composemodel.Plan{}, err
 		}
 		restoring = &savepoint
 	}
 	if capturePolicy, labelsIgnored, err = s.resolveCapturePolicy(ctx, introspection, restoring); err != nil {
-		return captureplan.Plan{}, &provider.CapturePolicyError{Err: err}
+		return composemodel.Plan{}, &provider.CapturePolicyError{Err: err}
 	}
 	plan, err = s.newPlan(ctx, introspection, capturePolicy, labelsIgnored)
 	if err != nil {
 		// No plan carries labelsIgnored back, and following the config may be why it failed.
 		warnLabelsIgnored(ctx, labelsIgnored)
-		return captureplan.Plan{}, err
+		return composemodel.Plan{}, err
 	}
 	return plan, nil
 }
@@ -96,18 +94,6 @@ func (s *Provider) resolveCapturePolicy(
 		return capturePolicy, nil, nil
 	}
 	return s.newReplacementPolicy(ctx, introspection, *restoring)
-}
-
-// loadSavepoint reads the record of the savepoint id names.
-func (s *Provider) loadSavepoint(ctx context.Context, id model.SavepointID) (model.Savepoint, error) {
-	savepoints, err := s.savepointRepo.LoadSavepoints(ctx, []model.SavepointID{id})
-	if err != nil {
-		return model.Savepoint{}, err
-	}
-	if len(savepoints) == 0 {
-		return model.Savepoint{}, fmt.Errorf("%w: %s", errRecordNotFound, id)
-	}
-	return savepoints[0], nil
 }
 
 // newReplacementPolicy is the live policy of a project about to be replaced with restoring, every
@@ -205,9 +191,9 @@ func volumesOf(savepoint model.Savepoint) []model.Volume {
 // capturePolicy takes; an absent compose project or an empty capture is refused.
 func (s *Provider) newPlan(
 	ctx context.Context, introspection model.IntrospectionResult, capturePolicy model.CapturePolicy, labelsIgnored error,
-) (captureplan.Plan, error) {
+) (composemodel.Plan, error) {
 	if err := requireComposeProject(introspection); err != nil {
-		return captureplan.Plan{}, err
+		return composemodel.Plan{}, err
 	}
 
 	containers := newContainerRefs(ctx, introspection)
@@ -216,35 +202,35 @@ func (s *Provider) newPlan(
 	// Before the stop, so a spec that cannot be rebuilt leaves the project running.
 	assembled, err := s.projectAssembler.Assemble(ctx, introspection)
 	if err != nil {
-		return captureplan.Plan{}, fmt.Errorf("assembling the compose spec: %w", err)
+		return composemodel.Plan{}, fmt.Errorf("assembling the compose spec: %w", err)
 	}
 	// The spec says what this capture takes and why, so the savepoint explains itself.
 	stampServices(assembled, capturepolicy.Stamps(introspection, capturePolicy))
 	spec, err := s.specCodec.Marshal(assembled)
 	if err != nil {
-		return captureplan.Plan{}, fmt.Errorf("rendering the compose spec: %w", err)
+		return composemodel.Plan{}, fmt.Errorf("rendering the compose spec: %w", err)
 	}
 	// Through the loader, as a rollback reads the artifact: the live compose project is
 	// acted on as these very bytes describe it.
 	project, err := s.specCodec.Parse(ctx, spec)
 	if err != nil {
-		return captureplan.Plan{}, fmt.Errorf("parsing the compose spec: %w", err)
+		return composemodel.Plan{}, fmt.Errorf("parsing the compose spec: %w", err)
 	}
 
 	volumes, notCovered, err := s.resolveBackupVolumes(ctx, introspection, capturePolicy)
 	if err != nil {
-		return captureplan.Plan{}, err
+		return composemodel.Plan{}, err
 	}
 	if len(volumes) == 0 {
-		return captureplan.Plan{}, errNoVolumesToBackUp
+		return composemodel.Plan{}, errNoVolumesToBackUp
 	}
 
 	backends, err := s.newBackends(volumes)
 	if err != nil {
-		return captureplan.Plan{}, err
+		return composemodel.Plan{}, err
 	}
 
-	return captureplan.Plan{
+	return composemodel.Plan{
 		Project:        project,
 		Spec:           spec,
 		Volumes:        backends,
@@ -299,12 +285,12 @@ func stampServices(project *types.Project, labels map[string]map[string]string) 
 
 // newServiceHolds decides how each service is held still and sorts its replicas by what the daemon
 // reported of them: running, or already still.
-func newServiceHolds(introspection model.IntrospectionResult, capturePolicy model.CapturePolicy) []captureplan.ServiceHold {
-	holds := make([]captureplan.ServiceHold, 0, len(introspection.Project.Services))
+func newServiceHolds(introspection model.IntrospectionResult, capturePolicy model.CapturePolicy) []composemodel.ServiceHold {
+	holds := make([]composemodel.ServiceHold, 0, len(introspection.Project.Services))
 	for _, svc := range introspection.Project.Services {
 		var (
 			running []model.ContainerRef
-			idle    []captureplan.IdleReplica
+			idle    []composemodel.IdleReplica
 		)
 		for _, replica := range svc.Containers {
 			ref := model.ContainerRef{
@@ -319,12 +305,12 @@ func newServiceHolds(introspection model.IntrospectionResult, capturePolicy mode
 				running = append(running, ref)
 				continue
 			}
-			idle = append(idle, captureplan.IdleReplica{
+			idle = append(idle, composemodel.IdleReplica{
 				Ref:   ref,
 				State: string(state.Status),
 			})
 		}
-		holds = append(holds, captureplan.ServiceHold{
+		holds = append(holds, composemodel.ServiceHold{
 			Service: svc.Name,
 			Mode:    cmp.Or(capturePolicy.DecideService(svc.Name).Mode, model.CaptureModeStop),
 			Running: running,

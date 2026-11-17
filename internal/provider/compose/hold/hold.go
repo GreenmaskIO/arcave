@@ -26,7 +26,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider/compose/captureplan"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -72,7 +72,7 @@ type Triggers []trigger
 // NewTriggersByMode builds the triggers of plan: the stop, the pause and the live services,
 // each group its own trigger; the start after the capture waits waitTimeout on health checks.
 func NewTriggersByMode(
-	composeRunner ComposeRunner, control ContainerControl, plan captureplan.Plan, waitTimeout time.Duration,
+	composeRunner ComposeRunner, control ContainerControl, plan composemodel.Plan, waitTimeout time.Duration,
 ) Triggers {
 	stopped := plan.ServicesHeldBy(model.CaptureModeStop)
 	paused := plan.ServicesHeldBy(model.CaptureModePause)
@@ -252,7 +252,7 @@ func unpauseReplicas(
 }
 
 // newServiceNames names the services.
-func newServiceNames(services []captureplan.ServiceHold) []string {
+func newServiceNames(services []composemodel.ServiceHold) []string {
 	var names []string
 	for _, service := range services {
 		names = append(names, service.Service)
@@ -261,7 +261,7 @@ func newServiceNames(services []captureplan.ServiceHold) []string {
 }
 
 // newRunningReplicas are the services' running replicas.
-func newRunningReplicas(services []captureplan.ServiceHold) []model.ContainerRef {
+func newRunningReplicas(services []composemodel.ServiceHold) []model.ContainerRef {
 	var running []model.ContainerRef
 	for _, service := range services {
 		running = append(running, service.Running...)
@@ -270,7 +270,7 @@ func newRunningReplicas(services []captureplan.ServiceHold) []model.ContainerRef
 }
 
 // newPausedOnEntry are the services' replicas found frozen.
-func newPausedOnEntry(services []captureplan.ServiceHold) []model.ContainerRef {
+func newPausedOnEntry(services []composemodel.ServiceHold) []model.ContainerRef {
 	var paused []model.ContainerRef
 	for _, service := range services {
 		paused = append(paused, service.PausedOnEntry()...)

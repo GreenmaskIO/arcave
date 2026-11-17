@@ -27,7 +27,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/provider/compose/captureplan"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/pkg/progress"
@@ -49,8 +49,8 @@ func demoWritableLayer() model.WritableLayer {
 }
 
 // demoImagePlan captures one volume, one image and one writable layer.
-func demoImagePlan(backend model.VolumeSnapshotBackend) captureplan.Plan {
-	return captureplan.Plan{
+func demoImagePlan(backend model.VolumeSnapshotBackend) composemodel.Plan {
+	return composemodel.Plan{
 		Spec:           demoSpecBytes,
 		Volumes:        []model.VolumeSnapshotBackend{backend},
 		Images:         []model.ImageCaptureRequest{demoImageCaptureRequest()},
@@ -222,7 +222,7 @@ func TestCapturer_Capture_ImageNotStoredWarns(t *testing.T) {
 		ImageBackend:  images,
 		Store:         composetest.NewDirStore(t),
 	})
-	plan := captureplan.Plan{
+	plan := composemodel.Plan{
 		Spec:   demoSpecBytes,
 		Images: []model.ImageCaptureRequest{demoImageCaptureRequest()},
 	}

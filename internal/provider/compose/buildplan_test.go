@@ -29,6 +29,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
 )
 
@@ -286,7 +287,7 @@ func TestProvider_BuildPlan_Restoring(t *testing.T) {
 		wantErr error
 	}{
 		{name: "the record is read and kept", found: []model.Savepoint{record}},
-		{name: "a record not found", wantErr: errRecordNotFound},
+		{name: "a record not found", wantErr: sessionstore.ErrRecordNotFound},
 		{name: "a record that cannot be read", readErr: errRead, wantErr: errRead},
 	}
 	for _, tt := range tests {

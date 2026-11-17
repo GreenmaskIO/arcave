@@ -31,14 +31,14 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/provider/compose/captureplan"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 )
 
 // captureAndCommit captures plan as held, killed being what the hold killed, and commits it.
 func captureAndCommit(
-	ctx context.Context, svc *Capturer, plan captureplan.Plan, killed []string, req provider.CaptureRequest,
+	ctx context.Context, svc *Capturer, plan composemodel.Plan, killed []string, req provider.CaptureRequest,
 ) (model.Savepoint, error) {
 	captured, err := svc.Capture(ctx, plan, killed, req)
 	if err != nil {
@@ -72,7 +72,7 @@ func TestCapturer_Capture_HeartbeatFramesTheCapture(t *testing.T) {
 	mock.InOrder(snapshot, spec, commit)
 	runner := heartbeat.RunnerInfo{Host: "laptop", PID: 42, ArcaveVersion: "v1"}
 	svc := New(Deps{SavepointRepo: repo, Store: store, RunnerInfo: runner})
-	plan := captureplan.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
+	plan := composemodel.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
 
 	// Act
 	savepoint, err := captureAndCommit(ctx, svc, plan, nil, provider.CaptureRequest{Name: "sp"})
@@ -106,7 +106,7 @@ func TestCapturer_Capture_HeartbeatLostCommitsNothing(t *testing.T) {
 		HeartbeatInterval:   10 * time.Millisecond,
 		HeartbeatStaleAfter: 30 * time.Millisecond,
 	})
-	plan := captureplan.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
+	plan := composemodel.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
 
 	// Act
 	savepoint, err := captureAndCommit(ctx, svc, plan, nil, provider.CaptureRequest{Name: "sp"})
@@ -127,7 +127,7 @@ func TestCapturer_Capture_RefusesAnOccupiedTreeBeforeTheHeartbeat(t *testing.T) 
 	backend := composetest.NewMockBackend(demoVolume())
 	repo := &composetest.MockSavepointRepo{}
 	svc := New(Deps{SavepointRepo: repo, Store: store})
-	plan := captureplan.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
+	plan := composemodel.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
 
 	// Act
 	_, err := captureAndCommit(ctx, svc, plan, nil, provider.CaptureRequest{Name: "sp"})
@@ -206,7 +206,7 @@ func TestCaptured_Commit(t *testing.T) {
 				SavepointRepo: repo,
 				Store:         store,
 			})
-			plan := captureplan.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
+			plan := composemodel.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
 			ctx := composetest.NewTestContext()
 			captured, err := svc.Capture(ctx, plan, nil, provider.CaptureRequest{Name: "sp"})
 			require.NoError(t, err)
@@ -245,7 +245,7 @@ func TestCaptured_Abandon(t *testing.T) {
 		SavepointRepo: repo,
 		Store:         store,
 	})
-	plan := captureplan.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
+	plan := composemodel.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
 	ctx := composetest.NewTestContext()
 	captured, err := svc.Capture(ctx, plan, nil, provider.CaptureRequest{Name: "sp"})
 	require.NoError(t, err)
@@ -319,7 +319,7 @@ func TestCapturer_Capture_RecordsTheRequest(t *testing.T) {
 	svc := New(Deps{SavepointRepo: repo, Store: composetest.NewDirStore(t)})
 
 	// Act
-	savepoint, err := captureAndCommit(composetest.NewTestContext(), svc, captureplan.Plan{Spec: demoSpecBytes}, nil, req)
+	savepoint, err := captureAndCommit(composetest.NewTestContext(), svc, composemodel.Plan{Spec: demoSpecBytes}, nil, req)
 
 	// Assert
 	require.NoError(t, err)
@@ -340,7 +340,7 @@ func TestCapturer_Capture_UncommittedOnFailure(t *testing.T) {
 		Return(model.SnapshotStat{}, errors.New("capture boom")).Once()
 	repo := &composetest.MockSavepointRepo{}
 	svc := New(Deps{SavepointRepo: repo, Store: composetest.NewDirStore(t)})
-	plan := captureplan.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
+	plan := composemodel.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
 
 	// Act
 	savepoint, err := captureAndCommit(composetest.NewTestContext(), svc, plan, nil, provider.CaptureRequest{Name: "sp"})
@@ -372,7 +372,7 @@ func TestCapturer_Capture_RetainsWhatAPartialCaptureWrote(t *testing.T) {
 	repo := &composetest.MockSavepointRepo{}
 	// One at a time, so the failure comes after the first volume is written.
 	svc := New(Deps{SavepointRepo: repo, Store: store, Concurrency: 1})
-	plan := captureplan.Plan{Volumes: []model.VolumeSnapshotBackend{written, failed}, Spec: demoSpecBytes}
+	plan := composemodel.Plan{Volumes: []model.VolumeSnapshotBackend{written, failed}, Spec: demoSpecBytes}
 	logs := &composetest.SyncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -420,7 +420,7 @@ func TestCapturer_Capture_CreatesTheIDFromTheClock(t *testing.T) {
 	})).Return(nil).Once()
 	store := composetest.NewDirStore(t)
 	svc := New(Deps{SavepointRepo: repo, ImageBackend: images, Store: store})
-	plan := captureplan.Plan{
+	plan := composemodel.Plan{
 		Spec:           demoSpecBytes,
 		Volumes:        []model.VolumeSnapshotBackend{backend},
 		WritableLayers: []model.WritableLayerCaptureRequest{{Container: demoContainerRef()}},

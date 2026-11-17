@@ -26,7 +26,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/provider/compose/captureplan"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
 )
 
@@ -57,7 +57,7 @@ func TestNewServiceHolds(t *testing.T) {
 		name     string
 		services []model.Service
 		policy   model.CapturePolicy
-		want     func(services []model.Service) []captureplan.ServiceHold
+		want     func(services []model.Service) []composemodel.ServiceHold
 	}{
 		{
 			name: "mixed modes, a service with no decision held by the policy's mode",
@@ -73,8 +73,8 @@ func TestNewServiceHolds(t *testing.T) {
 					"web": {Mode: model.CaptureModePause},
 				},
 			},
-			want: func(services []model.Service) []captureplan.ServiceHold {
-				return []captureplan.ServiceHold{
+			want: func(services []model.Service) []composemodel.ServiceHold {
+				return []composemodel.ServiceHold{
 					{Service: "db", Mode: model.CaptureModeStop, Running: []model.ContainerRef{refOf(services[0].Containers[0], "db")}},
 					{Service: "web", Mode: model.CaptureModePause, Running: []model.ContainerRef{refOf(services[1].Containers[0], "web")}},
 					{Service: "worker", Mode: model.CaptureModeLive, Running: []model.ContainerRef{refOf(services[2].Containers[0], "worker")}},
@@ -90,13 +90,13 @@ func TestNewServiceHolds(t *testing.T) {
 				newStateReplica("db", 4, restarting),
 				newStateReplica("db", 5, nil),
 			}}},
-			want: func(services []model.Service) []captureplan.ServiceHold {
+			want: func(services []model.Service) []composemodel.ServiceHold {
 				replicas := services[0].Containers
-				return []captureplan.ServiceHold{{
+				return []composemodel.ServiceHold{{
 					Service: "db",
 					Mode:    model.CaptureModeStop,
 					Running: []model.ContainerRef{refOf(replicas[4], "db")},
-					Idle: []captureplan.IdleReplica{
+					Idle: []composemodel.IdleReplica{
 						{Ref: refOf(replicas[0], "db"), State: "paused"},
 						{Ref: refOf(replicas[1], "db"), State: "exited"},
 						{Ref: refOf(replicas[2], "db"), State: "created"},
@@ -188,7 +188,7 @@ func TestProvider_BuildPlan_HoldsEachServiceByItsMode(t *testing.T) {
 
 			// Assert
 			require.NoError(t, err)
-			assert.Equal(t, []captureplan.ServiceHold{{
+			assert.Equal(t, []composemodel.ServiceHold{{
 				Service: composetest.DemoService,
 				Mode:    tt.wantMode,
 				Running: []model.ContainerRef{{Service: composetest.DemoService, Replica: 1, ID: composetest.DemoContainerID, Name: composetest.DemoContainerName(1)}},

@@ -20,8 +20,9 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/provider/compose/captureplan"
 	"github.com/greenmaskio/arcave/internal/provider/compose/hold"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -29,13 +30,13 @@ import (
 // project it holds orphans, and the volumes the project owned when it was inspected.
 type capturePlan struct {
 	service              *Provider
-	plan                 captureplan.Plan
+	plan                 composemodel.Plan
 	anonymousVolumeNames map[string]string
 	ownedBefore          map[string]bool
 }
 
 // newCapturePlan wraps plan of the introspected project in the handle core holds a capture by.
-func (s *Provider) newCapturePlan(plan captureplan.Plan, introspection model.IntrospectionResult) capturePlan {
+func (s *Provider) newCapturePlan(plan composemodel.Plan, introspection model.IntrospectionResult) capturePlan {
 	return capturePlan{
 		service:              s,
 		plan:                 plan,
@@ -74,7 +75,7 @@ func (p capturePlan) Release(ctx context.Context, waitTimeout time.Duration) err
 // teardown orphans and the volumes it owned when it was inspected.
 type heldWorkload struct {
 	service              *Provider
-	plan                 captureplan.Plan
+	plan                 composemodel.Plan
 	killed               []string
 	anonymousVolumeNames map[string]string
 	ownedBefore          map[string]bool
@@ -90,7 +91,7 @@ func (h heldWorkload) Capture(ctx context.Context, req provider.CaptureRequest) 
 func (h heldWorkload) PrepareSavepoint(
 	ctx context.Context, id model.SavepointID, opts provider.PrepareOptions,
 ) (provider.PreparedSavepoint, error) {
-	savepoint, err := h.service.loadSavepoint(ctx, id)
+	savepoint, err := sessionstore.LoadSavepoint(ctx, h.service.savepointRepo, id)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +122,7 @@ func (h heldWorkload) Teardown(ctx context.Context) (provider.VacantWorkload, er
 }
 
 // hold holds the project still as plan says and returns the containers the stop killed.
-func (s *Provider) hold(ctx context.Context, plan captureplan.Plan) (_ []string, err error) {
+func (s *Provider) hold(ctx context.Context, plan composemodel.Plan) (_ []string, err error) {
 	ctx, step := progress.Run(ctx, progress.Step{Kind: kindSavepointHold}, progress.MeasureResources)
 	defer func() { step.End(err) }()
 
@@ -129,7 +130,7 @@ func (s *Provider) hold(ctx context.Context, plan captureplan.Plan) (_ []string,
 }
 
 // release brings back the project plan holds, waiting waitTimeout on its health checks.
-func (s *Provider) release(revertCtx context.Context, plan captureplan.Plan, waitTimeout time.Duration) (err error) {
+func (s *Provider) release(revertCtx context.Context, plan composemodel.Plan, waitTimeout time.Duration) (err error) {
 	revertCtx, step := progress.Run(revertCtx, progress.Step{Kind: kindSavepointRelease}, progress.MeasureResources)
 	defer func() { step.End(err) }()
 
