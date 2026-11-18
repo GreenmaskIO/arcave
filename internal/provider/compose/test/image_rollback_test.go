@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config/storageconfig"
+	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose"
@@ -203,9 +203,9 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	})
 
 	projectRoot := t.TempDir()
-	store, err := storefactory.New(t.Context(), storageconfig.Storage{
-		Type:      storageconfig.StorageTypeDirectory,
-		Directory: &storageconfig.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
+	store, err := storefactory.New(t.Context(), config.Storage{
+		Type:      config.StorageTypeDirectory,
+		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 	}, projectRoot, "arcave-image-rollback-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 

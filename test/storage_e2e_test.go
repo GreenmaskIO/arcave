@@ -42,7 +42,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/greenmaskio/arcave/internal/config"
-	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
@@ -74,9 +73,9 @@ const (
 // the ARCAVE_* variables the binary runs with, and the full config the test opens to
 // check what landed.
 type storageTarget struct {
-	file    storageconfig.Storage
+	file    config.Storage
 	env     []string
-	storage storageconfig.Storage
+	storage config.Storage
 }
 
 // storageServers start each server the storages library ships a backend for, one
@@ -85,10 +84,10 @@ var storageServers = []struct {
 	name  string
 	start func(t *testing.T) storageTarget
 }{
-	{name: storageconfig.StorageTypeDirectory, start: startDirectoryStorage},
-	{name: storageconfig.StorageTypeS3, start: startS3Storage},
-	{name: storageconfig.StorageTypeAzure, start: startAzureStorage},
-	{name: storageconfig.StorageTypeSSH, start: startSSHStorage},
+	{name: config.StorageTypeDirectory, start: startDirectoryStorage},
+	{name: config.StorageTypeS3, start: startS3Storage},
+	{name: config.StorageTypeAzure, start: startAzureStorage},
+	{name: config.StorageTypeSSH, start: startSSHStorage},
 }
 
 // storageE2EBackend is one snapshot backend a storage server is driven through.
@@ -222,9 +221,9 @@ func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend
 func startDirectoryStorage(t *testing.T) storageTarget {
 	t.Helper()
 
-	storage := storageconfig.Storage{
-		Type:      storageconfig.StorageTypeDirectory,
-		Directory: &storageconfig.DirectoryStorage{Path: t.TempDir()},
+	storage := config.Storage{
+		Type:      config.StorageTypeDirectory,
+		Directory: &config.DirectoryStorage{Path: t.TempDir()},
 	}
 	return storageTarget{file: storage, storage: storage}
 }
@@ -243,7 +242,7 @@ func startS3Storage(t *testing.T) storageTarget {
 	endpoint, err := server.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	bucket := storageconfig.S3Storage{
+	bucket := config.S3Storage{
 		Endpoint:    "http://" + endpoint,
 		Bucket:      storageE2EBucket,
 		Prefix:      "it-" + daemontest.RandomSuffix(t),
@@ -263,9 +262,9 @@ func startS3Storage(t *testing.T) storageTarget {
 	inFile.SecretAccessKey = "${" + s3SecretVar + "}"
 	bucket.SecretAccessKey = server.Password
 	return storageTarget{
-		file:    storageconfig.Storage{Type: storageconfig.StorageTypeS3, S3: &inFile},
+		file:    config.Storage{Type: config.StorageTypeS3, S3: &inFile},
 		env:     []string{s3SecretVar + "=" + server.Password},
-		storage: storageconfig.Storage{Type: storageconfig.StorageTypeS3, S3: &bucket},
+		storage: config.Storage{Type: config.StorageTypeS3, S3: &bucket},
 	}
 }
 
@@ -285,7 +284,7 @@ func startAzureStorage(t *testing.T) storageTarget {
 	serviceURL, err := server.BlobServiceURL(ctx)
 	require.NoError(t, err)
 
-	blobs := storageconfig.AzureStorage{
+	blobs := config.AzureStorage{
 		Container:      "arcave-e2e",
 		StorageAccount: azurite.AccountName,
 		Prefix:         "it-" + daemontest.RandomSuffix(t),
@@ -302,9 +301,9 @@ func startAzureStorage(t *testing.T) storageTarget {
 	inFile := blobs
 	inFile.AccessKey = "${" + azureKeyVar + "}"
 	return storageTarget{
-		file:    storageconfig.Storage{Type: storageconfig.StorageTypeAzure, Azure: &inFile},
+		file:    config.Storage{Type: config.StorageTypeAzure, Azure: &inFile},
 		env:     []string{azureKeyVar + "=" + azurite.AccountKey},
-		storage: storageconfig.Storage{Type: storageconfig.StorageTypeAzure, Azure: &blobs},
+		storage: config.Storage{Type: config.StorageTypeAzure, Azure: &blobs},
 	}
 }
 
@@ -334,7 +333,7 @@ func startSSHStorage(t *testing.T) storageTarget {
 	port, err := strconv.Atoi(rawPort)
 	require.NoError(t, err)
 
-	storage := storageconfig.Storage{Type: storageconfig.StorageTypeSSH, SSH: &storageconfig.SSHStorage{
+	storage := config.Storage{Type: config.StorageTypeSSH, SSH: &config.SSHStorage{
 		Host:     host,
 		Port:     port,
 		User:     sftpUser,
@@ -369,7 +368,7 @@ func runArcave(t *testing.T, projectRoot string, env []string, args ...string) [
 
 // writeStorageConfig points the project's config.yaml at storage and backend,
 // keeping what init wrote.
-func writeStorageConfig(t *testing.T, projectRoot string, storage storageconfig.Storage, backend string) {
+func writeStorageConfig(t *testing.T, projectRoot string, storage config.Storage, backend string) {
 	t.Helper()
 
 	writeStorageConfigWith(t, projectRoot, storage, storageE2EBackend{
@@ -381,7 +380,7 @@ func writeStorageConfig(t *testing.T, projectRoot string, storage storageconfig.
 // writeStorageConfigWith is writeStorageConfig for a row that also names fullcopy's compression
 // and whether the store is encrypted.
 func writeStorageConfigWith(
-	t *testing.T, projectRoot string, storage storageconfig.Storage, backend storageE2EBackend, encrypted bool,
+	t *testing.T, projectRoot string, storage config.Storage, backend storageE2EBackend, encrypted bool,
 ) {
 	t.Helper()
 
@@ -403,7 +402,7 @@ func writeStorageConfigWith(
 
 // assertRecord says whether the store holds id's commit marker in the session's compose project.
 func assertRecord(
-	t *testing.T, storage storageconfig.Storage, arcaveProject, composeProject string,
+	t *testing.T, storage config.Storage, arcaveProject, composeProject string,
 	session model.SessionID, id model.SavepointID, want bool,
 ) {
 	t.Helper()
@@ -434,7 +433,7 @@ type storageE2EGarbage struct {
 // assertRecordEncrypted says whether savepoint's record is stored as an age file, unreadable
 // without the arcave project's key, and the arcave project marked encrypted.
 func assertRecordEncrypted(
-	t *testing.T, storage storageconfig.Storage, arcaveProject, composeProject string,
+	t *testing.T, storage config.Storage, arcaveProject, composeProject string,
 	savepoint model.Savepoint, want bool,
 ) {
 	t.Helper()

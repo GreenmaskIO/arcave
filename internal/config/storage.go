@@ -12,12 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package storageconfig is the storage section of arcave's config: the union of the stores arcave
-// opens, its defaults and its validation. internal/storefactory turns it into a store.
-package storageconfig
+package config
 
 import (
-	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -42,11 +39,6 @@ const (
 
 // DefaultSSHPort is the port storage.ssh.port defaults to.
 const DefaultSSHPort = 22
-
-var (
-	errSSHNoCredential         = errors.New("storage.ssh needs password or private_key_path")
-	errSSHPassphraseWithoutKey = errors.New("storage.ssh.private_key_passphrase needs private_key_path")
-)
 
 var storageTypes = []string{StorageTypeDirectory, StorageTypeS3, StorageTypeAzure, StorageTypeSSH}
 
@@ -155,17 +147,18 @@ func (s Storage) Validate() error {
 			return err
 		}
 		if s.SSH.Password == "" && s.SSH.PrivateKeyPath == "" {
-			return errSSHNoCredential
+			return fmt.Errorf("%w: storage.ssh needs password or private_key_path", ErrInvalid)
 		}
 		if s.SSH.PrivateKeyPassphrase != "" && s.SSH.PrivateKeyPath == "" {
-			return errSSHPassphraseWithoutKey
+			return fmt.Errorf("%w: storage.ssh.private_key_passphrase needs private_key_path", ErrInvalid)
 		}
 		if s.SSH.ConnectTimeout < 0 {
-			return fmt.Errorf("storage.ssh.connect_timeout must not be negative, got %s", s.SSH.ConnectTimeout)
+			return fmt.Errorf("%w: storage.ssh.connect_timeout must not be negative, got %s", ErrInvalid, s.SSH.ConnectTimeout)
 		}
 		return nil
 	default:
-		return fmt.Errorf("unsupported storage.type %q (supported: %s)", s.Type, strings.Join(storageTypes, ", "))
+		return fmt.Errorf("%w: unsupported storage.type %q (supported: %s)", ErrInvalid,
+			s.Type, strings.Join(storageTypes, ", "))
 	}
 }
 
@@ -179,10 +172,10 @@ func (s Storage) DirectoryPath() string {
 	return s.Directory.Path
 }
 
-// WithDefaults fills the selected arm's defaults and drops every other arm. Each
+// withDefaults fills the selected arm's defaults and drops every other arm. Each
 // arm is filled on a copy, never through the caller's pointer, since a Config is
 // passed around by value.
-func (s Storage) WithDefaults() Storage {
+func (s Storage) withDefaults() Storage {
 	if s.Type == "" {
 		s.Type = StorageTypeDirectory
 	}
@@ -223,7 +216,7 @@ func (s Storage) WithDefaults() Storage {
 }
 
 func missingArmError(storageType string) error {
-	return fmt.Errorf("storage.type is %q but no storage.%s section is present", storageType, storageType)
+	return fmt.Errorf("%w: storage.type is %q but no storage.%s section is present", ErrInvalid, storageType, storageType)
 }
 
 // validateEndpoint refuses an endpoint URL carrying a credential: user info, or a
@@ -234,17 +227,17 @@ func validateEndpoint(storageType, endpoint, hint string) error {
 	}
 	parsed, err := url.Parse(endpoint)
 	if err != nil {
-		return fmt.Errorf("storage.%s.endpoint: %w", storageType, err)
+		return fmt.Errorf("%w: storage.%s.endpoint: %w", ErrInvalid, storageType, err)
 	}
 	if parsed.User != nil {
-		return fmt.Errorf("storage.%s.endpoint must not carry user info; set the credential fields instead",
-			storageType)
+		return fmt.Errorf("%w: storage.%s.endpoint must not carry user info; set the credential fields instead",
+			ErrInvalid, storageType)
 	}
 	if parsed.RawQuery != "" {
 		if hint != "" {
 			hint = "; " + hint
 		}
-		return fmt.Errorf("storage.%s.endpoint must not carry a query string%s", storageType, hint)
+		return fmt.Errorf("%w: storage.%s.endpoint must not carry a query string%s", ErrInvalid, storageType, hint)
 	}
 	return nil
 }
@@ -253,7 +246,7 @@ func validateEndpoint(storageType, endpoint, hint string) error {
 func requireFields(storageType string, fields ...[2]string) error {
 	for _, field := range fields {
 		if field[1] == "" {
-			return fmt.Errorf("storage.%s.%s is required", storageType, field[0])
+			return fmt.Errorf("%w: storage.%s.%s is required", ErrInvalid, storageType, field[0])
 		}
 	}
 	return nil

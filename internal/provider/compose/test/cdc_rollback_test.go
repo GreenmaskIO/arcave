@@ -35,7 +35,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config/storageconfig"
+	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
@@ -272,7 +272,7 @@ type cdcEnv struct {
 
 	// What serviceIn wires another session's service from.
 	projectRoot   string
-	storageCfg    storageconfig.Storage
+	storageCfg    config.Storage
 	cdcCfg        composeconfig.CDCBackend
 	hostNetwork   bool
 	containerHost string
@@ -316,9 +316,9 @@ func newCDCEnv(t *testing.T, cdcCfg composeconfig.CDCBackend) *cdcEnv {
 		volumes: volumes,
 
 		projectRoot: t.TempDir(),
-		storageCfg: storageconfig.Storage{
-			Type:      storageconfig.StorageTypeDirectory,
-			Directory: &storageconfig.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
+		storageCfg: config.Storage{
+			Type:      config.StorageTypeDirectory,
+			Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 		},
 		cdcCfg:        cdcCfg,
 		hostNetwork:   hostNetwork,

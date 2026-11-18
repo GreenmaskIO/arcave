@@ -32,7 +32,6 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/utils"
@@ -56,10 +55,10 @@ const DefaultConcurrency = 5
 // One section per subsystem: a new subsystem adds a section rather than another
 // top-level key.
 type Config struct {
-	Project    Project               `yaml:"project" mapstructure:"project"`
-	Common     Common                `yaml:"common" mapstructure:"common"`
-	Storage    storageconfig.Storage `yaml:"storage" mapstructure:"storage"`
-	Encryption Encryption            `yaml:"encryption,omitempty" mapstructure:"encryption"`
+	Project    Project    `yaml:"project" mapstructure:"project"`
+	Common     Common     `yaml:"common" mapstructure:"common"`
+	Storage    Storage    `yaml:"storage" mapstructure:"storage"`
+	Encryption Encryption `yaml:"encryption,omitempty" mapstructure:"encryption"`
 	// ComposeProvider is the compose provider's sections — docker, compose, snapshot,
 	// writable_layers, capture, backends — inline, at the top level of the file.
 	ComposeProvider composeconfig.Config `yaml:",inline" mapstructure:",squash"`
@@ -175,7 +174,7 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 		c.Common.Concurrency = DefaultConcurrency
 	}
 	c.ComposeProvider.ApplyDefaults()
-	c.Storage = c.Storage.WithDefaults()
+	c.Storage = c.Storage.withDefaults()
 	if c.Rollback.SafetySnapshot == nil {
 		c.Rollback.SafetySnapshot = utils.New(true)
 	}
@@ -197,7 +196,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if err := c.Storage.Validate(); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalid, err)
+		return err
 	}
 	return c.GC.Validate()
 }

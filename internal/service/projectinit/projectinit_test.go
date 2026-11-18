@@ -24,7 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/config"
-	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
@@ -129,7 +128,7 @@ func TestService_Init_LeavesTheCallersConfigUntouched(t *testing.T) {
 		return c.Project.Name != ""
 	})).Return(nil)
 	svc := New("/proj", cw)
-	cfg := config.Config{Storage: storageconfig.Storage{Directory: &storageconfig.DirectoryStorage{}}}
+	cfg := config.Config{Storage: config.Storage{Directory: &config.DirectoryStorage{}}}
 
 	// Act
 	_, _, err := svc.Init(context.Background(), cfg, false)

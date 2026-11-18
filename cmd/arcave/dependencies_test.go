@@ -36,7 +36,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/config"
-	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
@@ -50,9 +49,9 @@ func newUnreachableDaemonConfig(t *testing.T, projectPath string) config.Config 
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 	cfg := config.Config{
 		Project: config.Project{Name: "app"},
-		Storage: storageconfig.Storage{
-			Type:      storageconfig.StorageTypeDirectory,
-			Directory: &storageconfig.DirectoryStorage{Path: t.TempDir()},
+		Storage: config.Storage{
+			Type:      config.StorageTypeDirectory,
+			Directory: &config.DirectoryStorage{Path: t.TempDir()},
 		},
 		ComposeProvider: composeconfig.Config{
 			Docker: composeconfig.Docker{Host: "tcp://127.0.0.1:1"},

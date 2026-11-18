@@ -27,7 +27,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/config"
-	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/utils"
@@ -50,7 +49,7 @@ func TestResolveConfig(t *testing.T) {
 			wantFound: false,
 			verify: func(t *testing.T, root string, cfg config.Config) {
 				assert.Equal(t, filepath.Base(root), cfg.Project.Name)
-				assert.Equal(t, storageconfig.StorageTypeDirectory, cfg.Storage.Type)
+				assert.Equal(t, config.StorageTypeDirectory, cfg.Storage.Type)
 				// No project segment: storefactory roots the store at the project itself.
 				assert.Equal(t, filepath.Join(".arcave", "storage"), cfg.Storage.DirectoryPath())
 				assert.Equal(t, composeconfig.SnapshotBackendFullCopy, cfg.ComposeProvider.Snapshot.Backend)
@@ -86,7 +85,7 @@ func TestResolveConfig(t *testing.T) {
 			verify: func(t *testing.T, _ string, cfg config.Config) {
 				assert.Equal(t, "proj", cfg.Project.Name)
 				assert.Equal(t, "unix:///tmp/d.sock", cfg.ComposeProvider.Docker.Host)
-				assert.Equal(t, storageconfig.StorageTypeDirectory, cfg.Storage.Type)
+				assert.Equal(t, config.StorageTypeDirectory, cfg.Storage.Type)
 				assert.Equal(t, "/snaps", cfg.Storage.DirectoryPath())
 				assert.Equal(t, composeconfig.SnapshotBackendFullCopy, cfg.ComposeProvider.Snapshot.Backend)
 				assert.Equal(t, "warn", cfg.Log.Level)
@@ -279,7 +278,7 @@ func TestResolveWithoutFile(t *testing.T) {
 		{name: "no file", wantFound: false},
 		{
 			name: "another project's environment does not stop it",
-			env:  map[string]string{"ARCAVE_STORAGE_TYPE": storageconfig.StorageTypeS3},
+			env:  map[string]string{"ARCAVE_STORAGE_TYPE": config.StorageTypeS3},
 		},
 		{name: "a valid file is not read", file: "project:\n  name: other\n", wantFound: true},
 		{name: "an unparsable file does not stop it", file: "project: [\n", wantFound: true},

@@ -26,7 +26,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
@@ -53,7 +52,7 @@ func TestUnmarshal(t *testing.T) {
 			name: "a minimal config defaults and validates",
 			yaml: "project:\n  name: myapp\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, storageconfig.StorageTypeDirectory, cfg.Storage.Type)
+				assert.Equal(t, StorageTypeDirectory, cfg.Storage.Type)
 				// The configured path carries no project segment: storefactory roots
 				// the store at the project itself.
 				assert.Equal(t, filepath.Join(model.StateDir, "storage"), cfg.Storage.DirectoryPath())
@@ -260,7 +259,7 @@ func TestUnmarshal(t *testing.T) {
 			yaml: "storage:\n  type: ssh\n  ssh:\n    host: backup\n    user: arcave\n    password: secret\n",
 			verify: func(t *testing.T, cfg Config) {
 				require.NotNil(t, cfg.Storage.SSH)
-				assert.Equal(t, storageconfig.DefaultSSHPort, cfg.Storage.SSH.Port)
+				assert.Equal(t, DefaultSSHPort, cfg.Storage.SSH.Port)
 			},
 		},
 		{

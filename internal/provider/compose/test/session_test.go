@@ -32,7 +32,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config/storageconfig"
+	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
@@ -55,7 +55,7 @@ const sessionArcaveProject = "arcave-session-tenant"
 type sessionEnv struct {
 	ctx         context.Context
 	projectRoot string
-	storage     storageconfig.Storage
+	storage     config.Storage
 	sessions    *core.SessionService
 	inflight    *inflightrepo.Repository
 	daemon      *client.Client
@@ -66,9 +66,9 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 	t.Helper()
 
 	projectRoot := t.TempDir()
-	storage := storageconfig.Storage{
-		Type:      storageconfig.StorageTypeDirectory,
-		Directory: &storageconfig.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
+	storage := config.Storage{
+		Type:      config.StorageTypeDirectory,
+		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 	}
 	root, err := storefactory.Root(t.Context(), storage, projectRoot)
 	require.NoError(t, err)

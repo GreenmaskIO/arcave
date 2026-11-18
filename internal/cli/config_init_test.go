@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/config"
-	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
@@ -34,9 +33,9 @@ import (
 func TestConfigInitHandler_Init(t *testing.T) {
 	cfg := config.Config{
 		Project: config.Project{Name: "demo"},
-		Storage: storageconfig.Storage{
-			Type:      storageconfig.StorageTypeDirectory,
-			Directory: &storageconfig.DirectoryStorage{Path: ".arcave/savepoints/demo"},
+		Storage: config.Storage{
+			Type:      config.StorageTypeDirectory,
+			Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/demo"},
 		},
 		Log: config.Log{Level: "debug", Format: "console"},
 		ComposeProvider: composeconfig.Config{
