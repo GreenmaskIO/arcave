@@ -22,6 +22,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -99,72 +100,16 @@ func (s *GarbageCollector) GarbageCollect(
 	if err := req.Validate(); err != nil {
 		return model.GarbageCollectResult{}, err
 	}
-	return withUnlock(ctx, s.locker, func() (model.GarbageCollectResult, error) {
-		if err := s.writeAdmission.AdmitWrite(ctx); err != nil {
-			return model.GarbageCollectResult{}, fmt.Errorf("admit the write: %w", err)
-		}
-		return withSessionLock(ctx, s.sessionLocker, func(ctx context.Context, grantedLock model.GrantedSessionLock) (
-			model.GarbageCollectResult, error,
-		) {
-			// The session was resolved outside the lock and may be gone since.
-			if err := requireSession(ctx, s.sessions, s.sessionID); err != nil {
-				return model.GarbageCollectResult{}, err
-			}
-			return s.collectGarbage(ctx, req, grantedLock)
-		})
+	return workflow.WithWriteUnlock(ctx, s.locker, s.writeAdmission, func() (model.GarbageCollectResult, error) {
+		return workflow.WithSessionLock(ctx, s.sessionLocker, model.SessionLockOperationGarbageCollect,
+			func(ctx context.Context, grantedLock model.GrantedSessionLock) (model.GarbageCollectResult, error) {
+				// The session was resolved outside the lock and may be gone since.
+				if _, err := workflow.ReadSessionRef(ctx, s.sessions, s.sessionID); err != nil {
+					return model.GarbageCollectResult{}, err
+				}
+				return s.collectGarbage(ctx, req, grantedLock)
+			})
 	})
-}
-
-// withUnlock runs fn under the project lock, released when fn returns.
-func withUnlock[T any](ctx context.Context, locker projectLocker, fn func() (T, error)) (T, error) {
-	release, err := locker.Acquire(ctx)
-	if err != nil {
-		var zero T
-		return zero, err
-	}
-	defer func() {
-		if err := release(); err != nil {
-			zerolog.Ctx(ctx).Error().Err(err).Msg("release project lock")
-		}
-	}()
-	return fn()
-}
-
-// withSessionLock runs fn on the session lock's context, cancelled once the lock is lost, and
-// unlocks however fn ends.
-func withSessionLock[T any](
-	ctx context.Context, locker model.SessionLocker,
-	fn func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error),
-) (T, error) {
-	waitCtx, wait := progress.Begin(ctx, progress.Step{Kind: kindSessionLock})
-	lockCtx, grantedLock, err := locker.Lock(waitCtx, model.SessionLockOperationGarbageCollect)
-	wait.End(err)
-	if err != nil {
-		var zero T
-		return zero, fmt.Errorf("lock session: %w", err)
-	}
-	defer func() {
-		if err := grantedLock.Unlock(ctx); err != nil {
-			zerolog.Ctx(ctx).Error().Err(err).Msg("unlock session")
-		}
-	}()
-	return fn(progress.WithStep(lockCtx, progress.Current(ctx)), grantedLock)
-}
-
-// requireSession refuses a session other than the default that has no record: one removed
-// since it was resolved.
-func requireSession(ctx context.Context, sessions sessionLookup, id model.SessionID) error {
-	if id == model.DefaultSession {
-		return nil
-	}
-	_, found, err := sessions.LoadSession(ctx, id)
-	if err != nil {
-		return fmt.Errorf("checking session %s: %w", id, err)
-	}
-	if !found {
-		return fmt.Errorf("%w: %s", model.ErrSessionNotFound, id)
-	}
-	return nil
 }
 
 // collectGarbage reports what is found or, past a dry run, deletes it.

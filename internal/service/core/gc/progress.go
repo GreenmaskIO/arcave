@@ -25,7 +25,6 @@ import (
 // The kinds of the steps a gc opens.
 const (
 	kindGC            progress.Kind = "gc"
-	kindSessionLock   progress.Kind = "session.lock"
 	kindGCFind        progress.Kind = "gc.find"
 	kindGCRetain      progress.Kind = "gc.retain"
 	kindGCErase       progress.Kind = "gc.erase"
