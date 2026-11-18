@@ -64,7 +64,7 @@ volumes:
 	// Assert
 	require.NoError(t, err)
 	daemontest.RequireComposeProjectGone(t, env.daemon, env.project)
-	assert.Equal(t, []string{"web", "db"}, env.destroyedServices(t, since), "in reverse dependency order")
+	assert.Equal(t, []string{"web", "db"}, env.removedServices(t, since), "in reverse dependency order")
 
 	// Arrange: the containers gone, the volume and the network left.
 	env.upDocument(t, document)
@@ -84,9 +84,9 @@ volumes:
 	daemontest.RequireComposeProjectGone(t, env.daemon, env.project)
 }
 
-// destroyedServices are the services of the compose project whose containers the daemon destroyed
-// since then, in the order it did.
-func (e *imageRollbackEnv) destroyedServices(t *testing.T, since time.Time) []string {
+// removedServices are the services of the compose project whose containers the daemon removed since
+// then, in the order it did: Docker reports a removal as destroy, Podman as remove.
+func (e *imageRollbackEnv) removedServices(t *testing.T, since time.Time) []string {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(e.ctx, 30*time.Second)
@@ -94,7 +94,7 @@ func (e *imageRollbackEnv) destroyedServices(t *testing.T, since time.Time) []st
 	stream := e.daemon.Events(ctx, client.EventsListOptions{
 		Since: strconv.FormatInt(since.Unix(), 10),
 		Until: strconv.FormatInt(time.Now().Add(time.Second).Unix(), 10),
-		Filters: make(client.Filters).Add("type", "container").Add("event", string(events.ActionDestroy)).
+		Filters: make(client.Filters).Add("type", "container").Add("event", string(events.ActionDestroy), string(events.ActionRemove)).
 			Add("label", api.ProjectLabel+"="+e.project),
 	})
 	var services []string

@@ -194,7 +194,8 @@ volumes:
 `
 
 // A service frozen past its healthcheck's interval × retries reads unhealthy until its next
-// probe once resumed; the wait after a capture outlasts that rather than failing on it.
+// probe once resumed; the wait after a capture outlasts that rather than failing on it. Podman
+// probes nothing while frozen and reads reset once resumed instead.
 func TestSavepoint_ResumedServiceOutlivesItsStaleHealth(t *testing.T) {
 	t.Parallel()
 
@@ -203,10 +204,12 @@ func TestSavepoint_ResumedServiceOutlivesItsStaleHealth(t *testing.T) {
 	env.upDocument(t, fmt.Sprintf(healthPausedSpec, env.project))
 	app := env.container(t, "app")
 	env.pauseAll(t)
-	require.Eventually(t, func() bool {
-		health := env.inspect(t, app).State.Health
-		return health != nil && health.Status == container.Unhealthy
-	}, time.Minute, 100*time.Millisecond, "a frozen container reads unhealthy")
+	if !isPodman(t, env.daemon) {
+		require.Eventually(t, func() bool {
+			health := env.inspect(t, app).State.Health
+			return health != nil && health.Status == container.Unhealthy
+		}, time.Minute, 100*time.Millisecond, "a frozen container reads unhealthy")
+	}
 
 	// Act
 	_, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "stale-health"})

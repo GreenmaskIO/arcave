@@ -351,6 +351,12 @@ func TestUpDown_ANetworkInUseOutsideStays(t *testing.T) {
 	_, err = env.daemon.ContainerStart(env.ctx, user.ID, client.ContainerStartOptions{})
 	require.NoError(t, err)
 	projectRoot := initDownProject(t)
+	podman, err := daemontest.IsPodman(env.ctx, env.daemon)
+	require.NoError(t, err)
+	reason := "active endpoints"
+	if podman {
+		reason = "network is being used"
+	}
 
 	// Act
 	down := decode[model.DownResult](t, runArcave(t, projectRoot, nil, "-p", env.project, "down", "--force"))
@@ -358,7 +364,7 @@ func TestUpDown_ANetworkInUseOutsideStays(t *testing.T) {
 	// Assert
 	require.Len(t, down.Notices, 1)
 	assert.Contains(t, down.Notices[0].Message, network)
-	assert.Contains(t, down.Notices[0].Message, "active endpoints", "the daemon's reason, not a guess")
+	assert.Contains(t, down.Notices[0].Message, reason, "the daemon's reason, not a guess")
 	resources := daemontest.ReadComposeProjectResources(t, env.daemon, env.project)
 	assert.Equal(t, []string{network}, resources.Networks)
 }
