@@ -57,7 +57,7 @@ The argument reads as [`rollback`'s](rollback.md#selecting-the-savepoint) does: 
 
 ## How it builds
 
-What `up` builds is what a [rollback of a project that is not running](rollback.md#rolling-back-a-project-that-is-not-running) builds: the project is created from the recorded spec, the volumes and layers are written into it, and it is started. Every container gets the `io.arcave.deployment.*` labels a rollback writes, so [`arcave status`](status.md) and [`arcave down`](down.md) know it as this session's. [`rollback.leftover_volumes`](../configuration.md#rollback) plays no part: a leftover volume refuses an `up`, or `--force` drops it.
+What `up` builds is what a [rollback of a project that is not running](rollback.md#rolling-back-a-project-that-is-not-running) builds: the project is created from the recorded spec, the volumes and layers are written into it, and it is started. Every container gets the `io.arcave.deployment.*` labels a rollback writes, so [`arcave status`](status.md) and [`arcave down`](down.md) know it as this session's. [`compose.leftover_volumes`](../configuration.md#compose) plays no part: a leftover volume refuses an `up`, or `--force` drops it.
 
 If the build fails, arcave removes what it created, and a forced `up` has already dropped what was there. If it is interrupted, the interrupted-rollback marker stands, as after a rollback that took no safety snapshot: recover with `arcave rollback` to any savepoint of the session and compose project — see [Troubleshooting](../troubleshooting.md#an-interrupted-rollback).
 

@@ -66,6 +66,9 @@ capture:
         named: true
         bind: true
         anonymous: true
+    hooks:
+        timeout: 1m0s
+        on_error: fail
 backends:
     fullcopy:
         compression: zstd
