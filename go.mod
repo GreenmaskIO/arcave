@@ -7,7 +7,7 @@ toolchain go1.27.2
 require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.1.1
-	charm.land/lipgloss/v2 v2.0.6
+	charm.land/lipgloss/v2 v2.1.1
 	filippo.io/age v1.3.2
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.3
 	github.com/aws/aws-sdk-go-v2 v1.48.0
@@ -19,8 +19,8 @@ require (
 	github.com/compose-spec/compose-go/v2 v2.16.2
 	github.com/containerd/errdefs v1.0.0
 	github.com/distribution/reference v0.6.0
-	github.com/docker/cli v29.9.3+incompatible
-	github.com/docker/compose/v5 v5.7.0
+	github.com/docker/cli v29.10.0+incompatible
+	github.com/docker/compose/v5 v5.7.1
 	github.com/docker/go-connections v0.8.2
 	github.com/docker/go-units v0.5.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
@@ -28,13 +28,13 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/greenmaskio/storages v0.5.1
-	github.com/klauspost/compress v1.20.3
-	github.com/labstack/echo/v4 v4.16.3
+	github.com/klauspost/compress v1.20.4
+	github.com/labstack/echo/v4 v4.16.5
 	github.com/labstack/gommon v0.5.0
 	github.com/mattn/go-shellwords v1.0.16
 	github.com/moby/docker-image-spec v1.3.1
-	github.com/moby/moby/api v1.56.1
-	github.com/moby/moby/client v0.6.2
+	github.com/moby/moby/api v1.57.0
+	github.com/moby/moby/client v0.6.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/oapi-codegen/runtime v1.8.0
 	github.com/opencontainers/image-spec v1.1.1
@@ -233,7 +233,7 @@ require (
 	golang.org/x/tools v0.52.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260825221802-da73d73af1c5 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260825221802-da73d73af1c5 // indirect
-	google.golang.org/grpc v1.84.0 // indirect
+	google.golang.org/grpc v1.85.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
