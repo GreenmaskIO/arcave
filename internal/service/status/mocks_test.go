@@ -49,9 +49,9 @@ func (m *mockInflight) Get(ctx context.Context) (model.InflightMarker, bool, err
 
 type mockObserver struct{ mock.Mock }
 
-func (m *mockObserver) Observe(ctx context.Context) (model.ObservedWorkload, error) {
+func (m *mockObserver) Observe(ctx context.Context) (provider.ObservedWorkload, error) {
 	args := m.Called(ctx)
-	return args.Get(0).(model.ObservedWorkload), args.Error(1)
+	return args.Get(0).(provider.ObservedWorkload), args.Error(1)
 }
 
 // failingReader is a SessionReader whose every read fails with err.

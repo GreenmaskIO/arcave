@@ -40,6 +40,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
 )
 
 const (
@@ -463,9 +464,9 @@ func TestReader_Observe(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.Services, 2)
 	assert.Equal(t, "migrate", got.Services[0].Name)
-	assert.Nil(t, got.Services[0].AwaitsCompletion)
+	assert.True(t, got.Services[0].Job, "web waits on it to complete")
 	assert.Equal(t, "web", got.Services[1].Name)
-	assert.Equal(t, []string{"migrate"}, got.Services[1].AwaitsCompletion)
+	assert.False(t, got.Services[1].Job)
 	require.Len(t, got.Services[1].Replicas, 1, "neither a hook's runner nor a one-off is a replica")
 	assert.Equal(t, "c-web-1", got.Services[1].Replicas[0].ContainerID)
 	daemon.AssertExpectations(t)
@@ -530,7 +531,7 @@ func TestReader_Observe_DaemonFailures(t *testing.T) {
 
 			// Assert
 			require.ErrorIs(t, err, daemonErr)
-			assert.Equal(t, model.ObservedWorkload{}, got)
+			assert.Equal(t, provider.ObservedWorkload{}, got)
 			daemon.AssertExpectations(t)
 		})
 	}
@@ -1280,29 +1281,6 @@ func TestContainerName(t *testing.T) {
 
 			// Assert
 			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestParseAwaitsCompletion(t *testing.T) {
-	tests := []struct {
-		name  string
-		label string
-		want  []string
-	}{
-		{name: "no label"},
-		{name: "a dependency waited on to start or be healthy", label: "db:service_healthy:false,cache:service_started:true"},
-		{
-			name:  "several entries",
-			label: "db:service_healthy:false,migrate:service_completed_successfully:true,seed:service_completed_successfully:false",
-			want:  []string{"migrate", "seed"},
-		},
-		{name: "an older label with no restart part", label: "migrate:service_completed_successfully", want: []string{"migrate"}},
-		{name: "an older label with the service alone", label: "db"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, parseAwaitsCompletion(tt.label))
 		})
 	}
 }

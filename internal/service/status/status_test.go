@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -60,11 +59,9 @@ func TestFindDeployments(t *testing.T) {
 	deployment := newStatusDeployment(statusDeployed, model.DefaultSessionRecord)
 	earlier := newStatusDeployment(statusNewer, model.DefaultSessionRecord)
 	earlier.DeployedAt = deployment.DeployedAt.Add(-time.Hour)
-	broken := deployment.Labels()
-	broken[string(model.SystemLabelDeploymentSessionID)] = "nope"
 	tests := []struct {
 		name           string
-		labels         [][]map[string]string // per service, per replica
+		deployments    [][]observedDeployment // per service, per replica
 		wantSource     model.DeploymentSource
 		wantDeployed   bool
 		wantLabelled   int
@@ -73,40 +70,40 @@ func TestFindDeployments(t *testing.T) {
 		{name: "no container is no source"},
 		{
 			name:         "every container of the deployment",
-			labels:       [][]map[string]string{{deployment.Labels(), deployment.Labels()}},
+			deployments:  [][]observedDeployment{{deployedBy(deployment), deployedBy(deployment)}},
 			wantSource:   model.DeploymentSourceSavepoint,
 			wantDeployed: true,
 			wantLabelled: 2,
 		},
 		{
 			name:         "some containers of none",
-			labels:       [][]map[string]string{{nil}, {deployment.Labels()}},
+			deployments:  [][]observedDeployment{{{}}, {deployedBy(deployment)}},
 			wantSource:   model.DeploymentSourceMixed,
 			wantDeployed: true,
 			wantLabelled: 1,
 		},
 		{
-			name:       "no container of any",
-			labels:     [][]map[string]string{{nil, nil}},
-			wantSource: model.DeploymentSourceCompose,
+			name:        "no container of any",
+			deployments: [][]observedDeployment{{{}, {}}},
+			wantSource:  model.DeploymentSourceCompose,
 		},
 		{
 			name:         "an earlier deployment a restored layer carried counts as none",
-			labels:       [][]map[string]string{{earlier.Labels()}, {deployment.Labels()}},
+			deployments:  [][]observedDeployment{{deployedBy(earlier)}, {deployedBy(deployment)}},
 			wantSource:   model.DeploymentSourceMixed,
 			wantDeployed: true,
 			wantLabelled: 1,
 		},
 		{
 			name:         "the latest deployment whatever the order",
-			labels:       [][]map[string]string{{deployment.Labels()}, {earlier.Labels(), deployment.Labels()}},
+			deployments:  [][]observedDeployment{{deployedBy(deployment)}, {deployedBy(earlier), deployedBy(deployment)}},
 			wantSource:   model.DeploymentSourceMixed,
 			wantDeployed: true,
 			wantLabelled: 2,
 		},
 		{
 			name:           "unreadable labels are kept apart and count as none",
-			labels:         [][]map[string]string{{deployment.Labels(), broken}},
+			deployments:    [][]observedDeployment{{deployedBy(deployment), unreadableDeployment}},
 			wantSource:     model.DeploymentSourceMixed,
 			wantDeployed:   true,
 			wantLabelled:   1,
@@ -116,17 +113,17 @@ func TestFindDeployments(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			var services []model.ObservedService
-			for i, replicas := range tt.labels {
-				service := model.ObservedService{Name: fmt.Sprintf("svc%d", i)}
-				for number, labels := range replicas {
-					service.Replicas = append(service.Replicas, newStatusContainer(service.Name, number+1, labels, runningState()))
+			var services []provider.ObservedService
+			for i, replicas := range tt.deployments {
+				service := provider.ObservedService{Name: fmt.Sprintf("svc%d", i)}
+				for number, deployed := range replicas {
+					service.Replicas = append(service.Replicas, newStatusContainer(service.Name, number+1, deployed, runningState()))
 				}
 				services = append(services, service)
 			}
 
 			// Act
-			deployments := findDeployments(model.ObservedWorkload{Services: services})
+			deployments := findDeployments(provider.ObservedWorkload{Services: services})
 
 			// Assert
 			assert.Equal(t, tt.wantSource, deployments.source)
@@ -145,15 +142,15 @@ func TestFindDeployments(t *testing.T) {
 func TestNewReplicaState(t *testing.T) {
 	tests := []struct {
 		name    string
-		replica model.ObservedReplica
+		replica provider.ObservedReplica
 		job     bool
 		want    model.ReplicaState
 	}{
-		{name: "exited 0", replica: model.ObservedReplica{State: model.ReplicaStateExited}, want: model.ReplicaStateExited},
-		{name: "a job that exited 0 completed", replica: model.ObservedReplica{State: model.ReplicaStateExited}, job: true, want: model.ReplicaStateCompleted},
-		{name: "a job that failed exited", replica: model.ObservedReplica{State: model.ReplicaStateExited, ExitCode: 1}, job: true, want: model.ReplicaStateExited},
-		{name: "a job still running runs", replica: model.ObservedReplica{State: model.ReplicaStateRunning}, job: true, want: model.ReplicaStateRunning},
-		{name: "a dead job is dead", replica: model.ObservedReplica{State: model.ReplicaStateDead}, job: true, want: model.ReplicaStateDead},
+		{name: "exited 0", replica: provider.ObservedReplica{State: model.ReplicaStateExited}, want: model.ReplicaStateExited},
+		{name: "a job that exited 0 completed", replica: provider.ObservedReplica{State: model.ReplicaStateExited}, job: true, want: model.ReplicaStateCompleted},
+		{name: "a job that failed exited", replica: provider.ObservedReplica{State: model.ReplicaStateExited, ExitCode: 1}, job: true, want: model.ReplicaStateExited},
+		{name: "a job still running runs", replica: provider.ObservedReplica{State: model.ReplicaStateRunning}, job: true, want: model.ReplicaStateRunning},
+		{name: "a dead job is dead", replica: provider.ObservedReplica{State: model.ReplicaStateDead}, job: true, want: model.ReplicaStateDead},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -168,11 +165,10 @@ func TestNewReplicaStatus(t *testing.T) {
 	started := time.Date(2026, 11, 7, 14, 2, 30, 0, time.UTC)
 	finished := time.Date(2026, 11, 7, 15, 0, 0, 0, time.UTC)
 	ports := []model.PublishedPort{{ContainerPort: 5432, Protocol: "tcp", HostIP: "127.0.0.1", HostPort: 5432}}
-	replica := model.ObservedReplica{
+	replica := provider.ObservedReplica{
 		Number:        2,
 		Container:     "demo-db-2",
 		ContainerID:   "db-2-id",
-		Labels:        map[string]string{"k": "v"},
 		State:         model.ReplicaStateRunning,
 		Health:        model.ReplicaHealthUnhealthy,
 		ExitCode:      137,
@@ -238,17 +234,17 @@ func TestNewServiceStatuses(t *testing.T) {
 		"web":     {1, 3},
 		"migrate": {1},
 	}
-	labels := deployment.Labels()
+	deployed := deployedBy(deployment)
 	tests := []struct {
 		name       string
-		services   []model.ObservedService
+		services   []provider.ObservedService
 		deployment *model.SavepointDeployment
 		want       []model.ServiceStatus
 	}{
 		{
 			name: "a recorded gap is no missing replica, a recorded replica the daemon lacks is",
-			services: []model.ObservedService{{Name: "web", Replicas: []model.ObservedReplica{
-				newStatusContainer("web", 1, labels, runningState()),
+			services: []provider.ObservedService{{Name: "web", Replicas: []provider.ObservedReplica{
+				newStatusContainer("web", 1, deployed, runningState()),
 			}}},
 			deployment: &deployment,
 			want: []model.ServiceStatus{
@@ -263,12 +259,12 @@ func TestNewServiceStatuses(t *testing.T) {
 		},
 		{
 			name: "a replica added since, one rebuilt outside arcave, and a job another waits on that exited 0",
-			services: []model.ObservedService{{Name: "web", AwaitsCompletion: []string{"migrate"}, Replicas: []model.ObservedReplica{
-				newStatusContainer("web", 1, nil, runningState()),
-				newStatusContainer("web", 2, labels, runningState()),
-				newStatusContainer("web", 3, labels, runningState()),
-			}}, {Name: "migrate", Replicas: []model.ObservedReplica{
-				newStatusContainer("migrate", 1, labels, model.ObservedReplica{State: model.ReplicaStateExited}),
+			services: []provider.ObservedService{{Name: "web", Replicas: []provider.ObservedReplica{
+				newStatusContainer("web", 1, observedDeployment{}, runningState()),
+				newStatusContainer("web", 2, deployed, runningState()),
+				newStatusContainer("web", 3, deployed, runningState()),
+			}}, {Name: "migrate", Job: true, Replicas: []provider.ObservedReplica{
+				newStatusContainer("migrate", 1, deployed, provider.ObservedReplica{State: model.ReplicaStateExited}),
 			}}},
 			deployment: &deployment,
 			want: []model.ServiceStatus{
@@ -284,8 +280,8 @@ func TestNewServiceStatuses(t *testing.T) {
 		},
 		{
 			name: "with none deployed nothing is expected, so nothing is missing; an exit 0 no service waits on is no job's",
-			services: []model.ObservedService{{Name: "migrate", Replicas: []model.ObservedReplica{
-				newStatusContainer("migrate", 1, nil, model.ObservedReplica{State: model.ReplicaStateExited}),
+			services: []provider.ObservedService{{Name: "migrate", Replicas: []provider.ObservedReplica{
+				newStatusContainer("migrate", 1, observedDeployment{}, provider.ObservedReplica{State: model.ReplicaStateExited}),
 			}}},
 			want: []model.ServiceStatus{
 				{Name: "migrate", State: model.ReplicaStateExited, Replicas: []model.ReplicaStatus{
@@ -297,7 +293,7 @@ func TestNewServiceStatuses(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			containers := model.ObservedWorkload{Services: tt.services}
+			containers := provider.ObservedWorkload{Services: tt.services}
 			deployments := findDeployments(containers)
 			require.Equal(t, tt.deployment != nil, deployments.latest != nil)
 
@@ -416,10 +412,10 @@ func TestService_Status(t *testing.T) {
 	}
 	tests := []struct {
 		name string
-		// containers runs one db replica per entry of labels, in state.
-		labels   []map[string]string
-		state    model.ObservedReplica
-		replaces string
+		// deployments runs one db replica per entry, carrying it, in state.
+		deployments []observedDeployment
+		state       provider.ObservedReplica
+		replaces    string
 		// stored are the savepoints of the default session's compose project.
 		stored   []model.Savepoint
 		sessions []model.Session
@@ -442,10 +438,10 @@ func TestService_Status(t *testing.T) {
 		wantAmbiguous bool
 	}{
 		{
-			name:   "a rollback deployed every container and the store holds it",
-			labels: []map[string]string{baselineDeployment.Labels()},
-			state:  runningStateAt(started),
-			stored: []model.Savepoint{statusDeployed, statusNewer},
+			name:        "a rollback deployed every container and the store holds it",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed, statusNewer},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, model.ComposeProjectStateRunning, status.State)
 				assert.False(t, status.CheckedAt.Before(now), "checked when it runs")
@@ -470,11 +466,11 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:     "a container recreated by compose outside arcave",
-			labels:   []map[string]string{twoReplicas.Labels(), nil},
-			state:    runningStateAt(started),
-			replaces: "demo-db-2",
-			stored:   []model.Savepoint{twoLayers},
+			name:        "a container recreated by compose outside arcave",
+			deployments: []observedDeployment{deployedBy(twoReplicas), {}},
+			state:       runningStateAt(started),
+			replaces:    "demo-db-2",
+			stored:      []model.Savepoint{twoLayers},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				require.NotNil(t, status.Deployment)
 				assert.Equal(t, model.DeploymentSourceMixed, status.Deployment.Source)
@@ -485,10 +481,10 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:   "a replica whose labels do not parse is not called recreated",
-			labels: []map[string]string{twoReplicas.Labels(), corruptDeployedAt(twoReplicas.Labels())},
-			state:  runningStateAt(started),
-			stored: []model.Savepoint{twoLayers},
+			name:        "a replica whose labels do not parse is not called recreated",
+			deployments: []observedDeployment{deployedBy(twoReplicas), unreadableDeployment},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{twoLayers},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				require.NotNil(t, status.Deployment)
 				assert.Zero(t, status.Deployment.Replaced, "whether the deployment built it is unknown")
@@ -497,20 +493,20 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:     "a container recreated outside arcave with no record says nothing of its layer",
-			labels:   []map[string]string{twoReplicas.Labels(), nil},
-			state:    runningStateAt(started),
-			replaces: "demo-db-2",
+			name:        "a container recreated outside arcave with no record says nothing of its layer",
+			deployments: []observedDeployment{deployedBy(twoReplicas), {}},
+			state:       runningStateAt(started),
+			replaces:    "demo-db-2",
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assertNotice(t, status.Notices, model.NoticeCodeReplicaRecreated,
 					"db-2 was recreated outside arcave 3h 11m ago (compose replaced demo-db-2); volumes are untouched")
 			},
 		},
 		{
-			name:   "what the record left out",
-			labels: []map[string]string{baselineDeployment.Labels()},
-			state:  runningStateAt(started),
-			stored: []model.Savepoint{leftOut},
+			name:        "what the record left out",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{leftOut},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, []model.Notice{
 					{Code: model.NoticeCodeVolumeNotRestored,
@@ -521,12 +517,12 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:     "deployed from one session, commands working in another",
-			labels:   []map[string]string{baselineDeployment.Labels()},
-			state:    runningStateAt(started),
-			stored:   []model.Savepoint{statusDeployed},
-			pointer:  &statusFeat.ID,
-			sessions: []model.Session{statusFeat},
+			name:        "deployed from one session, commands working in another",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed},
+			pointer:     &statusFeat.ID,
+			sessions:    []model.Session{statusFeat},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, &model.SessionRef{ID: statusFeat.ID, Name: statusFeat.Name}, status.Session)
 				require.NotNil(t, status.Deployment)
@@ -536,10 +532,10 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:   "deployed by another arcave project: its store is not read, and nothing reads gone",
-			labels: []map[string]string{otherProjectDeployment.Labels()},
-			state:  runningStateAt(started),
-			stored: []model.Savepoint{statusNewer},
+			name:        "deployed by another arcave project: its store is not read, and nothing reads gone",
+			deployments: []observedDeployment{deployedBy(otherProjectDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusNewer},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				require.NotNil(t, status.Deployment)
 				assert.Equal(t, model.ArcaveProjectName("other-checkout"), status.Deployment.ArcaveProject)
@@ -552,10 +548,10 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:   "deployed from a session since removed",
-			labels: []map[string]string{featDeployment.Labels()},
-			state:  runningStateAt(started),
-			stored: []model.Savepoint{statusDeployed},
+			name:        "deployed from a session since removed",
+			deployments: []observedDeployment{deployedBy(featDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				require.NotNil(t, status.Deployment)
 				assert.Equal(t, model.DeploymentRecordMissing, status.Deployment.Record)
@@ -569,10 +565,10 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:   "a deployed savepoint removed since",
-			labels: []map[string]string{baselineDeployment.Labels()},
-			state:  runningStateAt(started),
-			stored: []model.Savepoint{statusNewer},
+			name:        "a deployed savepoint removed since",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusNewer},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				require.NotNil(t, status.Deployment)
 				assert.Equal(t, model.DeploymentRecordMissing, status.Deployment.Record)
@@ -583,10 +579,10 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:   "a rollback in flight",
-			labels: []map[string]string{baselineDeployment.Labels()},
-			state:  model.ObservedReplica{State: model.ReplicaStateCreated},
-			stored: []model.Savepoint{statusDeployed},
+			name:        "a rollback in flight",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       provider.ObservedReplica{State: model.ReplicaStateCreated},
+			stored:      []model.Savepoint{statusDeployed},
 			marker: &model.InflightMarker{Phase: model.InflightRestoring, Session: model.DefaultSession,
 				ComposeProject: demoProject, Target: statusDeployed.ID, Safety: safety.ID, At: statusCheckedAt.Add(-time.Minute)},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
@@ -602,10 +598,10 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:   "another compose project's marker is not this one's",
-			labels: []map[string]string{baselineDeployment.Labels()},
-			state:  runningStateAt(started),
-			stored: []model.Savepoint{statusDeployed},
+			name:        "another compose project's marker is not this one's",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed},
 			marker: &model.InflightMarker{Phase: model.InflightRestoring, Session: model.DefaultSession,
 				ComposeProject: "other", Target: statusDeployed.ID},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
@@ -614,10 +610,10 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:   "every container stopped",
-			labels: []map[string]string{baselineDeployment.Labels()},
-			state:  model.ObservedReplica{State: model.ReplicaStateExited, FinishedAt: &finished},
-			stored: []model.Savepoint{statusDeployed},
+			name:        "every container stopped",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       provider.ObservedReplica{State: model.ReplicaStateExited, FinishedAt: &finished},
+			stored:      []model.Savepoint{statusDeployed},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, model.ComposeProjectStateStopped, status.State)
 				assert.Equal(t, []model.Notice{{Code: model.NoticeCodeComposeProjectStopped, Message: "no container runs"}},
@@ -639,11 +635,11 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:     "a store that does not open leaves the daemon's part whole",
-			labels:   []map[string]string{baselineDeployment.Labels()},
-			state:    runningStateAt(started),
-			storeErr: model.ErrWrongStoreKey,
-			wantErr:  model.ErrStatusPartial,
+			name:        "a store that does not open leaves the daemon's part whole",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			storeErr:    model.ErrWrongStoreKey,
+			wantErr:     model.ErrStatusPartial,
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, model.ComposeProjectStateRunning, status.State)
 				require.NotNil(t, status.Deployment)
@@ -659,21 +655,21 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:     "a store that does not open reads no record of another arcave project",
-			labels:   []map[string]string{otherProjectDeployment.Labels()},
-			state:    runningStateAt(started),
-			storeErr: model.ErrWrongStoreKey,
-			wantErr:  model.ErrStatusPartial,
+			name:        "a store that does not open reads no record of another arcave project",
+			deployments: []observedDeployment{deployedBy(otherProjectDeployment)},
+			state:       runningStateAt(started),
+			storeErr:    model.ErrWrongStoreKey,
+			wantErr:     model.ErrStatusPartial,
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				require.NotNil(t, status.Deployment)
 				assert.Empty(t, status.Deployment.Record, "another arcave project's record is not read, store or not")
 			},
 		},
 		{
-			name:   "a safety snapshot deployed",
-			labels: []map[string]string{newStatusDeployment(safety, model.DefaultSessionRecord).Labels()},
-			state:  runningStateAt(started),
-			stored: []model.Savepoint{statusDeployed, safety},
+			name:        "a safety snapshot deployed",
+			deployments: []observedDeployment{deployedBy(newStatusDeployment(safety, model.DefaultSessionRecord))},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed, safety},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				require.NotNil(t, status.Deployment)
 				assert.True(t, status.Deployment.Savepoint.IsSafetySnapshot)
@@ -684,58 +680,58 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:     "a session named on the request",
-			labels:   []map[string]string{baselineDeployment.Labels()},
-			state:    runningStateAt(started),
-			stored:   []model.Savepoint{statusDeployed},
-			sessions: []model.Session{statusFeat},
-			ref:      "feat",
+			name:        "a session named on the request",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed},
+			sessions:    []model.Session{statusFeat},
+			ref:         "feat",
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, &model.SessionRef{ID: statusFeat.ID, Name: statusFeat.Name}, status.Session)
 			},
 		},
 		{
-			name:     "a session named by id on the request",
-			labels:   []map[string]string{baselineDeployment.Labels()},
-			state:    runningStateAt(started),
-			stored:   []model.Savepoint{statusDeployed},
-			sessions: []model.Session{statusFeat},
-			ref:      statusFeat.ID.String(),
+			name:        "a session named by id on the request",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed},
+			sessions:    []model.Session{statusFeat},
+			ref:         statusFeat.ID.String(),
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, &model.SessionRef{ID: statusFeat.ID, Name: statusFeat.Name}, status.Session)
 			},
 		},
 		{
-			name:     "a session ref outranks the pointer",
-			labels:   []map[string]string{baselineDeployment.Labels()},
-			state:    runningStateAt(started),
-			stored:   []model.Savepoint{statusDeployed},
-			sessions: []model.Session{statusFeat},
-			pointer:  &statusFeat.ID,
-			ref:      model.DefaultSessionName,
+			name:        "a session ref outranks the pointer",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed},
+			sessions:    []model.Session{statusFeat},
+			pointer:     &statusFeat.ID,
+			ref:         model.DefaultSessionName,
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName}, status.Session)
 			},
 		},
 		{
-			name:     "a session name two sessions carry is the user's error",
-			labels:   []map[string]string{baselineDeployment.Labels()},
-			state:    runningStateAt(started),
-			stored:   []model.Savepoint{statusDeployed},
-			sessions: []model.Session{statusFeat, statusFeatTwin},
-			ref:      statusFeat.Name,
+			name:        "a session name two sessions carry is the user's error",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed},
+			sessions:    []model.Session{statusFeat, statusFeatTwin},
+			ref:         statusFeat.Name,
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, model.ComposeProjectStatus{}, status)
 			},
 			wantAmbiguous: true,
 		},
 		{
-			name:       "a pointer that cannot be read is partial",
-			labels:     []map[string]string{baselineDeployment.Labels()},
-			state:      runningStateAt(started),
-			stored:     []model.Savepoint{statusDeployed},
-			pointerErr: errors.New("current_session: not a session id"),
-			wantErr:    model.ErrStatusPartial,
+			name:        "a pointer that cannot be read is partial",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed},
+			pointerErr:  errors.New("current_session: not a session id"),
+			wantErr:     model.ErrStatusPartial,
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Nil(t, status.Session)
 				assert.Equal(t, []model.StatusUnreadable{{
@@ -745,34 +741,34 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:    "a session ref that names none is the user's error",
-			labels:  []map[string]string{baselineDeployment.Labels()},
-			state:   runningStateAt(started),
-			stored:  []model.Savepoint{statusDeployed},
-			ref:     "nope",
-			wantErr: model.ErrSessionNotFound,
+			name:        "a session ref that names none is the user's error",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed},
+			ref:         "nope",
+			wantErr:     model.ErrSessionNotFound,
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, model.ComposeProjectStatus{}, status)
 			},
 		},
 		{
-			name:    "a keyword session ref is the user's error",
-			labels:  []map[string]string{baselineDeployment.Labels()},
-			state:   runningStateAt(started),
-			stored:  []model.Savepoint{statusDeployed},
-			ref:     model.RefCurrent,
-			wantErr: model.ErrSessionRefKeyword,
+			name:        "a keyword session ref is the user's error",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed},
+			ref:         model.RefCurrent,
+			wantErr:     model.ErrSessionRefKeyword,
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, model.ComposeProjectStatus{}, status)
 			},
 		},
 		{
-			name:    "a pointer to a session since removed is partial",
-			labels:  []map[string]string{baselineDeployment.Labels()},
-			state:   runningStateAt(started),
-			stored:  []model.Savepoint{statusDeployed},
-			pointer: &statusFeat.ID,
-			wantErr: model.ErrStatusPartial,
+			name:        "a pointer to a session since removed is partial",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed},
+			pointer:     &statusFeat.ID,
+			wantErr:     model.ErrStatusPartial,
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Nil(t, status.Session)
 				require.Len(t, status.Unreadable, 1)
@@ -785,7 +781,7 @@ func TestService_Status(t *testing.T) {
 		},
 		{
 			name:        "sessions that cannot be listed leave the session unresolved and the record read",
-			labels:      []map[string]string{baselineDeployment.Labels()},
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
 			state:       runningStateAt(started),
 			stored:      []model.Savepoint{statusDeployed},
 			pointer:     &statusFeat.ID,
@@ -805,7 +801,7 @@ func TestService_Status(t *testing.T) {
 		},
 		{
 			name:        "a session named on the request whose sessions cannot be listed names it",
-			labels:      []map[string]string{baselineDeployment.Labels()},
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
 			state:       runningStateAt(started),
 			stored:      []model.Savepoint{statusDeployed},
 			ref:         "feat",
@@ -819,7 +815,7 @@ func TestService_Status(t *testing.T) {
 		},
 		{
 			name:           "a session whose savepoints cannot be opened is unreadable",
-			labels:         []map[string]string{baselineDeployment.Labels()},
+			deployments:    []observedDeployment{deployedBy(baselineDeployment)},
 			state:          runningStateAt(started),
 			sessionOpenErr: errors.New("open failed"),
 			wantErr:        model.ErrStatusPartial,
@@ -834,7 +830,7 @@ func TestService_Status(t *testing.T) {
 		},
 		{
 			name:          "a record that cannot be read is unreadable",
-			labels:        []map[string]string{baselineDeployment.Labels()},
+			deployments:   []observedDeployment{deployedBy(baselineDeployment)},
 			state:         runningStateAt(started),
 			savepointsErr: errors.New("read failed"),
 			wantErr:       model.ErrStatusPartial,
@@ -849,12 +845,12 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
-			name:      "a marker that cannot be read is partial",
-			labels:    []map[string]string{baselineDeployment.Labels()},
-			state:     runningStateAt(started),
-			stored:    []model.Savepoint{statusDeployed},
-			markerErr: errors.New("inflight.json: unexpected end of JSON input"),
-			wantErr:   model.ErrStatusPartial,
+			name:        "a marker that cannot be read is partial",
+			deployments: []observedDeployment{deployedBy(baselineDeployment)},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed},
+			markerErr:   errors.New("inflight.json: unexpected end of JSON input"),
+			wantErr:     model.ErrStatusPartial,
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, model.ComposeProjectStateRunning, status.State)
 				require.Len(t, status.Unreadable, 1)
@@ -868,18 +864,18 @@ func TestService_Status(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 			store := newDirStore(t)
 			seedStatusSessions(t, store, tt.sessions)
-			service := model.ObservedService{Name: demoService}
-			for i, labels := range tt.labels {
-				replica := newStatusContainer(demoService, i+1, labels, tt.state)
+			service := provider.ObservedService{Name: demoService}
+			for i, deployed := range tt.deployments {
+				replica := newStatusContainer(demoService, i+1, deployed, tt.state)
 				replica.CreatedAt = &started
-				if labels == nil {
+				if deployed == (observedDeployment{}) {
 					replica.Replaces = tt.replaces
 				}
 				service.Replicas = append(service.Replicas, replica)
 			}
-			var containers model.ObservedWorkload
+			var containers provider.ObservedWorkload
 			if len(service.Replicas) > 0 {
-				containers.Services = []model.ObservedService{service}
+				containers.Services = []provider.ObservedService{service}
 			}
 			reader := &mockObserver{}
 			reader.On("Observe", mock.Anything).Return(containers, nil).Once()
@@ -936,7 +932,7 @@ func TestService_Status(t *testing.T) {
 func TestService_Status_ADaemonThatCannotBeReadFailsIt(t *testing.T) {
 	// Arrange: nothing past the daemon is read, so nothing else is expected.
 	reader := &mockObserver{}
-	reader.On("Observe", mock.Anything).Return(model.ObservedWorkload{}, errors.New("daemon unreachable")).Once()
+	reader.On("Observe", mock.Anything).Return(provider.ObservedWorkload{}, errors.New("daemon unreachable")).Once()
 	svc := New(Deps{
 		Observer:       reader,
 		ComposeProject: demoProject,
@@ -967,28 +963,44 @@ func newStatusDeployment(savepoint model.Savepoint, session model.Session) model
 	}
 }
 
-// newStatusContainer is replica number of service as the daemon reports it, labelled with labels; of
+// observedDeployment is a replica's deployment as Observe reads it off its labels: none, one, or
+// labels that do not parse.
+type observedDeployment struct {
+	deployment *model.SavepointDeployment
+	err        error
+}
+
+// unreadableDeployment is a replica whose deployment labels do not parse.
+var unreadableDeployment = observedDeployment{err: errors.New("bad time")}
+
+// deployedBy is a replica built by deployment.
+func deployedBy(deployment model.SavepointDeployment) observedDeployment {
+	return observedDeployment{deployment: &deployment}
+}
+
+// newStatusContainer is replica number of service as the daemon reports it, carrying deployed; of
 // state it takes the state and the times.
-func newStatusContainer(service string, number int, labels map[string]string, state model.ObservedReplica) model.ObservedReplica {
-	return model.ObservedReplica{
-		Number:      number,
-		Container:   fmt.Sprintf("demo-%s-%d", service, number),
-		ContainerID: fmt.Sprintf("%s-%d-id", service, number),
-		Labels:      labels,
-		State:       state.State,
-		CreatedAt:   &statusStarted,
-		StartedAt:   state.StartedAt,
-		FinishedAt:  state.FinishedAt,
+func newStatusContainer(service string, number int, deployed observedDeployment, state provider.ObservedReplica) provider.ObservedReplica {
+	return provider.ObservedReplica{
+		Number:        number,
+		Container:     fmt.Sprintf("demo-%s-%d", service, number),
+		ContainerID:   fmt.Sprintf("%s-%d-id", service, number),
+		Deployment:    deployed.deployment,
+		DeploymentErr: deployed.err,
+		State:         state.State,
+		CreatedAt:     &statusStarted,
+		StartedAt:     state.StartedAt,
+		FinishedAt:    state.FinishedAt,
 	}
 }
 
-func runningState() model.ObservedReplica {
+func runningState() provider.ObservedReplica {
 	return runningStateAt(statusStarted)
 }
 
 // runningStateAt is a replica running since started.
-func runningStateAt(started time.Time) model.ObservedReplica {
-	return model.ObservedReplica{
+func runningStateAt(started time.Time) provider.ObservedReplica {
+	return provider.ObservedReplica{
 		State:     model.ReplicaStateRunning,
 		StartedAt: &started,
 	}
@@ -1277,11 +1289,4 @@ func TestNewReplicaNotices(t *testing.T) {
 			assert.Equal(t, tt.want, notices)
 		})
 	}
-}
-
-// corruptDeployedAt is labels with a deployment time that does not parse.
-func corruptDeployedAt(labels map[string]string) map[string]string {
-	corrupt := maps.Clone(labels)
-	corrupt[string(model.SystemLabelDeploymentDeployedAt)] = "not-a-time"
-	return corrupt
 }

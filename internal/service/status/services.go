@@ -20,6 +20,7 @@ import (
 	"slices"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
 )
 
 // replicaStateRank orders the replica states from the best to the worst: a service is as bad as
@@ -63,9 +64,9 @@ type unreadableLabels struct {
 	err     error
 }
 
-// findDeployments reads every container's deployment labels, the latest build being the deployment;
-// a container carrying another, none or unreadable ones counts as built by none.
-func findDeployments(containers model.ObservedWorkload) containerDeployments {
+// findDeployments takes every container's deployment, the latest build being the deployment; a
+// container carrying another, none or unreadable labels counts as built by none.
+func findDeployments(containers provider.ObservedWorkload) containerDeployments {
 	var (
 		latest *model.SavepointDeployment
 		// deploymentByContainer is the deployment each container's labels name, by container id.
@@ -77,18 +78,17 @@ func findDeployments(containers model.ObservedWorkload) containerDeployments {
 	for _, service := range containers.Services {
 		for _, replica := range service.Replicas {
 			total++
-			labels, ok, err := model.ParseSavepointDeployment(replica.Labels)
 			switch {
-			case err != nil:
+			case replica.DeploymentErr != nil:
 				unreadable = append(unreadable, unreadableLabels{
 					service: service.Name,
 					replica: replica.Number,
-					err:     err,
+					err:     replica.DeploymentErr,
 				})
-			case ok:
-				deploymentByContainer[replica.ContainerID] = labels
-				if latest == nil || labels.DeployedAt.After(latest.DeployedAt) {
-					latest = &labels
+			case replica.Deployment != nil:
+				deploymentByContainer[replica.ContainerID] = *replica.Deployment
+				if latest == nil || replica.Deployment.DeployedAt.After(latest.DeployedAt) {
+					latest = replica.Deployment
 				}
 			}
 		}
@@ -138,10 +138,10 @@ func newDeploymentSource(total, labelled int) model.DeploymentSource {
 }
 
 // newServiceStatuses is every service the daemon runs or the deployment recorded, by name.
-func newServiceStatuses(containers model.ObservedWorkload, deployments containerDeployments) []model.ServiceStatus {
+func newServiceStatuses(containers provider.ObservedWorkload, deployments containerDeployments) []model.ServiceStatus {
 	var (
-		live     = map[string][]model.ObservedReplica{}
-		jobs     = newJobServices(containers)
+		live     = map[string][]provider.ObservedReplica{}
+		jobs     = map[string]bool{}
 		recorded map[string][]int
 	)
 	if deployments.latest != nil {
@@ -149,6 +149,7 @@ func newServiceStatuses(containers model.ObservedWorkload, deployments container
 	}
 	for _, service := range containers.Services {
 		live[service.Name] = service.Replicas
+		jobs[service.Name] = service.Job
 	}
 	names := map[string]bool{}
 	for name := range live {
@@ -164,22 +165,10 @@ func newServiceStatuses(containers model.ObservedWorkload, deployments container
 	return services
 }
 
-// newJobServices are the services another waits on to complete successfully, as compose recorded
-// it on the containers; a server stopped by hand exits 0 too, so nothing else makes a job.
-func newJobServices(containers model.ObservedWorkload) map[string]bool {
-	jobs := map[string]bool{}
-	for _, service := range containers.Services {
-		for _, awaited := range service.AwaitsCompletion {
-			jobs[awaited] = true
-		}
-	}
-	return jobs
-}
-
 // newServiceStatus is one service: its live replicas, and every replica the deployment recorded
 // that the daemon does not hold; job marks one whose exit 0 is its success.
 func newServiceStatus(
-	name string, containers []model.ObservedReplica, recorded []int, job bool, builtByLatest map[string]bool,
+	name string, containers []provider.ObservedReplica, recorded []int, job bool, builtByLatest map[string]bool,
 ) model.ServiceStatus {
 	replicas := make([]model.ReplicaStatus, 0, max(len(containers), len(recorded)))
 	held := map[int]bool{}
@@ -216,7 +205,7 @@ func newServiceStatus(
 
 // newReplicaStatus is one container as the daemon reports it. job marks a replica whose exit 0 is
 // its success.
-func newReplicaStatus(replica model.ObservedReplica, job, inDeployment, inSavepoint bool) model.ReplicaStatus {
+func newReplicaStatus(replica provider.ObservedReplica, job, inDeployment, inSavepoint bool) model.ReplicaStatus {
 	return model.ReplicaStatus{
 		Number:        replica.Number,
 		Container:     replica.Container,
@@ -239,7 +228,7 @@ func newReplicaStatus(replica model.ObservedReplica, job, inDeployment, inSavepo
 
 // newReplicaState is the daemon's state, but a replica that exited 0 completed when it is a job: a
 // server stopped by hand exits 0 too.
-func newReplicaState(replica model.ObservedReplica, job bool) model.ReplicaState {
+func newReplicaState(replica provider.ObservedReplica, job bool) model.ReplicaState {
 	if replica.State == model.ReplicaStateExited && replica.ExitCode == 0 && job {
 		return model.ReplicaStateCompleted
 	}

@@ -33,7 +33,7 @@ type Workload interface {
 type Observer interface {
 	// Observe reads the workload's replicas as the daemon runs them; it takes no lock and changes
 	// nothing. A workload never started or taken down has none.
-	Observe(ctx context.Context) (model.ObservedWorkload, error)
+	Observe(ctx context.Context) (ObservedWorkload, error)
 }
 
 // LiveWorkload is the workload as Inspect found it; nothing is touched.

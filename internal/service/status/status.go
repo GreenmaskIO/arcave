@@ -104,7 +104,7 @@ type storeView struct {
 func (s *Service) Status(ctx context.Context, req model.StatusRequest) (model.ComposeProjectStatus, error) {
 	var (
 		checkedAt        = time.Now().UTC()
-		containers       model.ObservedWorkload
+		containers       provider.ObservedWorkload
 		deployments      containerDeployments
 		services         []model.ServiceStatus
 		marker           *model.InflightMarker

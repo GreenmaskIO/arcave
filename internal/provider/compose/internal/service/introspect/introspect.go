@@ -313,20 +313,6 @@ func (s *Reader) readContainer(ctx context.Context, summary container.Summary) (
 	}, nil
 }
 
-// parseAwaitsCompletion reads compose's depends_on label, service:condition:restart entries
-// comma-separated, into the services waited on to complete successfully; nil for none.
-func parseAwaitsCompletion(label string) []string {
-	var awaited []string
-	for entry := range strings.SplitSeq(label, ",") {
-		service, rest, _ := strings.Cut(entry, ":")
-		condition, _, _ := strings.Cut(rest, ":")
-		if service != "" && condition == types.ServiceConditionCompletedSuccessfully {
-			awaited = append(awaited, service)
-		}
-	}
-	return awaited
-}
-
 // replicaNumber reads com.docker.compose.container-number; a container without it sorts first.
 func replicaNumber(labels map[string]string) int {
 	n, err := strconv.Atoi(labels[api.ContainerNumberLabel])

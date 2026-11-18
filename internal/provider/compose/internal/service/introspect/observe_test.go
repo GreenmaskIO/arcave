@@ -15,7 +15,7 @@
 package introspect
 
 import (
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"maps"
 	"net/netip"
 	"testing"
 	"time"
@@ -23,8 +23,11 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 func TestNewReplicaState(t *testing.T) {
@@ -81,11 +84,10 @@ func TestNewObservedReplica(t *testing.T) {
 	got := newObservedReplica(replica)
 
 	// Assert
-	assert.Equal(t, model.ObservedReplica{
+	assert.Equal(t, provider.ObservedReplica{
 		Number:        1,
 		Container:     "demo-db-1",
 		ContainerID:   "c-db-1",
-		Labels:        map[string]string{"k": "v"},
 		State:         model.ReplicaStateRunning,
 		Health:        model.ReplicaHealthUnhealthy,
 		OOMKilled:     true,
@@ -103,11 +105,54 @@ func TestNewObservedReplica_NoState(t *testing.T) {
 	got := newObservedReplica(composemodel.Container{ID: "c-db-1", Number: 1})
 
 	// Assert
-	assert.Equal(t, model.ObservedReplica{
+	assert.Equal(t, provider.ObservedReplica{
 		Number:      1,
 		ContainerID: "c-db-1",
 		State:       model.ReplicaStateExited,
 	}, got)
+}
+
+func TestNewObservedReplica_Deployment(t *testing.T) {
+	deployment := model.SavepointDeployment{
+		DeployedAt:    time.Date(2026, 11, 7, 14, 2, 11, 0, time.UTC),
+		ArcaveProject: "demo",
+		Session: model.SessionRef{
+			ID:   model.DefaultSession,
+			Name: model.DefaultSessionName,
+		},
+		Savepoint: model.DeployedSavepoint{
+			ID:        "019e843e-1650-7000-8000-000000000000",
+			Name:      "before-migration",
+			CreatedAt: time.Date(2026, 11, 6, 19, 41, 0, 0, time.UTC),
+		},
+		ServiceReplicas: map[string][]int{"db": {1}},
+	}
+	broken := maps.Clone(deployment.Labels())
+	broken[string(model.SystemLabelDeploymentDeployedAt)] = "not-a-time"
+	tests := []struct {
+		name           string
+		labels         map[string]string
+		wantDeployment *model.SavepointDeployment
+		wantErr        bool
+	}{
+		{name: "no deployment labels", labels: map[string]string{"k": "v"}},
+		{name: "a deployment", labels: deployment.Labels(), wantDeployment: &deployment},
+		{name: "labels that do not parse", labels: broken, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := newObservedReplica(composemodel.Container{ID: "c-db-1", Number: 1, Labels: tt.labels})
+
+			// Assert
+			assert.Equal(t, tt.wantDeployment, got.Deployment)
+			if tt.wantErr {
+				require.Error(t, got.DeploymentErr)
+				return
+			}
+			assert.NoError(t, got.DeploymentErr)
+		})
+	}
 }
 
 func TestNewReplicaHealth(t *testing.T) {
@@ -150,4 +195,27 @@ func TestNewPublishedPorts(t *testing.T) {
 		{ContainerPort: 80, Protocol: "tcp", HostIP: "0.0.0.0", HostPort: 8080},
 		{ContainerPort: 80, Protocol: "tcp", HostIP: "::", HostPort: 8080},
 	}, ports, "a zero address is no address, and an exposed port publishes nothing")
+}
+
+func TestParseAwaitsCompletion(t *testing.T) {
+	tests := []struct {
+		name  string
+		label string
+		want  []string
+	}{
+		{name: "no label"},
+		{name: "a dependency waited on to start or be healthy", label: "db:service_healthy:false,cache:service_started:true"},
+		{
+			name:  "several entries",
+			label: "db:service_healthy:false,migrate:service_completed_successfully:true,seed:service_completed_successfully:false",
+			want:  []string{"migrate", "seed"},
+		},
+		{name: "an older label with no restart part", label: "migrate:service_completed_successfully", want: []string{"migrate"}},
+		{name: "an older label with the service alone", label: "db"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, parseAwaitsCompletion(tt.label))
+		})
+	}
 }
