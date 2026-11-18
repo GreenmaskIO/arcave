@@ -22,17 +22,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
-	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
-	cfg := config.Config{ComposeProvider: composeconfig.Config{Compose: composeconfig.Compose{WaitTimeout: waitTimeout}}}
 	wantReq := model.CreateSavepointRequest{
 		Name:        "before-migration",
 		Description: "schema v2",
-		WaitTimeout: waitTimeout,
 	}
 	savepoint := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "before-migration", Description: "schema v2",
 		NotCovered: &model.NotCovered{ServicesWithoutVolumes: []string{"web"}}}
@@ -83,7 +79,7 @@ func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
 			h := NewSavepointCreateHandler(svc, p)
 
 			// Act
-			err := h.SavepointCreate(context.Background(), cfg, "before-migration", "schema v2")
+			err := h.SavepointCreate(context.Background(), "before-migration", "schema v2")
 
 			// Assert
 			assert.ErrorIs(t, err, tt.wantErr)

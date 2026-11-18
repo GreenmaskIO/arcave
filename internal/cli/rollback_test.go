@@ -29,19 +29,14 @@ import (
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
-// waitTimeout is an arbitrary configured bound. The handler carries
-// compose.wait_timeout into the request untouched — bar the unit conversion the
-// request's plain time.Duration asks for — so the value means nothing beyond
-// being distinct from the package default a mistake would fall back to.
+// waitTimeout is an arbitrary configured bound, distinct from the zero a handler sends: the
+// provider applies compose.wait_timeout itself.
 const waitTimeout = 90 * time.Second
 
 func TestRollbackHandler_Rollback(t *testing.T) {
 	cfg := config.Config{ComposeProvider: composeconfig.Config{Compose: composeconfig.Compose{WaitTimeout: waitTimeout}}}
 	wantLatest := true
-	wantReq := model.RollbackRequest{
-		Latest:      &wantLatest,
-		WaitTimeout: waitTimeout,
-	}
+	wantReq := model.RollbackRequest{Latest: &wantLatest}
 	savepoint := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000"}
 	restored := []model.Volume{
 		{

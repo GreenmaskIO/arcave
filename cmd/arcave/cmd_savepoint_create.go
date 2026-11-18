@@ -55,7 +55,7 @@ func runSavepointCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	h := cli.NewSavepointCreateHandler(svc, loadRunOutput())
-	return h.SavepointCreate(ctx, projectCfg, name, savepointCreateDescription)
+	return h.SavepointCreate(ctx, name, savepointCreateDescription)
 }
 
 // savepointCreateResolveName reconciles the optional positional name with
