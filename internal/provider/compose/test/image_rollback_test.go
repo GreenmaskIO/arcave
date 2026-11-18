@@ -15,7 +15,6 @@
 package test
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -27,7 +26,6 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
 	"github.com/greenmaskio/storages"
-	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -45,27 +43,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
-
-// volumeMarker sits in the named volume, layerMarker past every mount: a rollback
-// has to put both back, and only the second comes out of an image.
-const volumeMarker = "/data/marker"
-
-// imageRollbackSpec is one service scaled by the test, writing to its own writable
-// layer and to a volume the replicas share.
-const imageRollbackSpec = `
-name: %[1]s
-services:
-  app:
-    image: busybox
-    command: ["sleep", "3600"]
-    stop_signal: SIGKILL
-    deploy:
-      replicas: %[2]d
-    volumes:
-      - data:/data
-volumes:
-  data: {}
-`
 
 func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 	t.Parallel()
@@ -96,8 +73,8 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 
 	rebuilt := env.replicas(t)
 	require.Len(t, rebuilt, 1)
-	assert.Equal(t, "original", env.read(t, rebuilt[0], layerMarker), "the writable layer")
-	assert.Equal(t, "original", env.read(t, rebuilt[0], volumeMarker), "the volume beside it")
+	assert.Equal(t, "original", env.read(t, rebuilt[0], daemontest.LayerMarker), "the writable layer")
+	assert.Equal(t, "original", env.read(t, rebuilt[0], daemontest.VolumeMarker), "the volume beside it")
 
 	// The restored layer names its upstream, so a savepoint taken on it still does.
 	restored, err := env.daemon.ImageInspect(env.ctx, res.WritableLayers[0].Tag)
@@ -145,7 +122,7 @@ func TestRollback_AgainToTheSameSavepointPutsTheSameTagBack(t *testing.T) {
 	require.Len(t, second.WritableLayers, 1)
 	assert.Equal(t, first.WritableLayers[0].Tag, second.WritableLayers[0].Tag, "the tag names the savepoint alone")
 	assert.Equal(t, first.WritableLayers[0].ImageID, second.WritableLayers[0].ImageID, "the same layer, loaded once")
-	assert.Equal(t, "original", env.read(t, env.replicas(t)[0], layerMarker))
+	assert.Equal(t, "original", env.read(t, env.replicas(t)[0], daemontest.LayerMarker))
 
 	restored, err := env.daemon.ImageInspect(env.ctx, second.WritableLayers[0].ImageID.String())
 	require.NoError(t, err)
@@ -187,8 +164,8 @@ func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
 	// per-replica fixup had to rebuild.
 	rebuilt := env.replicas(t)
 	require.Len(t, rebuilt, 2)
-	assert.Equal(t, "replica-1", env.read(t, rebuilt[0], layerMarker))
-	assert.Equal(t, "replica-2", env.read(t, rebuilt[1], layerMarker))
+	assert.Equal(t, "replica-1", env.read(t, rebuilt[0], daemontest.LayerMarker))
+	assert.Equal(t, "replica-2", env.read(t, rebuilt[1], daemontest.LayerMarker))
 }
 
 // imageRollbackEnv is the compose project these tests drive, its workload opened
@@ -261,7 +238,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 func (e *imageRollbackEnv) up(t *testing.T, replicas int) {
 	t.Helper()
 
-	e.upDocument(t, fmt.Sprintf(imageRollbackSpec, e.project, replicas))
+	e.upDocument(t, fmt.Sprintf(daemontest.ImageRollbackSpec, e.project, replicas))
 }
 
 // upDocument creates and starts the compose project a document describes.
@@ -294,8 +271,7 @@ func (e *imageRollbackEnv) replicas(t *testing.T) []string {
 func (e *imageRollbackEnv) write(t *testing.T, containerID, content string) {
 	t.Helper()
 
-	e.exec(t, containerID, "sh", "-c",
-		fmt.Sprintf("printf %%s %s > %s && printf %%s %s > %s", content, layerMarker, content, volumeMarker))
+	daemontest.WriteMarkers(t, e.daemon, containerID, content)
 }
 
 func (e *imageRollbackEnv) read(t *testing.T, containerID, path string) string {
@@ -308,21 +284,5 @@ func (e *imageRollbackEnv) read(t *testing.T, containerID, path string) string {
 func (e *imageRollbackEnv) exec(t *testing.T, containerID string, cmd ...string) string {
 	t.Helper()
 
-	created, err := e.daemon.ExecCreate(e.ctx, containerID, client.ExecCreateOptions{
-		Cmd: cmd, AttachStdout: true, AttachStderr: true,
-	})
-	require.NoError(t, err)
-
-	attached, err := e.daemon.ExecAttach(e.ctx, created.ID, client.ExecAttachOptions{})
-	require.NoError(t, err)
-	defer attached.Close()
-
-	var out bytes.Buffer
-	_, err = stdcopy.StdCopy(&out, &out, attached.Reader)
-	require.NoError(t, err)
-
-	inspect, err := e.daemon.ExecInspect(e.ctx, created.ID, client.ExecInspectOptions{})
-	require.NoError(t, err)
-	require.Zero(t, inspect.ExitCode, out.String())
-	return out.String()
+	return daemontest.Exec(t, e.daemon, containerID, cmd...)
 }

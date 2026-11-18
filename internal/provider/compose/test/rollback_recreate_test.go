@@ -47,6 +47,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/introspect"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
@@ -125,7 +126,7 @@ func TestRollback_RebuiltReplicaKeepsItsMountsAndLogSize(t *testing.T) {
 	before := containers["app-2"]
 	storedBefore := env.storedMounts(t, before.ID)
 	for name, c := range containers {
-		env.exec(t, c.ID, "sh", "-c", fmt.Sprintf("printf %%s %s > %s", name, layerMarker))
+		env.exec(t, c.ID, "sh", "-c", fmt.Sprintf("printf %%s %s > %s", name, daemontest.LayerMarker))
 	}
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "two-replicas"})
 	require.NoError(t, err)
@@ -139,7 +140,7 @@ func TestRollback_RebuiltReplicaKeepsItsMountsAndLogSize(t *testing.T) {
 	containers = env.containers(t)
 	require.Contains(t, containers, "app-2")
 	after := containers["app-2"]
-	assert.Equal(t, "app-2", env.read(t, after.ID, layerMarker), "rebuilt on its own layer, not its service's")
+	assert.Equal(t, "app-2", env.read(t, after.ID, daemontest.LayerMarker), "rebuilt on its own layer, not its service's")
 	assert.Equal(t, "kept", env.read(t, after.ID, "/sub/marker"), "the subpath, not the volume whole")
 	assert.Equal(t, before.Inspect.HostConfig.Binds, after.Inspect.HostConfig.Binds, "binds")
 	assert.ElementsMatch(t, before.Inspect.HostConfig.Mounts, after.Inspect.HostConfig.Mounts, "mount requests")
@@ -360,13 +361,13 @@ func (e *recreateEnv) anonVolume(t *testing.T) string {
 func (e *recreateEnv) write(t *testing.T, volumeName, file, content string) {
 	t.Helper()
 
-	busybox(t, e.engine, volumeName, fmt.Sprintf("printf %%s %q > /data/%s", content, file))
+	composetest.Busybox(t, e.engine, volumeName, fmt.Sprintf("printf %%s %q > /data/%s", content, file))
 }
 
 func (e *recreateEnv) read(t *testing.T, volumeName, file string) string {
 	t.Helper()
 
-	return busybox(t, e.engine, volumeName, "cat /data/"+file)
+	return composetest.Busybox(t, e.engine, volumeName, "cat /data/"+file)
 }
 
 // envOf is the container's environment as a comparable set.

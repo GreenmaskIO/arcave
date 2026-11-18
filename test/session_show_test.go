@@ -24,6 +24,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // sessionShowSpec is one service holding a named volume.
@@ -31,7 +32,7 @@ const sessionShowSpec = `
 name: %s
 services:
   db:
-    image: ` + busyboxImage + `
+    image: ` + daemontest.BusyboxImage + `
     command: ["sleep", "3600"]
     stop_signal: SIGKILL
     volumes: ["data:/data"]

@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // healthCheckDisabledSpec is a service whose healthcheck is disabled beside one that runs
@@ -70,7 +71,7 @@ func TestRollback_StartsAServiceWithItsHealthcheckDisabled(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	rebuilt := env.service(t, "app")
-	assert.Equal(t, "original", env.read(t, rebuilt.ID, layerMarker), "the writable layer")
+	assert.Equal(t, "original", env.read(t, rebuilt.ID, daemontest.LayerMarker), "the writable layer")
 	assert.Equal(t, "original", env.read(t, rebuilt.ID, cacheMarker), "the anonymous volume")
 	require.NotNil(t, rebuilt.Inspect.Config.Healthcheck)
 	assert.Equal(t, []string{"NONE"}, rebuilt.Inspect.Config.Healthcheck.Test, "the healthcheck stays disabled")

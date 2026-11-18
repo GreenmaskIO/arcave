@@ -30,6 +30,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
 const (
@@ -168,7 +169,7 @@ func (e *env) newSlowVolume(t *testing.T, service string) model.Volume {
 
 	name := itProject + "-" + service + "-" + daemontest.RandomSuffix(t)
 	createVolume(t, e.cli, name)
-	busybox(t, e.engine, name, fmt.Sprintf("dd if=/dev/urandom of=/data/blob bs=1k count=%d 2>/dev/null", slowKiB))
+	composetest.Busybox(t, e.engine, name, fmt.Sprintf("dd if=/dev/urandom of=/data/blob bs=1k count=%d 2>/dev/null", slowKiB))
 	return namedVolume(name, model.ServiceReference{Service: "db", Target: "/data"})
 }
 

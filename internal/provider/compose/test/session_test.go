@@ -432,11 +432,11 @@ func TestSession_RollbackStaysInItsSession(t *testing.T) {
 
 	// Act
 	_, branchErr := branch.svc.Rollback(env.ctx, model.RollbackRequest{Name: &name})
-	branchState := baseline.read(t, baseline.replicas(t)[0], volumeMarker) + "/" +
-		baseline.read(t, baseline.replicas(t)[0], layerMarker)
+	branchState := baseline.read(t, baseline.replicas(t)[0], daemontest.VolumeMarker) + "/" +
+		baseline.read(t, baseline.replicas(t)[0], daemontest.LayerMarker)
 	_, baselineErr := baseline.svc.Rollback(env.ctx, model.RollbackRequest{Name: &name})
-	baselineState := baseline.read(t, baseline.replicas(t)[0], volumeMarker) + "/" +
-		baseline.read(t, baseline.replicas(t)[0], layerMarker)
+	baselineState := baseline.read(t, baseline.replicas(t)[0], daemontest.VolumeMarker) + "/" +
+		baseline.read(t, baseline.replicas(t)[0], daemontest.LayerMarker)
 
 	// Assert
 	require.NoError(t, branchErr)
@@ -475,7 +475,7 @@ func TestSession_RemoveDropsItsDataAndLeavesTheProjectRunning(t *testing.T) {
 	require.NoError(t, err)
 	assert.NoDirExists(t, env.sessionDir(feat.ID), "the session's tree, its blobs included")
 	assert.Equal(t, []string{containerID}, baseline.replicas(t), "the running container is left alone")
-	assert.Equal(t, "branched", baseline.read(t, containerID, volumeMarker), "and so is its volume")
+	assert.Equal(t, "branched", baseline.read(t, containerID, daemontest.VolumeMarker), "and so is its volume")
 
 	_, err = branch.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "late"})
 	assert.ErrorIs(t, err, model.ErrSessionNotFound, "a service bound to the deleted session writes nothing")
@@ -483,7 +483,7 @@ func TestSession_RemoveDropsItsDataAndLeavesTheProjectRunning(t *testing.T) {
 
 	_, err = baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &kept.ID})
 	require.NoError(t, err, "baseline's own blobs survived")
-	assert.Equal(t, "original", baseline.read(t, baseline.replicas(t)[0], volumeMarker))
+	assert.Equal(t, "original", baseline.read(t, baseline.replicas(t)[0], daemontest.VolumeMarker))
 }
 
 // The marker is host-local: an interrupted rollback in one session holds every session.

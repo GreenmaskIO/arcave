@@ -34,6 +34,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // statusSpec is a compose project with a healthchecked service publishing a port, a scaled one, and
@@ -42,7 +43,7 @@ const statusSpec = `
 name: %[1]s
 services:
   db:
-    image: ` + busyboxImage + `
+    image: ` + daemontest.BusyboxImage + `
     command: ["sleep", "3600"]
     stop_signal: SIGKILL
     ports: ["127.0.0.1::5432"]
@@ -52,16 +53,16 @@ services:
       retries: 3
     volumes: ["data:/data"]
   web:
-    image: ` + busyboxImage + `
+    image: ` + daemontest.BusyboxImage + `
     command: ["sleep", "3600"]
     stop_signal: SIGKILL
     deploy:
       replicas: 2
   migrate:
-    image: ` + busyboxImage + `
+    image: ` + daemontest.BusyboxImage + `
     command: ["true"]
   app:
-    image: ` + busyboxImage + `
+    image: ` + daemontest.BusyboxImage + `
     command: ["sleep", "3600"]
     stop_signal: SIGKILL
     depends_on:

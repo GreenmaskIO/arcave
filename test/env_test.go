@@ -35,39 +35,14 @@ import (
 )
 
 const (
-	// busyboxImage is what every service and helper container here runs.
-	busyboxImage = "busybox"
 	// busyboxDigest pins fidelityBusybox, so compose's image label is one arcave can compare.
 	busyboxDigest   = "@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 	fidelityBusybox = "busybox:1.37" + busyboxDigest
 )
 
-// layerMarker lives in a replica's writable layer, volumeMarker in the volume its replicas share.
-const (
-	layerMarker  = "/layer-marker"
-	volumeMarker = "/data/marker"
-)
-
 // minComposeWaitVersion is the oldest `docker compose` whose up waits on the services with a
 // deadline: --wait-timeout.
 const minComposeWaitVersion = "2.17.0"
-
-// imageRollbackSpec is one service scaled by the test, writing to its own writable
-// layer and to a volume the replicas share.
-const imageRollbackSpec = `
-name: %[1]s
-services:
-  app:
-    image: busybox
-    command: ["sleep", "3600"]
-    stop_signal: SIGKILL
-    deploy:
-      replicas: %[2]d
-    volumes:
-      - data:/data
-volumes:
-  data: {}
-`
 
 // composeProject is one compose project the user's own `docker compose` runs, read back through
 // the daemon's API.
@@ -96,11 +71,11 @@ func newComposeProject(t *testing.T, kind string) *composeProject {
 	}
 }
 
-// up runs imageRollbackSpec with replicas of its one service.
+// up runs daemontest.ImageRollbackSpec with replicas of its one service.
 func (e *composeProject) up(t *testing.T, replicas int) {
 	t.Helper()
 
-	e.upDocument(t, fmt.Sprintf(imageRollbackSpec, e.project, replicas))
+	e.upDocument(t, fmt.Sprintf(daemontest.ImageRollbackSpec, e.project, replicas))
 }
 
 // upDocument writes document as the compose project's compose.yaml and brings it up, waiting on
@@ -184,8 +159,7 @@ func (e *composeProject) listByService(t *testing.T) map[string][]container.Summ
 func (e *composeProject) write(t *testing.T, containerID, content string) {
 	t.Helper()
 
-	e.exec(t, containerID, "sh", "-c",
-		fmt.Sprintf("printf %%s %s > %s && printf %%s %s > %s", content, layerMarker, content, volumeMarker))
+	daemontest.WriteMarkers(t, e.daemon, containerID, content)
 }
 
 func (e *composeProject) read(t *testing.T, containerID, path string) string {
@@ -198,23 +172,7 @@ func (e *composeProject) read(t *testing.T, containerID, path string) string {
 func (e *composeProject) exec(t *testing.T, containerID string, cmd ...string) string {
 	t.Helper()
 
-	created, err := e.daemon.ExecCreate(e.ctx, containerID, client.ExecCreateOptions{
-		Cmd: cmd, AttachStdout: true, AttachStderr: true,
-	})
-	require.NoError(t, err)
-
-	attached, err := e.daemon.ExecAttach(e.ctx, created.ID, client.ExecAttachOptions{})
-	require.NoError(t, err)
-	defer attached.Close()
-
-	var out bytes.Buffer
-	_, err = stdcopy.StdCopy(&out, &out, attached.Reader)
-	require.NoError(t, err)
-
-	inspect, err := e.daemon.ExecInspect(e.ctx, created.ID, client.ExecInspectOptions{})
-	require.NoError(t, err)
-	require.Zero(t, inspect.ExitCode, out.String())
-	return out.String()
+	return daemontest.Exec(t, e.daemon, containerID, cmd...)
 }
 
 // externalVolume creates a volume outside the compose project, filled by script with the volume at
@@ -247,9 +205,9 @@ func busybox(t *testing.T, daemon *client.Client, vol, script string) string {
 	t.Helper()
 
 	ctx := context.Background()
-	pullMissing(t, daemon, busyboxImage)
+	pullMissing(t, daemon, daemontest.BusyboxImage)
 	created, err := daemon.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Config:     &container.Config{Image: busyboxImage, Cmd: []string{"sh", "-c", script}},
+		Config:     &container.Config{Image: daemontest.BusyboxImage, Cmd: []string{"sh", "-c", script}},
 		HostConfig: &container.HostConfig{Binds: []string{vol + ":/data"}},
 	})
 	require.NoError(t, err)

@@ -25,6 +25,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // safetySnapshotGarbage is the part of `arcave gc`'s JSON these tests read.
@@ -100,7 +101,7 @@ func TestGC_RetainsTheNewestSafetySnapshot(t *testing.T) {
 	afterGC := listed()
 	undone := decode[model.RollbackResult](t, arcave("rollback", third.SafetySnapshot.String()))
 	replica := compose.replicas(t)[0]
-	volumeUndone, layerUndone := compose.read(t, replica, volumeMarker), compose.read(t, replica, layerMarker)
+	volumeUndone, layerUndone := compose.read(t, replica, daemontest.VolumeMarker), compose.read(t, replica, daemontest.LayerMarker)
 	freeing := gc()
 	afterFreeing := listed()
 
@@ -213,7 +214,7 @@ func TestRollback_WithoutASafetySnapshot(t *testing.T) {
 			rolledBack := arcave(append([]string{"rollback"}, append(tt.flags, "v1")...)...)
 			listed := decode[[]model.Savepoint](t, arcave("savepoint", "list", "--include-safety-snapshots"))
 			replica := compose.replicas(t)[0]
-			volumeAfter, layerAfter := compose.read(t, replica, volumeMarker), compose.read(t, replica, layerMarker)
+			volumeAfter, layerAfter := compose.read(t, replica, daemontest.VolumeMarker), compose.read(t, replica, daemontest.LayerMarker)
 
 			// Assert
 			var response map[string]json.RawMessage

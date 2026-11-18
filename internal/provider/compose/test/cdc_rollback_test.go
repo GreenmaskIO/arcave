@@ -46,6 +46,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/repo"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/workload"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
@@ -82,8 +83,6 @@ const (
 	blobKiB = 16384
 	// mutateKiB is what changes between the two captures: a few percent.
 	mutateKiB = 256
-	// busyboxImage fills, mutates and hashes the volumes.
-	busyboxImage = "busybox"
 )
 
 func TestCDCBackend_CreateAndRollback(t *testing.T) {
@@ -484,7 +483,7 @@ func (e *cdcEnv) hashAll(t *testing.T) map[string]string {
 
 	sums := make(map[string]string, len(e.volumes))
 	for _, v := range e.volumes {
-		out := busybox(t, e.engine, v.name, "find /data -type f -exec sha256sum {} + | sort")
+		out := composetest.Busybox(t, e.engine, v.name, "find /data -type f -exec sha256sum {} + | sort")
 		require.NotEmpty(t, out, "volume %s must hold files to hash", v.name)
 		sums[v.name] = out
 	}
@@ -496,7 +495,7 @@ func (e *cdcEnv) hashAll(t *testing.T) map[string]string {
 func (e *cdcEnv) mutate(t *testing.T, v cdcVolume) {
 	t.Helper()
 
-	busybox(t, e.engine, v.name, fmt.Sprintf(
+	composetest.Busybox(t, e.engine, v.name, fmt.Sprintf(
 		"dd if=/dev/urandom of=/data/blob bs=1k count=%d seek=%d conv=notrunc", mutateKiB, blobKiB/3))
 }
 
@@ -511,7 +510,7 @@ func introspectionOf(volumes []cdcVolume) composemodel.IntrospectionResult {
 			Name:   v.name,
 			UsedBy: []model.ServiceReference{{Service: v.service, Target: v.target}},
 		})
-		services = append(services, composemodel.Service{Name: v.service, Image: busyboxImage})
+		services = append(services, composemodel.Service{Name: v.service, Image: daemontest.BusyboxImage})
 	}
 	return composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name:     cdcProject,
@@ -641,7 +640,7 @@ func createLabelledContainer(t *testing.T, cli *client.Client, service string, v
 
 	created, err := cli.ContainerCreate(context.Background(), client.ContainerCreateOptions{
 		Config: &container.Config{
-			Image: busyboxImage,
+			Image: daemontest.BusyboxImage,
 			Cmd:   []string{"sh", "-c", "sleep 3600"},
 			Labels: map[string]string{
 				"com.docker.compose.project": cdcProject,
@@ -662,7 +661,7 @@ func createLabelledContainer(t *testing.T, cli *client.Client, service string, v
 func fill(t *testing.T, engine *dockerclient.Engine, vol string) {
 	t.Helper()
 
-	busybox(t, engine, vol, fmt.Sprintf(
+	composetest.Busybox(t, engine, vol, fmt.Sprintf(
 		"dd if=/dev/urandom of=/data/blob bs=1k count=%d "+
 			"&& mkdir -p /data/nested && dd if=/dev/urandom of=/data/nested/inner bs=1k count=64 "+
 			"&& dd if=/dev/urandom of=/data/small bs=1k count=4", blobKiB))
@@ -694,20 +693,4 @@ func dirNames(t *testing.T, store storages.Storager) []string {
 		names = append(names, dir.Dirname())
 	}
 	return names
-}
-
-// busybox runs one shell line with vol at /data and returns its stdout.
-func busybox(t *testing.T, engine *dockerclient.Engine, vol, script string) string {
-	t.Helper()
-
-	var stdout, stderr bytes.Buffer
-	err := engine.RunOneShot(context.Background(), composemodel.OneShotSpec{
-		Image:  busyboxImage,
-		Cmd:    []string{"sh", "-c", script},
-		Binds:  []string{vol + ":/data"},
-		Stdout: &stdout,
-		Stderr: &stderr,
-	})
-	require.NoErrorf(t, err, "busybox %q failed:\nstdout:\n%s\nstderr:\n%s", script, stdout.String(), stderr.String())
-	return stdout.String()
 }

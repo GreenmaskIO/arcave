@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // oneShotSpec is a migrate no service waits on, beside a long-running app: compose's
@@ -61,7 +62,7 @@ func TestRollback_StartsAOneShotNobodyAwaits(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	rebuilt := env.service(t, "app")
-	assert.Equal(t, "original", env.read(t, rebuilt.ID, layerMarker), "the writable layer")
+	assert.Equal(t, "original", env.read(t, rebuilt.ID, daemontest.LayerMarker), "the writable layer")
 	assert.Equal(t, "original", env.read(t, rebuilt.ID, cacheMarker), "the anonymous volume")
 	migrate := env.service(t, "migrate")
 	assert.Equal(t, container.StateExited, migrate.Inspect.State.Status)

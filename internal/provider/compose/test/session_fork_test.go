@@ -25,6 +25,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // A fork copies the whole session, byte for byte and without its record, and leaves the
@@ -76,7 +77,7 @@ func TestSessionFork_ClonesTheSessionAndLeavesTheDaemonAlone(t *testing.T) {
 		env.summary(t, clone.ID).SizeBytes, "size_bytes is the source's plus the record and the heartbeat")
 
 	assert.Equal(t, []string{containerID}, baseline.replicas(t), "no container was touched")
-	assert.Equal(t, "unsaved", baseline.read(t, containerID, volumeMarker), "nor any volume")
+	assert.Equal(t, "unsaved", baseline.read(t, containerID, daemontest.VolumeMarker), "nor any volume")
 }
 
 // A rollback is what deploys a fork, and it needs nothing of the source: blobs and upstreams
@@ -106,8 +107,8 @@ func TestSessionFork_RollbackInTheForkDeploys(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	replica := fork.replicas(t)[0]
-	assert.Equal(t, "original", fork.read(t, replica, volumeMarker), "the volume")
-	assert.Equal(t, "original", fork.read(t, replica, layerMarker), "the writable layer")
+	assert.Equal(t, "original", fork.read(t, replica, daemontest.VolumeMarker), "the volume")
+	assert.Equal(t, "original", fork.read(t, replica, daemontest.LayerMarker), "the writable layer")
 	list, err := fork.svc.ListSavepoints(env.ctx, model.ListRequest{IncludeSafetySnapshots: true})
 	require.NoError(t, err)
 	assert.Len(t, list, 2, "the rollback left its safety snapshot in the fork")

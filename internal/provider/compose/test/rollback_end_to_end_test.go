@@ -31,6 +31,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	dockerclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
@@ -114,7 +115,7 @@ func TestRollback_RebuildsEverythingTheSavepointRecorded(t *testing.T) {
 	containers := env.containers(t)
 	require.Len(t, containers, 9)
 	for name, c := range containers {
-		assert.Equal(t, name+"-original", env.read(t, c.ID, layerMarker), "%s's writable layer", name)
+		assert.Equal(t, name+"-original", env.read(t, c.ID, daemontest.LayerMarker), "%s's writable layer", name)
 		if path, ok := endToEndVolumes[name]; ok {
 			assert.Equal(t, name+"-original", env.read(t, c.ID, path), "%s's volume", name)
 		}
@@ -178,7 +179,7 @@ func TestRollback_RebuildsAComposeProjectThatWasTakenDown(t *testing.T) {
 	containers := env.containers(t)
 	require.Len(t, containers, 9)
 	for name, c := range containers {
-		assert.Equal(t, name+"-original", env.read(t, c.ID, layerMarker), "%s's writable layer", name)
+		assert.Equal(t, name+"-original", env.read(t, c.ID, daemontest.LayerMarker), "%s's writable layer", name)
 		if path, ok := endToEndVolumes[name]; ok {
 			assert.Equal(t, name+"-original", env.read(t, c.ID, path), "%s's volume", name)
 		}
@@ -260,7 +261,7 @@ func TestRollback_RenumbersAroundAMissingFirstReplica(t *testing.T) {
 		c, ok := rebuilt[number]
 		require.True(t, ok, "replica %d is rebuilt under its recorded number", number)
 		want := fmt.Sprintf("replica-%d", number)
-		assert.Equal(t, want, env.read(t, c.ID, layerMarker), "replica %d's writable layer", number)
+		assert.Equal(t, want, env.read(t, c.ID, daemontest.LayerMarker), "replica %d's writable layer", number)
 		assert.Equal(t, want, env.read(t, c.ID, cacheMarker), "replica %d's anonymous volume", number)
 	}
 }
@@ -272,7 +273,7 @@ func (e *imageRollbackEnv) externalVolume(t *testing.T, name, script string) {
 
 	_, err := e.daemon.VolumeCreate(e.ctx, client.VolumeCreateOptions{Name: name})
 	require.NoError(t, err)
-	busybox(t, dockerclient.NewEngine(e.daemon), name, script)
+	composetest.Busybox(t, dockerclient.NewEngine(e.daemon), name, script)
 	t.Cleanup(func() {
 		daemontest.RemoveComposeProject(t, e.daemon, e.project)
 		_, err := e.daemon.VolumeRemove(context.Background(), name, client.VolumeRemoveOptions{Force: true})
@@ -300,7 +301,7 @@ func (e *imageRollbackEnv) stampAll(t *testing.T, content string) {
 	t.Helper()
 
 	for name, c := range e.containers(t) {
-		script := fmt.Sprintf("printf %%s %s-%s > %s", name, content, layerMarker)
+		script := fmt.Sprintf("printf %%s %s-%s > %s", name, content, daemontest.LayerMarker)
 		if path, ok := endToEndVolumes[name]; ok {
 			script += fmt.Sprintf(" && printf %%s %s-%s > %s", name, content, path)
 		}

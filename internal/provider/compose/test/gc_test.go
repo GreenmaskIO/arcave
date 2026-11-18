@@ -46,6 +46,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // A gc deletes what removed savepoints, rollbacks and dead runs left in the store and the daemon,
@@ -186,15 +187,15 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	// The safety snapshot that stayed is whole: it holds what the second rollback overwrote.
 	_, err = baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &newestUndo.SafetySnapshot})
 	require.NoError(t, err, "nothing a retained safety snapshot needs was deleted")
-	assert.Equal(t, "first", baseline.read(t, baseline.replicas(t)[0], volumeMarker))
-	assert.Equal(t, "first", baseline.read(t, baseline.replicas(t)[0], layerMarker))
+	assert.Equal(t, "first", baseline.read(t, baseline.replicas(t)[0], daemontest.VolumeMarker))
+	assert.Equal(t, "first", baseline.read(t, baseline.replicas(t)[0], daemontest.LayerMarker))
 
 	// The surviving savepoint is whole.
 	baseline.write(t, baseline.replicas(t)[0], "drifted")
 	_, err = baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &second.ID})
 	require.NoError(t, err, "nothing a live savepoint needs was deleted")
-	assert.Equal(t, "second", baseline.read(t, baseline.replicas(t)[0], volumeMarker))
-	assert.Equal(t, "second", baseline.read(t, baseline.replicas(t)[0], layerMarker))
+	assert.Equal(t, "second", baseline.read(t, baseline.replicas(t)[0], daemontest.VolumeMarker))
+	assert.Equal(t, "second", baseline.read(t, baseline.replicas(t)[0], daemontest.LayerMarker))
 }
 
 // plantUnreferencedImage stores, under composeDir, an upstream image no record names whose intact

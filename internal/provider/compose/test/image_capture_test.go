@@ -44,10 +44,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
-// layerMarker is written into the container's own filesystem, past every mount:
-// state no volume capture can see.
-const layerMarker = "/layer-marker"
-
 // imageCaptureSpec is one service writing to its writable layer and one volume,
 // so a savepoint has both halves to take.
 const imageCaptureSpec = `
@@ -185,7 +181,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 func (e *imageCaptureEnv) up(t *testing.T) {
 	t.Helper()
 
-	document := fmt.Sprintf(imageCaptureSpec, e.project, layerMarker)
+	document := fmt.Sprintf(imageCaptureSpec, e.project, daemontest.LayerMarker)
 	project, err := composespec.NewCodec().Parse(e.ctx, []byte(document))
 	require.NoError(t, err)
 	require.NoError(t, e.compose.Create(e.ctx, project, nil))

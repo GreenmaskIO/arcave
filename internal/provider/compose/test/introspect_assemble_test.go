@@ -48,6 +48,7 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/introspect"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
@@ -460,7 +461,7 @@ func (e *fidelityEnv) createOutsideVolume(t *testing.T, name, script string) {
 	require.NoError(t, err)
 	e.volumes[volumeName] = true
 	if script != "" {
-		busybox(t, dockerclient.NewEngine(e.daemon), volumeName, script)
+		composetest.Busybox(t, dockerclient.NewEngine(e.daemon), volumeName, script)
 	}
 }
 

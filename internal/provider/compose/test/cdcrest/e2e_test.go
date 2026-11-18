@@ -38,6 +38,7 @@ import (
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/repo"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
 // The transport's proof: a stock restic container reaches the served endpoint
@@ -48,9 +49,6 @@ import (
 
 // resticImage is the stock image the one-shot runner drives: the one arcave defaults to.
 const resticImage = composeconfig.DefaultResticImage
-
-// busyboxImage fills, hashes and wipes the volume.
-const busyboxImage = "busybox"
 
 const e2ePassword = "arcave-e2e"
 
@@ -185,7 +183,7 @@ func newDataVolume(t *testing.T, cli *client.Client, runner containerRunner) str
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = cli.VolumeRemove(context.Background(), name, client.VolumeRemoveOptions{Force: true}) })
 
-	busybox(t, runner, name, fmt.Sprintf(
+	composetest.Busybox(t, runner, name, fmt.Sprintf(
 		"dd if=/dev/urandom of=/data/blob bs=1M count=%d && mkdir -p /data/nested && dd if=/dev/urandom of=/data/nested/inner bs=1M count=8 && dd if=/dev/urandom of=/data/small bs=1k count=4",
 		blobMiB))
 	return name
@@ -195,39 +193,22 @@ func newDataVolume(t *testing.T, cli *client.Client, runner containerRunner) str
 // alone.
 func mutateVolume(t *testing.T, runner containerRunner, vol string) {
 	t.Helper()
-	busybox(t, runner, vol, fmt.Sprintf(
+	composetest.Busybox(t, runner, vol, fmt.Sprintf(
 		"dd if=/dev/urandom of=/data/blob bs=1M count=%d seek=%d conv=notrunc", mutateMiB, blobMiB/3))
 }
 
 // wipeVolume clears the volume the way the restore path's wipe policy does.
 func wipeVolume(t *testing.T, runner containerRunner, vol string) {
 	t.Helper()
-	busybox(t, runner, vol, "find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} +")
+	composetest.Busybox(t, runner, vol, "find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} +")
 }
 
 // hashVolume returns a sorted sha256 listing of every file in the volume.
 func hashVolume(t *testing.T, runner containerRunner, vol string) string {
 	t.Helper()
-	sums := busybox(t, runner, vol, "find /data -type f -exec sha256sum {} + | sort")
+	sums := composetest.Busybox(t, runner, vol, "find /data -type f -exec sha256sum {} + | sort")
 	require.NotEmpty(t, sums, "the volume must hold files to hash")
 	return sums
-}
-
-// busybox runs one shell line in a busybox container with the volume at /data
-// and returns its stdout.
-func busybox(t *testing.T, runner containerRunner, vol, script string) string {
-	t.Helper()
-
-	var stdout, stderr bytes.Buffer
-	err := runner.RunOneShot(t.Context(), composemodel.OneShotSpec{
-		Image:  busyboxImage,
-		Cmd:    []string{"sh", "-c", script},
-		Binds:  []string{vol + ":/data"},
-		Stdout: &stdout,
-		Stderr: &stderr,
-	})
-	require.NoErrorf(t, err, "busybox %q failed:\nstdout:\n%s\nstderr:\n%s", script, stdout.String(), stderr.String())
-	return stdout.String()
 }
 
 // runRestic runs one restic command in a stock container against repoURL and

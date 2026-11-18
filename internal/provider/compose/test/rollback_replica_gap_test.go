@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // cacheMarker sits in each replica's own anonymous volume.
@@ -78,7 +79,7 @@ func TestRollback_KeepsAGapInReplicaNumbering(t *testing.T) {
 		require.True(t, ok, "replica %d is rebuilt under its recorded number", number)
 		assert.Equal(t, fmt.Sprintf("%s-worker-%d", env.project, number), c.Name)
 		want := fmt.Sprintf("replica-%d", number)
-		assert.Equal(t, want, env.read(t, c.ID, layerMarker), "replica %d's writable layer", number)
+		assert.Equal(t, want, env.read(t, c.ID, daemontest.LayerMarker), "replica %d's writable layer", number)
 		assert.Equal(t, want, env.read(t, c.ID, cacheMarker), "replica %d's anonymous volume", number)
 	}
 	assert.NotContains(t, rebuilt, 2, "no replica the savepoint did not hold is created")
@@ -103,5 +104,5 @@ func (e *imageRollbackEnv) stamp(t *testing.T, containerID, content string) {
 	t.Helper()
 
 	e.exec(t, containerID, "sh", "-c",
-		fmt.Sprintf("printf %%s %s > %s && printf %%s %s > %s", content, layerMarker, content, cacheMarker))
+		fmt.Sprintf("printf %%s %s > %s && printf %%s %s > %s", content, daemontest.LayerMarker, content, cacheMarker))
 }

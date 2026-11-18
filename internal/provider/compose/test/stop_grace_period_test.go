@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,7 +63,7 @@ func TestClient_Stop_HonoursTheDeclaredGracePeriod(t *testing.T) {
 	inspect, err := env.daemon.ContainerInspect(env.ctx, env.project+"-db-1", client.ContainerInspectOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, inspect.Container.State.ExitCode, "the service finished its shutdown")
-	assert.Equal(t, "clean", busybox(t, env.engine, env.project+"_data", "test -f /data/clean && printf clean"))
+	assert.Equal(t, "clean", composetest.Busybox(t, env.engine, env.project+"_data", "test -f /data/clean && printf clean"))
 	assert.NotContains(t, env.logs.String(), "was killed")
 }
 

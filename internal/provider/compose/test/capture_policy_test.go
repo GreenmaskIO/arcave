@@ -76,9 +76,9 @@ func TestRollback_CapturesWhatTheLabelsSay(t *testing.T) {
 		require.NoError(t, os.WriteFile(srcMarker, []byte(content), 0o644))
 		env.exec(t, env.container(t, "app"), "sh", "-c", fmt.Sprintf(
 			"printf %%s %[1]s > %[2]s && printf %%s %[1]s > /data/marker && printf %%s %[1]s > /scratch/marker",
-			content, layerMarker))
+			content, daemontest.LayerMarker))
 		env.exec(t, env.container(t, "cache"), "sh", "-c", fmt.Sprintf(
-			"printf %%s %[1]s > %[2]s && printf %%s %[1]s > /cache/marker", content, layerMarker))
+			"printf %%s %[1]s > %[2]s && printf %%s %[1]s > /cache/marker", content, daemontest.LayerMarker))
 	}
 	stamp("original")
 	excluded := []model.SkippedVolume{
@@ -123,11 +123,11 @@ func TestRollback_CapturesWhatTheLabelsSay(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	app, cache := env.container(t, "app"), env.container(t, "cache")
-	assert.Equal(t, "original", env.readOrAbsent(t, app, layerMarker), "app's layer is restored")
+	assert.Equal(t, "original", env.readOrAbsent(t, app, daemontest.LayerMarker), "app's layer is restored")
 	assert.Equal(t, "original", env.readOrAbsent(t, app, "/data/marker"), "the data volume is restored")
 	assert.Equal(t, absent, env.readOrAbsent(t, app, "/scratch/marker"), "the excluded anonymous volume comes back empty")
 	assert.Equal(t, "drifted", env.readOrAbsent(t, app, "/src/marker"), "the excluded bind is untouched")
-	assert.Equal(t, absent, env.readOrAbsent(t, cache, layerMarker), "cache is created fresh from its upstream")
+	assert.Equal(t, absent, env.readOrAbsent(t, cache, daemontest.LayerMarker), "cache is created fresh from its upstream")
 	assert.Equal(t, "drifted", env.readOrAbsent(t, cache, "/cache/marker"), "cache's volume is untouched")
 
 	// The daemon says what the rollback put back: the stamps beside the user's labels.
@@ -227,7 +227,7 @@ func TestRollback_KeepsAGapWithoutALayer(t *testing.T) {
 		require.True(t, ok, "replica %d is rebuilt under its recorded number", number)
 		assert.Equal(t, fmt.Sprintf("%s-worker-%d", env.project, number), c.Name)
 		assert.Equal(t, fmt.Sprintf("replica-%d", number), env.read(t, c.ID, cacheMarker))
-		assert.Equal(t, absent, env.readOrAbsent(t, c.ID, layerMarker), "no layer was held")
+		assert.Equal(t, absent, env.readOrAbsent(t, c.ID, daemontest.LayerMarker), "no layer was held")
 	}
 }
 
@@ -243,7 +243,7 @@ func TestRollback_SafetySnapshotKeepsWhatTheRollbackOverwrites(t *testing.T) {
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "before-the-label"})
 	require.NoError(t, err)
 
-	labelled := strings.Replace(fmt.Sprintf(imageRollbackSpec, env.project, 1),
+	labelled := strings.Replace(fmt.Sprintf(daemontest.ImageRollbackSpec, env.project, 1),
 		"volumes:\n  data: {}", "volumes:\n  data:\n    labels:\n      arcave.capture: \"false\"", 1)
 	// A volume's labels are set at its creation, so the project is made again.
 	daemontest.RemoveComposeProject(t, env.daemon, env.project)
@@ -255,7 +255,7 @@ func TestRollback_SafetySnapshotKeepsWhatTheRollbackOverwrites(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, "original", env.read(t, env.replicas(t)[0], volumeMarker))
+	assert.Equal(t, "original", env.read(t, env.replicas(t)[0], daemontest.VolumeMarker))
 }
 
 // namedByServiceSpec leaves a named volume out through the service mounting it.

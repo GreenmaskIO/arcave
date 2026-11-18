@@ -17,10 +17,8 @@
 package fullcopybackend
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 	"os"
 	"testing"
@@ -39,13 +37,12 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/runtimeprofile"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/fullcopy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
 const (
 	// itProject is the compose project name the container labels carry.
 	itProject = "arcave-fullcopy-vol-it"
-	// busyboxImage fills, mutates and hashes the volumes.
-	busyboxImage = "busybox"
 	// idFirst is the id every case captures under — a constant, not the clock, so
 	// a failure names the same id on every run.
 	idFirst = model.SavepointID("019e7044-8be8-7000-8000-000000000000")
@@ -241,7 +238,7 @@ func namedVolume(name string, usedBy ...model.ServiceReference) model.Volume {
 func (e *env) fill(t *testing.T, name string) {
 	t.Helper()
 
-	busybox(t, e.engine, name,
+	composetest.Busybox(t, e.engine, name,
 		"dd if=/dev/urandom of=/data/blob bs=1k count=256 "+
 			"&& mkdir -p /data/nested && dd if=/dev/urandom of=/data/nested/inner bs=1k count=64 "+
 			"&& echo secret > /data/nested/keyfile && chmod 600 /data/nested/keyfile "+
@@ -253,7 +250,7 @@ func (e *env) fill(t *testing.T, name string) {
 func (e *env) mutate(t *testing.T, vol model.Volume) {
 	t.Helper()
 
-	busybox(t, e.engine, vol.Named.VolumeName,
+	composetest.Busybox(t, e.engine, vol.Named.VolumeName,
 		"dd if=/dev/urandom of=/data/blob bs=1k count=32 seek=64 conv=notrunc")
 }
 
@@ -261,7 +258,7 @@ func (e *env) mutate(t *testing.T, vol model.Volume) {
 func (e *env) addFile(t *testing.T, vol model.Volume, name string) {
 	t.Helper()
 
-	busybox(t, e.engine, vol.Named.VolumeName, fmt.Sprintf("dd if=/dev/urandom of=/data/%s bs=1k count=8", name))
+	composetest.Busybox(t, e.engine, vol.Named.VolumeName, fmt.Sprintf("dd if=/dev/urandom of=/data/%s bs=1k count=8", name))
 }
 
 // hash lists every file in the volume with its digest, mode and owner: content,
@@ -270,7 +267,7 @@ func (e *env) addFile(t *testing.T, vol model.Volume, name string) {
 func (e *env) hash(t *testing.T, vol model.Volume) string {
 	t.Helper()
 
-	out := busybox(t, e.engine, vol.Named.VolumeName,
+	out := composetest.Busybox(t, e.engine, vol.Named.VolumeName,
 		"find /data -type f -exec sha256sum {} + | sort; "+
 			`find /data -exec stat -c '%n %a %u:%g' {} + | sort`)
 	require.NotEmpty(t, out, "volume %s must hold files to hash", vol.Named.VolumeName)
@@ -326,7 +323,7 @@ func createHolder(t *testing.T, cli *client.Client, service, name string, host *
 
 	created, err := cli.ContainerCreate(context.Background(), client.ContainerCreateOptions{
 		Config: &container.Config{
-			Image: busyboxImage,
+			Image: daemontest.BusyboxImage,
 			Cmd:   []string{"sh", "-c", "sleep 3600"},
 			Labels: map[string]string{
 				"com.docker.compose.project": itProject,
@@ -340,22 +337,6 @@ func createHolder(t *testing.T, cli *client.Client, service, name string, host *
 	t.Cleanup(func() {
 		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
 	})
-}
-
-// busybox runs one shell line with the volume at /data and returns its stdout.
-func busybox(t *testing.T, engine *dockerclient.Engine, name, script string) string {
-	t.Helper()
-
-	var stdout, stderr bytes.Buffer
-	err := engine.RunOneShot(context.Background(), composemodel.OneShotSpec{
-		Image:  busyboxImage,
-		Cmd:    []string{"sh", "-c", script},
-		Binds:  []string{name + ":/data"},
-		Stdout: &stdout,
-		Stderr: &stderr,
-	})
-	require.NoErrorf(t, err, "busybox %q failed:\nstdout:\n%s\nstderr:\n%s", script, stdout.String(), stderr.String())
-	return stdout.String()
 }
 
 func TestMain(m *testing.M) {

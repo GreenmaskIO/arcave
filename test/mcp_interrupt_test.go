@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // mcpExitTimeout bounds how long the server may take to exit once its rollback is over.
@@ -188,8 +189,8 @@ func TestMCP_InterruptedRollback(t *testing.T) {
 			require.NoError(t, err)
 			assert.False(t, found, "the rollback must not leave its marker")
 			replica := app.replicas(t)[0]
-			assert.Equal(t, tt.wantContent, app.read(t, replica, volumeMarker), "the volume")
-			assert.Equal(t, tt.wantContent, app.read(t, replica, layerMarker), "the writable layer")
+			assert.Equal(t, tt.wantContent, app.read(t, replica, daemontest.VolumeMarker), "the volume")
+			assert.Equal(t, tt.wantContent, app.read(t, replica, daemontest.LayerMarker), "the writable layer")
 			all := env.listSavepoints(t, model.DefaultSessionName, true)
 			require.Len(t, all, 2, "the safety snapshot stays")
 			assert.True(t, all[0].IsSafetySnapshot(), "newest first")

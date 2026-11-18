@@ -33,6 +33,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/service/lock"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // mcpCallTimeout bounds one tool call; a rollback restarts the compose project.
@@ -426,7 +427,7 @@ func TestMCP_CDCOverStdio(t *testing.T) {
 	// Assert
 	assert.Equal(t, []model.SnapshotBackendKind{model.SnapshotBackendCDC}, statKinds(v1))
 	assert.Equal(t, v1.ID, rolledBack.RolledBackTo.ID)
-	assert.Equal(t, "v1", compose.read(t, compose.replicas(t)[0], volumeMarker), "the volume is back at v1")
+	assert.Equal(t, "v1", compose.read(t, compose.replicas(t)[0], daemontest.VolumeMarker), "the volume is back at v1")
 	require.Len(t, collected.Reports, 1)
 	deletion := collected.Reports[0].Deletion
 	require.NotNil(t, deletion, "the gc deleted nothing: %s", collected.Reports[0].Error)

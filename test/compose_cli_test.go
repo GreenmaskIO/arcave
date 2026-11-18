@@ -58,7 +58,7 @@ const volumeDriftSpec = `
 name: %[1]s
 services:
   app:
-    image: ` + busyboxImage + `
+    image: ` + daemontest.BusyboxImage + `
     command: ["sleep", "infinity"]
     stop_signal: SIGKILL
     volumes: ["data:/data", "kept:/kept"]

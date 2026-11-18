@@ -138,7 +138,7 @@ func TestDockerDesktop_RecreateWithImage_KeepsTheHostPath(t *testing.T) {
 
 	// Act
 	rebuilt, err := profile.Engine.RecreateWithImage(context.Background(), id,
-		composemodel.ReplicaIdentity{Name: name, Number: 1}, busyboxImage)
+		composemodel.ReplicaIdentity{Name: name, Number: 1}, daemontest.BusyboxImage)
 
 	// Assert
 	require.NoError(t, err)
@@ -210,7 +210,7 @@ func createDesktopContainer(t *testing.T, daemon *client.Client, hostConfig cont
 	t.Helper()
 
 	created, err := daemon.ContainerCreate(context.Background(), client.ContainerCreateOptions{
-		Config:     &container.Config{Image: busyboxImage, Cmd: []string{"true"}},
+		Config:     &container.Config{Image: daemontest.BusyboxImage, Cmd: []string{"true"}},
 		HostConfig: &hostConfig,
 	})
 	require.NoError(t, err)

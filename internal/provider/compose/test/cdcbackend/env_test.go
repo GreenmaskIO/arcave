@@ -48,14 +48,13 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/repo"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
 const (
 	// itProject is the compose project name the container labels carry; the
 	// backend finds a volume's mount through them.
 	itProject = "arcave-cdc-vol-it"
-	// busyboxImage fills, mutates and hashes the volumes.
-	busyboxImage = "busybox"
 	// blobKiB is the payload per volume, in random bytes — zeros would deduplicate
 	// into a repository proving nothing. 16 MiB rather than 4: restic averages
 	// 1 MiB per chunk, and at 4 MiB a 128 KiB edit reshipped 2.8 of 4.2 MB.
@@ -367,7 +366,7 @@ func (e *env) oracleSnapshots(t *testing.T, vol model.Volume) []oracleSnapshot {
 func (e *env) hash(t *testing.T, vol model.Volume) string {
 	t.Helper()
 
-	out := busybox(t, e.engine, vol.Named.VolumeName, "find /data -type f -exec sha256sum {} + | sort")
+	out := composetest.Busybox(t, e.engine, vol.Named.VolumeName, "find /data -type f -exec sha256sum {} + | sort")
 	require.NotEmpty(t, out, "volume %s must hold files to hash", vol.Named.VolumeName)
 	return out
 }
@@ -376,7 +375,7 @@ func (e *env) hash(t *testing.T, vol model.Volume) string {
 func (e *env) fill(t *testing.T, name string) {
 	t.Helper()
 
-	busybox(t, e.engine, name, fmt.Sprintf(
+	composetest.Busybox(t, e.engine, name, fmt.Sprintf(
 		"dd if=/dev/urandom of=/data/blob bs=1k count=%d "+
 			"&& mkdir -p /data/nested && dd if=/dev/urandom of=/data/nested/inner bs=1k count=64 "+
 			"&& dd if=/dev/urandom of=/data/small bs=1k count=4", blobKiB))
@@ -386,7 +385,7 @@ func (e *env) fill(t *testing.T, name string) {
 func (e *env) mutate(t *testing.T, vol model.Volume) {
 	t.Helper()
 
-	busybox(t, e.engine, vol.Named.VolumeName, fmt.Sprintf(
+	composetest.Busybox(t, e.engine, vol.Named.VolumeName, fmt.Sprintf(
 		"dd if=/dev/urandom of=/data/blob bs=1k count=%d seek=%d conv=notrunc", mutateKiB, blobKiB/3))
 }
 
@@ -394,7 +393,7 @@ func (e *env) mutate(t *testing.T, vol model.Volume) {
 func (e *env) addFile(t *testing.T, vol model.Volume, name string) {
 	t.Helper()
 
-	busybox(t, e.engine, vol.Named.VolumeName, fmt.Sprintf(
+	composetest.Busybox(t, e.engine, vol.Named.VolumeName, fmt.Sprintf(
 		"dd if=/dev/urandom of=/data/%s bs=1k count=32", name))
 }
 
@@ -457,7 +456,7 @@ func createLabelledContainer(t *testing.T, cli *client.Client, service, name, ta
 
 	created, err := cli.ContainerCreate(context.Background(), client.ContainerCreateOptions{
 		Config: &container.Config{
-			Image: busyboxImage,
+			Image: daemontest.BusyboxImage,
 			Cmd:   []string{"sh", "-c", "sleep 3600"},
 			Labels: map[string]string{
 				"com.docker.compose.project": itProject,
@@ -482,7 +481,7 @@ func createSubpathContainer(t *testing.T, cli *client.Client, service, name, tar
 
 	created, err := cli.ContainerCreate(context.Background(), client.ContainerCreateOptions{
 		Config: &container.Config{
-			Image: busyboxImage,
+			Image: daemontest.BusyboxImage,
 			Cmd:   []string{"sh", "-c", "sleep 3600"},
 			Labels: map[string]string{
 				"com.docker.compose.project": itProject,
@@ -501,22 +500,6 @@ func createSubpathContainer(t *testing.T, cli *client.Client, service, name, tar
 	t.Cleanup(func() {
 		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
 	})
-}
-
-// busybox runs one shell line with the volume at /data and returns its stdout.
-func busybox(t *testing.T, engine *dockerclient.Engine, name, script string) string {
-	t.Helper()
-
-	var stdout, stderr bytes.Buffer
-	err := engine.RunOneShot(context.Background(), composemodel.OneShotSpec{
-		Image:  busyboxImage,
-		Cmd:    []string{"sh", "-c", script},
-		Binds:  []string{name + ":/data"},
-		Stdout: &stdout,
-		Stderr: &stderr,
-	})
-	require.NoErrorf(t, err, "busybox %q failed:\nstdout:\n%s\nstderr:\n%s", script, stdout.String(), stderr.String())
-	return stdout.String()
 }
 
 func TestMain(m *testing.M) {

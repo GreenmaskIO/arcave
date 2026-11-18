@@ -176,12 +176,12 @@ func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend
 	ascending := decode[[]model.Savepoint](t, run("savepoint", "list", "--sort", "asc"))
 	rolledBack := decode[model.RollbackResult](t, run("rollback", "sp1"))
 	replica := compose.replicas(t)[0]
-	volumeAfter, layerAfter := compose.read(t, replica, volumeMarker), compose.read(t, replica, layerMarker)
+	volumeAfter, layerAfter := compose.read(t, replica, daemontest.VolumeMarker), compose.read(t, replica, daemontest.LayerMarker)
 	withSafety := decode[[]model.Savepoint](t, run("savepoint", "list", "--include-safety-snapshots"))
 	fork := decode[model.Session](t, run("session", "create", "--name", "fork", "--from", model.DefaultSessionName))
 	inFork := decode[[]model.Savepoint](t, run("--session", "fork", "savepoint", "list"))
 	run("--session", "fork", "rollback", "sp2")
-	volumeInFork := compose.read(t, compose.replicas(t)[0], volumeMarker)
+	volumeInFork := compose.read(t, compose.replicas(t)[0], daemontest.VolumeMarker)
 	removed := decode[model.RemoveResult](t, run("savepoint", "remove", sp2.ID.String()))
 	afterRemove := decode[[]model.Savepoint](t, run("savepoint", "list"))
 	// runArcave fails on a partial gc's non-zero exit.

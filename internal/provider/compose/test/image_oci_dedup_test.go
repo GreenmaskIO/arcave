@@ -17,7 +17,6 @@
 package test
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -30,7 +29,6 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
 	"github.com/greenmaskio/storages"
-	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -50,7 +48,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
-// epochMarker is what these tests drift and read back. Not layerMarker: the
+// epochMarker is what these tests drift and read back. Not daemontest.LayerMarker: the
 // service's own command rewrites that one on every start.
 const epochMarker = "/epoch-marker"
 
@@ -125,7 +123,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 func (e *ociDedupEnv) up(t *testing.T) {
 	t.Helper()
 
-	document := fmt.Sprintf(imageCaptureSpec, e.project, layerMarker)
+	document := fmt.Sprintf(imageCaptureSpec, e.project, daemontest.LayerMarker)
 	project, err := composespec.NewCodec().Parse(e.ctx, []byte(document))
 	require.NoError(t, err)
 	require.NoError(t, e.compose.Create(e.ctx, project, nil))
@@ -259,21 +257,5 @@ func (e *ociDedupEnv) containerID(t *testing.T) string {
 func (e *ociDedupEnv) exec(t *testing.T, containerID string, cmd ...string) string {
 	t.Helper()
 
-	created, err := e.daemon.ExecCreate(e.ctx, containerID, client.ExecCreateOptions{
-		Cmd: cmd, AttachStdout: true, AttachStderr: true,
-	})
-	require.NoError(t, err)
-
-	attached, err := e.daemon.ExecAttach(e.ctx, created.ID, client.ExecAttachOptions{})
-	require.NoError(t, err)
-	defer attached.Close()
-
-	var out bytes.Buffer
-	_, err = stdcopy.StdCopy(&out, &out, attached.Reader)
-	require.NoError(t, err)
-
-	inspect, err := e.daemon.ExecInspect(e.ctx, created.ID, client.ExecInspectOptions{})
-	require.NoError(t, err)
-	require.Zero(t, inspect.ExitCode, out.String())
-	return out.String()
+	return daemontest.Exec(t, e.daemon, containerID, cmd...)
 }
