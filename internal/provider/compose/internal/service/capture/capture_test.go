@@ -85,7 +85,7 @@ func TestCaptured_Commit(t *testing.T) {
 
 			// Assert
 			if tt.wantErr != "" {
-				assert.EqualError(t, err, "commit savepoint "+id.String()+": "+tt.wantErr)
+				assert.EqualError(t, err, tt.wantErr)
 				assert.Zero(t, savepoint)
 			} else {
 				require.NoError(t, err)

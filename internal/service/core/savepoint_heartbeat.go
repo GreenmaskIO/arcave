@@ -33,8 +33,8 @@ var errCaptureDirectoryNotEmpty = errors.New("capture directory is not empty")
 // savepointHeartbeat is the heartbeat at the root of one savepoint's tree: in progress from before
 // the hold until the record is written, then done, or failed on any other end.
 type savepointHeartbeat struct {
-	operationHeartbeat
-	id model.SavepointID
+	run *heartbeat.Run
+	id  model.SavepointID
 }
 
 // startSavepointHeartbeat refuses id's tree if it holds anything, then starts its heartbeat. What
@@ -58,37 +58,24 @@ func (s *Service) startSavepointHeartbeat(
 		Operation:  model.HeartbeatOperationSavepoint,
 		RunnerInfo: s.runnerInfo,
 	}
-	beatCtx, beat, err := startOperationHeartbeat(ctx, heartbeat.NewWriter(tree),
+	beatCtx, run, err := heartbeat.StartRun(ctx, heartbeat.NewWriter(tree),
 		s.heartbeatInterval, s.heartbeatStaleAfter, initialBeat)
 	if err != nil {
 		logCaptureRetained(ctx, id)
 		return nil, savepointHeartbeat{}, fmt.Errorf("savepoint %s: %w", id, err)
 	}
 	return beatCtx, savepointHeartbeat{
-		operationHeartbeat: beat,
-		id:                 id,
+		run: run,
+		id:  id,
 	}, nil
 }
 
-// alive refuses a commit once the stopped heartbeat's last good beat is too old.
-func (b savepointHeartbeat) alive() error {
-	if err := b.operationHeartbeat.alive(); err != nil {
-		return fmt.Errorf("commit savepoint %s: %w", b.id, err)
-	}
-	return nil
-}
-
-// abandon ends the heartbeat of a capture that never ran, its hold failed; see fail.
-func (b savepointHeartbeat) abandon(ctx, beatCtx context.Context, cause error) error {
-	b.stop()
-	return b.fail(ctx, beatCtx, cause)
-}
-
-// fail marks the stopped heartbeat failed and leaves the tree to a gc. A lost heartbeat is
-// returned in place of cause, the symptom it caused.
+// fail stops the beats, marks the heartbeat failed and leaves the tree to a gc. A lost heartbeat
+// is returned in place of cause, the symptom it caused.
 func (b savepointHeartbeat) fail(ctx, beatCtx context.Context, cause error) error {
-	cause = preferHeartbeatLost(beatCtx, cause)
-	b.operationHeartbeat.fail(ctx, cause)
+	b.run.Stop()
+	cause = heartbeat.PreferLost(beatCtx, cause)
+	b.run.Fail(ctx, cause)
 	logCaptureRetained(ctx, b.id)
 	return cause
 }

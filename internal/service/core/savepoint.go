@@ -108,7 +108,7 @@ func (s *Service) captureHeld(
 	}
 	if held, beforeErr = plan.Hold(beatCtx); beforeErr != nil {
 		// A hold that failed or was interrupted partway may have held some services.
-		beforeErr = beat.abandon(ctx, beatCtx, beforeErr)
+		beforeErr = beat.fail(ctx, beatCtx, beforeErr)
 		workflow.LogInterrupt(ctx, "savepoint interrupted while holding the services: resuming them, nothing captured")
 	} else if savepoint, captureErr = captureAndCommit(ctx, beatCtx, beat, grantedLock, held, req); captureErr != nil {
 		workflow.LogInterrupt(ctx, "savepoint interrupted during capture: resuming the services, nothing committed")
@@ -145,21 +145,18 @@ func captureAndCommit(
 	req provider.CaptureRequest,
 ) (model.Savepoint, error) {
 	captured, err := held.Capture(beatCtx, req)
-	beat.stop()
 	if err != nil {
 		return model.Savepoint{}, beat.fail(ctx, beatCtx, err)
 	}
-	if err = beat.alive(); err != nil {
-		return model.Savepoint{}, beat.fail(ctx, beatCtx, err)
+	var savepoint model.Savepoint
+	commit := func(ctx context.Context) error {
+		var err error
+		savepoint, err = captured.Commit(ctx)
+		return err
 	}
-	if err = grantedLock.Verify(ctx); err != nil {
+	if err := beat.run.Commit(ctx, grantedLock.Verify, commit); err != nil {
 		return model.Savepoint{}, beat.fail(ctx, beatCtx, fmt.Errorf("commit savepoint %s: %w", req.ID, err))
 	}
-	savepoint, err := captured.Commit(ctx)
-	if err != nil {
-		return model.Savepoint{}, beat.fail(ctx, beatCtx, err)
-	}
-	beat.finish(ctx)
 	return savepoint, nil
 }
 

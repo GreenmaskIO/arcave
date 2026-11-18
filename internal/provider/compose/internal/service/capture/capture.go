@@ -39,10 +39,10 @@ type capturedSavepoint struct {
 	savepoint model.Savepoint
 }
 
-// Commit writes the record, the last object.
+// Commit writes the record, the last object; core names the savepoint in a failure.
 func (c capturedSavepoint) Commit(ctx context.Context) (model.Savepoint, error) {
 	if err := c.capturer.savepointRepo.SaveSavepoint(ctx, c.savepoint); err != nil {
-		return model.Savepoint{}, fmt.Errorf("commit savepoint %s: %w", c.savepoint.ID, err)
+		return model.Savepoint{}, err
 	}
 	return c.savepoint, nil
 }

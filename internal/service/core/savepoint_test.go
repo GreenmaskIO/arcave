@@ -230,7 +230,7 @@ func TestCaptureHeld(t *testing.T) {
 		{
 			name:             "a failed commit releases",
 			commitErr:        errBoom,
-			wantErr:          "capturing the savepoint: boom",
+			wantErr:          "capturing the savepoint: commit savepoint " + committed.ID.String() + ": boom",
 			wantNoRestartLog: true,
 			wantBeat:         heartbeat.StatusFailed,
 		},

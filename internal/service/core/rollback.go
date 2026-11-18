@@ -327,7 +327,7 @@ func (s *Service) takeSafetySnapshot(
 	}
 	held, err := plan.Hold(beatCtx)
 	if err != nil {
-		err = beat.abandon(ctx, beatCtx, err)
+		err = beat.fail(ctx, beatCtx, err)
 		return nil, model.Savepoint{}, fmt.Errorf("stop services: %w", preferInterrupt(ctx, err))
 	}
 	safetySnapshot, err := captureAndCommit(ctx, beatCtx, beat, grantedLock, held, req)
