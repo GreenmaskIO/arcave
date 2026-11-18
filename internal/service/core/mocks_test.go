@@ -17,11 +17,11 @@ package core
 import (
 	"bytes"
 	"context"
-	"errors"
 	"slices"
 	"sync"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -63,11 +63,6 @@ func (fakeSessionLocker) Lock(
 	ctx context.Context, _ model.SessionLockOperation,
 ) (context.Context, model.GrantedSessionLock, error) {
 	return ctx, fakeGrantedSessionLock{}, nil
-}
-
-// newFakeSessionLocker opens a fakeSessionLocker for any session.
-func newFakeSessionLocker(model.SessionID) (model.SessionLocker, error) {
-	return fakeSessionLocker{}, nil
 }
 
 // fakeGrantedSessionLock is a session lock that always holds.
@@ -141,52 +136,12 @@ func (f *fakeInflight) Clear(_ context.Context) error {
 	return nil
 }
 
-// fakePointer is a stateful stand-in for .arcave/current_session; the zero value holds none.
-type fakePointer struct {
-	mu       sync.Mutex
-	id       *model.SessionID
-	err      error // returned by every call when set
-	clearErr error // returned by Clear alone when set
-}
+// mockSessionLookup doubles sessionLookup.
+type mockSessionLookup struct{ mock.Mock }
 
-func (f *fakePointer) Get(_ context.Context) (model.SessionID, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.err != nil {
-		return model.SessionID{}, false, f.err
-	}
-	if f.id == nil {
-		return model.SessionID{}, false, nil
-	}
-	return *f.id, true, nil
-}
-
-func (f *fakePointer) Put(_ context.Context, id model.SessionID) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.err != nil {
-		return f.err
-	}
-	f.id = &id
-	return nil
-}
-
-func (f *fakePointer) Clear(_ context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.err != nil {
-		return f.err
-	}
-	if f.clearErr != nil {
-		return f.clearErr
-	}
-	f.id = nil
-	return nil
-}
-
-// pointerAt is a fakePointer holding id.
-func pointerAt(id model.SessionID) *fakePointer {
-	return &fakePointer{id: &id}
+func (m *mockSessionLookup) LoadSession(ctx context.Context, id model.SessionID) (model.Session, bool, error) {
+	args := m.Called(ctx, id)
+	return args.Get(0).(model.Session), args.Bool(1), args.Error(2)
 }
 
 type mockInflight struct{ mock.Mock }
@@ -224,32 +179,6 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// mockSession doubles provider.Session.
-type mockSession struct {
-	mock.Mock
-	// id answers ID unmocked.
-	id model.SessionID
-}
-
-func (m *mockSession) ID() model.SessionID { return m.id }
-
-func (m *mockSession) Workloads(ctx context.Context) ([]provider.WorkloadName, error) {
-	args := m.Called(ctx)
-	workloads, _ := args.Get(0).([]provider.WorkloadName)
-	return workloads, args.Error(1)
-}
-
-func (m *mockSession) Savepoints(workload provider.WorkloadName) (provider.Savepoints, error) {
-	args := m.Called(workload)
-	savepoints, _ := args.Get(0).(provider.Savepoints)
-	return savepoints, args.Error(1)
-}
-
-func (m *mockSession) FindGarbage(ctx context.Context, dataKinds []model.GarbageDataKind) []provider.Garbage {
-	found, _ := m.Called(ctx, dataKinds).Get(0).([]provider.Garbage)
-	return found
-}
-
 // mockSavepoints doubles provider.Savepoints.
 type mockSavepoints struct{ mock.Mock }
 
@@ -257,6 +186,12 @@ func (m *mockSavepoints) List(ctx context.Context) ([]model.Savepoint, error) {
 	args := m.Called(ctx)
 	savepoints, _ := args.Get(0).([]model.Savepoint)
 	return savepoints, args.Error(1)
+}
+
+func (m *mockSavepoints) Load(ctx context.Context, id model.SavepointID) (model.Savepoint, bool, error) {
+	args := m.Called(ctx, id)
+	savepoint, _ := args.Get(0).(model.Savepoint)
+	return savepoint, args.Bool(1), args.Error(2)
 }
 
 func (m *mockSavepoints) Remove(ctx context.Context, id model.SavepointID) error {
@@ -275,6 +210,8 @@ type mockStages struct {
 	captured mockCapturedSavepoint
 	target   mockBuild
 	revert   mockBuild
+	// capturedID is the id core minted for the last capture.
+	capturedID model.SavepointID
 }
 
 // newMockStages wires the handles to answer one another; absent is what the live workload reports.
@@ -385,25 +322,27 @@ func (m *mockStages) expectHold(err error) *mock.Call {
 }
 
 // expectCaptureOf declares the capture of what is held by req, failing with err, else answering
-// the captured savepoint.
+// the captured savepoint. A req with no id matches any valid one, kept as capturedID.
 func (m *mockStages) expectCaptureOf(req provider.CaptureRequest, err error) *mock.Call {
-	if err != nil {
-		return m.held.On("Capture", mock.Anything, req).Return(nil, err).Once()
+	matchReq := mock.MatchedBy(func(got provider.CaptureRequest) bool {
+		want := req
+		if want.ID == "" && got.ID.Validate() == nil {
+			want.ID = got.ID
+		}
+		return assert.ObjectsAreEqual(want, got)
+	})
+	var captured provider.CapturedSavepoint
+	if err == nil {
+		captured = &m.captured
 	}
-	return m.held.On("Capture", mock.Anything, req).Return(&m.captured, nil).Once()
+	return m.held.On("Capture", mock.Anything, matchReq).
+		Run(func(args mock.Arguments) { m.capturedID = args.Get(1).(provider.CaptureRequest).ID }).
+		Return(captured, err).Once()
 }
 
 // expectCommit declares the commit of what was captured, committing savepoint or failing with err.
 func (m *mockStages) expectCommit(savepoint model.Savepoint, err error) *mock.Call {
 	return m.captured.On("Commit", mock.Anything).Return(savepoint, err).Once()
-}
-
-// expectAbandon declares the abandon of what was captured under id, for a cause wrapping err.
-func (m *mockStages) expectAbandon(id model.SavepointID, err error) (named, abandon *mock.Call) {
-	named = m.captured.On("ID").Return(id).Once()
-	wantCause := mock.MatchedBy(func(cause error) bool { return errors.Is(cause, err) })
-	abandon = m.captured.On("Abandon", mock.Anything, wantCause).Once()
-	return named, abandon
 }
 
 // expectRelease declares the plan's release, waiting waitTimeout, failing with err.
@@ -618,19 +557,10 @@ func (m *mockHeldWorkload) Teardown(ctx context.Context) (provider.VacantWorkloa
 // mockCapturedSavepoint doubles provider.CapturedSavepoint.
 type mockCapturedSavepoint struct{ mock.Mock }
 
-func (m *mockCapturedSavepoint) ID() model.SavepointID {
-	id, _ := m.Called().Get(0).(model.SavepointID)
-	return id
-}
-
 func (m *mockCapturedSavepoint) Commit(ctx context.Context) (model.Savepoint, error) {
 	args := m.Called(ctx)
 	savepoint, _ := args.Get(0).(model.Savepoint)
 	return savepoint, args.Error(1)
-}
-
-func (m *mockCapturedSavepoint) Abandon(ctx context.Context, cause error) {
-	m.Called(ctx, cause)
 }
 
 // stubPrepared is a provider.PreparedSavepoint answering summary.

@@ -142,7 +142,6 @@ The JSON each command prints; [as text](#result-format), each is a summary, a ta
 | [`session list`](cli/session.md#session-list) | an array of session entries — the record plus `status`, `current_source` on the current entry alone, `savepoint_count`, `safety_snapshot_count`, `compose_projects`, `size_bytes` — newest first unless `--sort asc` |
 | [`session show`](cli/session.md#session-show) | `{"session": …, "current_source": …, "from": {"id": …, "name": …}, "savepoint_count": …, "safety_snapshot_count": …, "compose_projects": [{"compose_project": …, "savepoints": [ … ]}], "checked_at": …}` — compose projects by name, each one's savepoints newest first as `savepoint list` prints them, safety snapshots among them |
 | [`session remove`](cli/session.md#session-remove) | `{"session": …, "removed": true, "freed_bytes": …}` |
-| [`tools generate-compose`](cli/tools_generate_compose.md) | `{"compose_project": …, "services": [ … ], "path": …}` — the compose file itself goes to `-o` |
 | [`gc`](cli/gc.md) | `{"dry_run": …, "session": …, "reports": [ … ], "savepoints": [ … ], "total": { … }}` — one report per kind and compose project of the session, each with its `deletion` past a dry run, and what each dead savepoint frees; `total` adds `deleted`, `delete_failed`, `not_run` and `freed_bytes` when gc deleted |
 | [`mcp`](cli/mcp.md) | nothing — the stream is the protocol |
 | [`status`](cli/status.md) | one status object — `state`, the `deployment` the containers' labels name, `services` with every replica, `rollback_in_flight`, `unreadable` and `notices` — printed before the error when the status is partial |
@@ -304,7 +303,7 @@ Every field is omitted when empty, and `not_covered` itself when all are.
 
 `safety_snapshot` is the id of the safety snapshot the rollback took: rolling back to it undoes the rollback. It is omitted when none was taken: the project had no containers, or `rollback.safety_snapshot` or `--safety-snapshot` turned it off. In that last case the stream has no `rollback.safety-snapshot` step, and a warning, marked `in_result`, says what running without one risks.
 
-`leftover_volumes` is only there for a project with no containers: the docker names of the named volumes that outlived its `docker compose down` and the rollback overwrote, under [`rollback.leftover_volumes: overwrite`](configuration.md#rollback). No safety snapshot holds what they held. Each is also a severe warning in the result, `in_result` on the progress stream. A rollback run again after an interrupted one names none: what those volumes hold is the interrupted rollback's partial writes.
+`leftover_volumes` is only there for a project with no containers: the docker names of the named volumes that outlived its `docker compose down` and the rollback overwrote, under [`compose.leftover_volumes: overwrite`](configuration.md#compose). No safety snapshot holds what they held. Each is also a severe warning in the result, `in_result` on the progress stream. A rollback run again after an interrupted one names none: what those volumes hold is the interrupted rollback's partial writes.
 
 ## `up`
 

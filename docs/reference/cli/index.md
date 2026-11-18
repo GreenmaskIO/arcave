@@ -24,7 +24,6 @@ Global flags are declared on the root command, so `arcave savepoint create --wai
 | [`up`](up.md) | Brings the environment up from a savepoint where nothing of it runs; `--force` drops what is there first. |
 | [`down`](down.md) | Ends the environment arcave deployed: containers, networks, its volumes and its restored layer tags. |
 | [`session`](session.md) | Creates, lists, removes and switches sessions — the independent lines of savepoints inside a project: `create`, `list`, `show`, `remove`, `set`, `unset`, `current`. |
-| [`tools generate-compose`](tools_generate_compose.md) | Writes a docker compose file for a running compose project, from what the daemon reports. |
 | [`gc`](gc.md) | Finds and deletes the garbage arcave left in a session's store and in the Docker daemon. |
 | [`mcp`](mcp.md) | Serves the workflows above as MCP tools for an agent. |
 | [`status`](status.md) | Shows what the daemon runs for a compose project: the savepoint a rollback deployed, every replica's state and ports, and a rollback in progress or interrupted. Reads only. |
@@ -86,7 +85,7 @@ no compose project named: pass -p/--project-name, or set ARCAVE_COMPOSE_PROJECT_
 * **A named compose project**, as above.
 * **A reachable daemon**, for `savepoint create`, `rollback`, `up` and `down` only. The first three contact it while they wire themselves up, before any workflow starts, and ask which engine it is; `down` reads and removes alike on every engine and asks nothing. `savepoint list` and `savepoint remove` read and delete in the store alone and reach no daemon.
 
-The `session` commands need only the initialised project: they name no compose project and reach no daemon, `session create --from` included — a fork copies a session's savepoints and deploys nothing. `mcp` needs the initialised project; each tool call names its compose project. `tools generate-compose` needs a named compose project and a reachable daemon, and no initialised project: it opens no store. `gc` needs the initialised project and works on a session: it refuses `-p`. It reaches the daemon only for the `restored-layers` and `deduplicated-volumes` kinds. `status` needs the initialised project, a named compose project and a reachable daemon; it reads the store only to add the deployed savepoint's record, and a store it cannot read does not fail it.
+The `session` commands need only the initialised project: they name no compose project and reach no daemon, `session create --from` included — a fork copies a session's savepoints and deploys nothing. `mcp` needs the initialised project; each tool call names its compose project. `gc` needs the initialised project and works on a session: it refuses `-p`. It reaches the daemon only for the `restored-layers` and `deduplicated-volumes` kinds. `status` needs the initialised project, a named compose project and a reachable daemon; it reads the store only to add the deployed savepoint's record, and a store it cannot read does not fail it.
 
 `savepoint create` additionally needs the project to **exist in the daemon**: arcave reads the running project rather than your compose files. `docker compose stop` is fine — stopped containers still describe the project. `docker compose down` is not:
 
@@ -102,7 +101,7 @@ Every command that changes something — `savepoint create`, `rollback`, `up`, `
 another arcave command is already running in this project
 ```
 
-`savepoint list`, `session list`, `session show`, `session current`, `status`, `tools generate-compose` and `savepoint remove --dry-run` only read, take no lock, and are never refused.
+`savepoint list`, `session list`, `session show`, `session current`, `status` and `savepoint remove --dry-run` only read, take no lock, and are never refused.
 
 ## Exit codes
 

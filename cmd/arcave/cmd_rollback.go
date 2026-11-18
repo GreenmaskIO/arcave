@@ -50,8 +50,8 @@ func runRollback(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	ctx := cmd.Context()
-	var opened closers
-	defer opened.release(ctx)
+	var opened utils.Closers
+	defer opened.Release(ctx)
 
 	svc, err := openSavepointService(ctx, projectRoot, projectCfg, sessionRef, composeProject, &opened)
 	if err != nil {

@@ -24,6 +24,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -101,7 +102,7 @@ func (s *Service) rollback(
 
 	live, err := s.workload.Inspect(ctx)
 	if err != nil {
-		logInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
+		workflow.LogInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
 		return model.RollbackResult{}, fmt.Errorf("prepare: %w", preferInterrupt(ctx, err))
 	}
 	switch {
@@ -163,18 +164,18 @@ func (s *Service) rollbackLive(
 	plan, prepared, err := s.prepareLive(prepareCtx, live, session, savepoint)
 	prepare.End(err)
 	if err != nil {
-		logInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
+		workflow.LogInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
 		return model.RollbackResult{}, preferInterrupt(ctx, err)
 	}
 
 	// A capture of the live state, so a rollback that fails partway can be replayed
 	// back. Its committed record stays: rolling back to it by id undoes the rollback.
-	held, safetySnapshot, err := takeSafetySnapshot(ctx, grantedLock, savepoint, plan)
+	held, safetySnapshot, err := s.takeSafetySnapshot(ctx, grantedLock, savepoint, plan)
 	if err != nil {
 		// Nothing was restored, so there is nothing to revert: restart best-effort, since a stop
 		// that failed partway may have stopped some services. What the fan-out wrote stays for a
 		// later gc, logged by the capture itself.
-		logInterrupt(ctx, "rollback interrupted during the safety snapshot: restarting services, nothing changed")
+		workflow.LogInterrupt(ctx, "rollback interrupted during the safety snapshot: restarting services, nothing changed")
 		abortBeforeRestore(ctx, plan, req.WaitTimeout)
 		return model.RollbackResult{}, err
 	}
@@ -182,7 +183,7 @@ func (s *Service) rollbackLive(
 	// An interrupt that landed during the safety snapshot stops here: nothing is torn
 	// down yet, so there is nothing to replay.
 	if err := context.Cause(ctx); err != nil {
-		logInterrupt(ctx, "rollback interrupted after the safety snapshot: restarting services, nothing changed")
+		workflow.LogInterrupt(ctx, "rollback interrupted after the safety snapshot: restarting services, nothing changed")
 		logKeptSafetySnapshot(ctx, safetySnapshot.ID)
 		abortBeforeRestore(ctx, plan, req.WaitTimeout)
 		return model.RollbackResult{}, fmt.Errorf("rollback interrupted, nothing changed: %w", err)
@@ -205,7 +206,7 @@ func (s *Service) rollbackLive(
 	if err != nil {
 		log.Warn().Err(err).Str("safety_snapshot_id", safetySnapshot.ID.String()).
 			Msg("rollback failed: reverting to the pre-rollback state")
-		logInterrupt(ctx, "rollback interrupted: reverting to the pre-rollback state, interrupt again to abandon the revert")
+		workflow.LogInterrupt(ctx, "rollback interrupted: reverting to the pre-rollback state, interrupt again to abandon the revert")
 		err = preferInterrupt(ctx, err)
 
 		// On a revertContext: the very Ctrl-C aborting the rollback would otherwise tear the
@@ -296,7 +297,7 @@ func (s *Service) runPrepare(
 	})
 	prepare.End(err)
 	if err != nil {
-		logInterrupt(ctx, onInterrupt)
+		workflow.LogInterrupt(ctx, onInterrupt)
 		return nil, preferInterrupt(ctx, err)
 	}
 	return prepared, nil
@@ -310,26 +311,35 @@ type savepointPreparer interface {
 
 // takeSafetySnapshot stops the services and captures the live state, the safety snapshot's phase;
 // on failure the services are the caller's to restart. The held project is the revert's.
-func takeSafetySnapshot(
+func (s *Service) takeSafetySnapshot(
 	ctx context.Context, grantedLock model.GrantedSessionLock, savepoint model.Savepoint, plan provider.CapturePlan,
 ) (_ provider.HeldWorkload, _ model.Savepoint, err error) {
 	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindRollbackSafetySnapshot})
 	defer func() { step.End(err) }()
-	held, err := plan.Hold(ctx)
-	if err != nil {
-		return nil, model.Savepoint{}, fmt.Errorf("stop services: %w", preferInterrupt(ctx, err))
-	}
 	// No name: one would read as the savepoint restored. TakenBefore is the resolved target, never
 	// the typed ref, since "latest" names none and a name may be removed.
-	safetySnapshot, err := commitCaptured(ctx, grantedLock, held, provider.CaptureRequest{
+	req := provider.CaptureRequest{
+		ID:     model.NewSavepointID(),
 		Labels: newSafetySnapshotLabels(),
 		TakenBefore: &model.SavepointRef{
 			ID:   savepoint.ID,
 			Name: savepoint.Name,
 		},
-	})
+	}
+	beatCtx, beat, err := s.startSavepointHeartbeat(ctx, req.ID)
 	if err != nil {
-		return nil, model.Savepoint{}, fmt.Errorf("pre-rollback safety snapshot failed, nothing changed: %w", err)
+		return nil, model.Savepoint{}, fmt.Errorf("pre-rollback safety snapshot failed, nothing changed: %w",
+			preferInterrupt(ctx, err))
+	}
+	held, err := plan.Hold(beatCtx)
+	if err != nil {
+		err = beat.fail(ctx, beatCtx, err)
+		return nil, model.Savepoint{}, fmt.Errorf("stop services: %w", preferInterrupt(ctx, err))
+	}
+	safetySnapshot, err := captureAndCommit(ctx, beatCtx, beat, grantedLock, held, req)
+	if err != nil {
+		return nil, model.Savepoint{}, fmt.Errorf("pre-rollback safety snapshot failed, nothing changed: %w",
+			preferInterrupt(ctx, err))
 	}
 	return held, safetySnapshot, nil
 }
@@ -466,7 +476,7 @@ func (s *Service) rollbackWithoutSnapshot(
 	// An interrupt that landed during the prepare stops here: a marker would refuse the next
 	// workflow over a compose project nothing touched.
 	if err := context.Cause(ctx); err != nil {
-		logInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
+		workflow.LogInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
 		return model.RollbackResult{}, fmt.Errorf("rollback interrupted, nothing changed: %w", err)
 	}
 	progress.Current(ctx).WarnInResult(noSafetySnapshotWarning)
@@ -552,7 +562,7 @@ func (s *Service) rollbackColdStart(
 		return s.buildFromSavepoint(ctx, vacant, prepared, savepoint.ID, recovery.safety, req.WaitTimeout)
 	})
 	if err != nil {
-		logInterrupt(ctx, "rollback interrupted: removing what it created")
+		workflow.LogInterrupt(ctx, "rollback interrupted: removing what it created")
 		s.abortColdStart(ctx, vacant)
 		return model.RollbackResult{}, fmt.Errorf("rollback failed: %w", preferInterrupt(ctx, err))
 	}
@@ -600,7 +610,7 @@ func (s *Service) abortColdStart(ctx context.Context, vacant provider.VacantWork
 				log.Warn().Err(err).Msg("failed to phase the inflight marker back")
 			}
 		}
-		log.Error().Str("phase", string(marker.Phase)).Msg(recoveryHint(marker))
+		log.Error().Str("phase", string(marker.Phase)).Msg(workflow.RecoveryHint(marker))
 		return
 	}
 	if err := s.inflightMarker.Clear(ctx); err != nil {

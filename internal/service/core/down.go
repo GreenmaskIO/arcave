@@ -24,6 +24,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -44,7 +45,7 @@ type DownDeps struct {
 	ArcaveProject  model.ArcaveProjectName
 	ComposeProject model.DockerComposeProjectName
 	// Workload is the compose project the down takes off the daemon.
-	Workload provider.Workload
+	Workload provider.Surveyor
 }
 
 // DownService ends a compose project's environment on the daemon.
@@ -55,7 +56,7 @@ type DownService struct {
 	session        model.SessionID
 	arcaveProject  model.ArcaveProjectName
 	composeProject model.DockerComposeProjectName
-	workload       provider.Workload
+	workload       provider.Surveyor
 }
 
 func NewDownService(deps DownDeps) *DownService {
@@ -80,7 +81,7 @@ func (s *DownService) Down(ctx context.Context, req model.DownRequest) (_ model.
 
 	// The flock alone: the down writes nothing to the store, and the daemon is host-local, as the
 	// lock and the marker are.
-	return withUnlock(ctx, s.projectLocker, func() (model.DownResult, error) {
+	return workflow.WithUnlock(ctx, s.projectLocker, func() (model.DownResult, error) {
 		return s.down(ctx, req)
 	})
 }
@@ -91,7 +92,7 @@ func (s *DownService) down(ctx context.Context, req model.DownRequest) (model.Do
 	if err != nil {
 		return model.DownResult{}, err
 	}
-	session, err := readSessionRef(ctx, s.sessions, s.session)
+	session, err := workflow.ReadSessionRef(ctx, s.sessions, s.session)
 	if err != nil {
 		return model.DownResult{}, err
 	}
@@ -153,7 +154,7 @@ func (s *DownService) requireDownMarker(ctx context.Context, force bool) (*model
 	zerolog.Ctx(ctx).Error().Err(err).
 		Str("session", marker.Session.String()).
 		Str("compose_project", marker.ComposeProject.String()).
-		Msg(recoveryHint(marker))
+		Msg(workflow.RecoveryHint(marker))
 	return nil, err
 }
 

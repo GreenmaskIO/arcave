@@ -19,7 +19,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
@@ -41,9 +40,9 @@ func NewUpHandler(svc upService, printer printer) *UpHandler {
 }
 
 // Up builds the compose project from ref — the newest savepoint when empty — and prints what was
-// built and, when forced over a present one, what was dropped; the wait bound comes from cfg.
-func (h *UpHandler) Up(ctx context.Context, cfg config.Config, ref string, force bool) error {
-	res, err := h.svc.Up(ctx, newUpRequest(ref, cfg.Compose.WaitTimeout, force))
+// built and, when forced over a present one, what was dropped; the wait bound is the provider's.
+func (h *UpHandler) Up(ctx context.Context, ref string, force bool) error {
+	res, err := h.svc.Up(ctx, newUpRequest(ref, 0, force))
 	if err != nil {
 		return deploymentError(err, cliDeploymentFixHints)
 	}

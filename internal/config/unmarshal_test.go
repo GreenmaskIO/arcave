@@ -25,6 +25,8 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 // newViper returns a viper holding yaml, standing in for the file cmd/arcave reads.
@@ -54,15 +56,15 @@ func TestUnmarshal(t *testing.T) {
 				// The configured path carries no project segment: storefactory roots
 				// the store at the project itself.
 				assert.Equal(t, filepath.Join(model.StateDir, "storage"), cfg.Storage.DirectoryPath())
-				assert.Equal(t, SnapshotBackendFullCopy, cfg.Snapshot.Backend)
+				assert.Equal(t, composeconfig.SnapshotBackendFullCopy, cfg.ComposeProvider.Snapshot.Backend)
 				// A project that names no compose section still gets bounds: an
 				// unbounded health-check wait is the failure this config exists to
 				// prevent, so it can never be what a bare file means.
-				assert.Equal(t, DefaultWaitTimeout, cfg.Compose.WaitTimeout)
-				assert.Equal(t, DefaultStopTimeout, cfg.Compose.StopTimeout)
-				assert.Equal(t, ProgressLog, cfg.Compose.Progress)
-				assert.Equal(t, LeftoverVolumesOverwrite, cfg.Rollback.LeftoverVolumes)
-				assert.Equal(t, model.LeftoverVolumesOverwrite, cfg.Rollback.Policy())
+				assert.Equal(t, composeconfig.DefaultWaitTimeout, cfg.ComposeProvider.Compose.WaitTimeout)
+				assert.Equal(t, composeconfig.DefaultStopTimeout, cfg.ComposeProvider.Compose.StopTimeout)
+				assert.Equal(t, composeconfig.ProgressLog, cfg.ComposeProvider.Compose.Progress)
+				assert.Equal(t, composeconfig.LeftoverVolumesOverwrite, cfg.ComposeProvider.Compose.LeftoverVolumes)
+				assert.Equal(t, model.LeftoverVolumesOverwrite, cfg.ComposeProvider.Compose.LeftoverVolumesPolicy())
 				require.NotNil(t, cfg.Rollback.SafetySnapshot)
 				assert.True(t, *cfg.Rollback.SafetySnapshot)
 				assert.False(t, cfg.Rollback.SkipSafetySnapshot())
@@ -85,15 +87,15 @@ func TestUnmarshal(t *testing.T) {
 		},
 		{
 			name: "a rollback may refuse leftover volumes",
-			yaml: "rollback:\n  leftover_volumes: refuse\n",
+			yaml: "compose:\n  leftover_volumes: refuse\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, model.LeftoverVolumesRefuse, cfg.Rollback.Policy())
+				assert.Equal(t, model.LeftoverVolumesRefuse, cfg.ComposeProvider.Compose.LeftoverVolumesPolicy())
 			},
 		},
 		{
 			name:       "a leftover-volumes policy arcave does not know is rejected",
-			yaml:       "rollback:\n  leftover_volumes: keep\n",
-			wantErrMsg: `unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)`,
+			yaml:       "compose:\n  leftover_volumes: keep\n",
+			wantErrMsg: `unsupported compose.leftover_volumes "keep" (supported: overwrite, refuse)`,
 		},
 		{
 			name:       "the gc section holds only the retention: liveness is the savepoints' status",
@@ -134,9 +136,9 @@ func TestUnmarshal(t *testing.T) {
 			name: "the compose section is read",
 			yaml: "compose:\n  wait_timeout: 5m\n  stop_timeout: 1m30s\n  progress: tty\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, 5*time.Minute, cfg.Compose.WaitTimeout)
-				assert.Equal(t, 90*time.Second, cfg.Compose.StopTimeout)
-				assert.Equal(t, ProgressTTY, cfg.Compose.Progress)
+				assert.Equal(t, 5*time.Minute, cfg.ComposeProvider.Compose.WaitTimeout)
+				assert.Equal(t, 90*time.Second, cfg.ComposeProvider.Compose.StopTimeout)
+				assert.Equal(t, composeconfig.ProgressTTY, cfg.ComposeProvider.Compose.Progress)
 			},
 		},
 		{
@@ -269,28 +271,28 @@ func TestUnmarshal(t *testing.T) {
 			name: "a full-copy project compresses with zstd by default",
 			yaml: "snapshot:\n  backend: fullcopy\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, CompressionZstd, cfg.Backends.FullCopy.Compression)
+				assert.Equal(t, composeconfig.CompressionZstd, cfg.ComposeProvider.Backends.FullCopy.Compression)
 			},
 		},
 		{
 			name: "an explicit compression is read back",
 			yaml: "backends:\n  fullcopy:\n    compression: none\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, CompressionNone, cfg.Backends.FullCopy.Compression)
+				assert.Equal(t, composeconfig.CompressionNone, cfg.ComposeProvider.Backends.FullCopy.Compression)
 			},
 		},
 		{
 			name: "a cdc project compresses a volume a label routes through fullcopy too",
 			yaml: "snapshot:\n  backend: cdc\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, CompressionZstd, cfg.Backends.FullCopy.Compression)
+				assert.Equal(t, composeconfig.CompressionZstd, cfg.ComposeProvider.Backends.FullCopy.Compression)
 			},
 		},
 		{
 			name: "a fullcopy section under a cdc project is still honoured",
 			yaml: "snapshot:\n  backend: cdc\nbackends:\n  fullcopy:\n    compression: none\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, CompressionNone, cfg.Backends.FullCopy.Compression)
+				assert.Equal(t, composeconfig.CompressionNone, cfg.ComposeProvider.Backends.FullCopy.Compression)
 			},
 		},
 		{
@@ -304,25 +306,25 @@ func TestUnmarshal(t *testing.T) {
 			name: "a full-copy project gets no cdc arm",
 			yaml: "snapshot:\n  backend: fullcopy\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Nil(t, cfg.Backends.CDC)
+				assert.Nil(t, cfg.ComposeProvider.Backends.CDC)
 			},
 		},
 		{
 			name: "naming cdc fills its section with the defaults",
 			yaml: "snapshot:\n  backend: cdc\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, SnapshotBackendCDC, cfg.Snapshot.Backend)
-				assert.Equal(t, model.SnapshotBackendCDC, cfg.Snapshot.BackendKind())
-				require.NotNil(t, cfg.Backends.CDC)
-				assert.Equal(t, RestoreModeIncremental, cfg.Backends.CDC.RestoreMode)
-				assert.Equal(t, OverwriteAlways, cfg.Backends.CDC.Overwrite)
-				assert.Equal(t, DefaultResticImage, cfg.Backends.CDC.Image)
-				assert.Equal(t, CDCTransportStdio, cfg.Backends.CDC.Transport)
+				assert.Equal(t, composeconfig.SnapshotBackendCDC, cfg.ComposeProvider.Snapshot.Backend)
+				assert.Equal(t, model.SnapshotBackendCDC, cfg.ComposeProvider.Snapshot.BackendKind())
+				require.NotNil(t, cfg.ComposeProvider.Backends.CDC)
+				assert.Equal(t, composeconfig.RestoreModeIncremental, cfg.ComposeProvider.Backends.CDC.RestoreMode)
+				assert.Equal(t, composeconfig.OverwriteAlways, cfg.ComposeProvider.Backends.CDC.Overwrite)
+				assert.Equal(t, composeconfig.DefaultResticImage, cfg.ComposeProvider.Backends.CDC.Image)
+				assert.Equal(t, composeconfig.CDCTransportStdio, cfg.ComposeProvider.Backends.CDC.Transport)
 				// stdio reads none of the tcp keys, so none defaults.
-				assert.Empty(t, cfg.Backends.CDC.ServerAddress)
-				assert.Empty(t, cfg.Backends.CDC.ServerScheme)
-				assert.Empty(t, cfg.Backends.CDC.ContainerHost)
-				assert.Empty(t, cfg.Backends.CDC.NetworkMode)
+				assert.Empty(t, cfg.ComposeProvider.Backends.CDC.ServerAddress)
+				assert.Empty(t, cfg.ComposeProvider.Backends.CDC.ServerScheme)
+				assert.Empty(t, cfg.ComposeProvider.Backends.CDC.ContainerHost)
+				assert.Empty(t, cfg.ComposeProvider.Backends.CDC.NetworkMode)
 			},
 		},
 		{
@@ -330,13 +332,13 @@ func TestUnmarshal(t *testing.T) {
 			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
 				"    transport: tcp\n",
 			verify: func(t *testing.T, cfg Config) {
-				require.NotNil(t, cfg.Backends.CDC)
-				assert.Equal(t, CDCTransportTCP, cfg.Backends.CDC.Transport)
+				require.NotNil(t, cfg.ComposeProvider.Backends.CDC)
+				assert.Equal(t, composeconfig.CDCTransportTCP, cfg.ComposeProvider.Backends.CDC.Transport)
 				// How a container crosses the hop stays a probe.
-				assert.Equal(t, DefaultCDCServerAddress, cfg.Backends.CDC.ServerAddress)
-				assert.Equal(t, DefaultCDCServerScheme, cfg.Backends.CDC.ServerScheme)
-				assert.Equal(t, DefaultCDCContainerHost, cfg.Backends.CDC.ContainerHost)
-				assert.Equal(t, NetworkModeAuto, cfg.Backends.CDC.NetworkMode)
+				assert.Equal(t, composeconfig.DefaultCDCServerAddress, cfg.ComposeProvider.Backends.CDC.ServerAddress)
+				assert.Equal(t, composeconfig.DefaultCDCServerScheme, cfg.ComposeProvider.Backends.CDC.ServerScheme)
+				assert.Equal(t, composeconfig.DefaultCDCContainerHost, cfg.ComposeProvider.Backends.CDC.ContainerHost)
+				assert.Equal(t, composeconfig.NetworkModeAuto, cfg.ComposeProvider.Backends.CDC.NetworkMode)
 			},
 		},
 		{
@@ -345,10 +347,10 @@ func TestUnmarshal(t *testing.T) {
 			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
 				"    transport: stdio\n    server_address: 18080\n    network_mode: vpn\n",
 			verify: func(t *testing.T, cfg Config) {
-				require.NotNil(t, cfg.Backends.CDC)
-				assert.Equal(t, CDCTransportStdio, cfg.Backends.CDC.Transport)
-				assert.Equal(t, "18080", cfg.Backends.CDC.ServerAddress)
-				assert.Equal(t, "vpn", cfg.Backends.CDC.NetworkMode)
+				require.NotNil(t, cfg.ComposeProvider.Backends.CDC)
+				assert.Equal(t, composeconfig.CDCTransportStdio, cfg.ComposeProvider.Backends.CDC.Transport)
+				assert.Equal(t, "18080", cfg.ComposeProvider.Backends.CDC.ServerAddress)
+				assert.Equal(t, "vpn", cfg.ComposeProvider.Backends.CDC.NetworkMode)
 			},
 		},
 		{
@@ -361,8 +363,8 @@ func TestUnmarshal(t *testing.T) {
 			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
 				"    transport: tcp\n    network_mode: host\n",
 			verify: func(t *testing.T, cfg Config) {
-				require.NotNil(t, cfg.Backends.CDC)
-				assert.Equal(t, NetworkModeHost, cfg.Backends.CDC.NetworkMode)
+				require.NotNil(t, cfg.ComposeProvider.Backends.CDC)
+				assert.Equal(t, composeconfig.NetworkModeHost, cfg.ComposeProvider.Backends.CDC.NetworkMode)
 			},
 		},
 		{
@@ -375,9 +377,9 @@ func TestUnmarshal(t *testing.T) {
 			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
 				"    transport: tcp\n    server_address: 127.0.0.1:18080\n",
 			verify: func(t *testing.T, cfg Config) {
-				require.NotNil(t, cfg.Backends.CDC)
-				assert.Equal(t, "127.0.0.1:18080", cfg.Backends.CDC.ServerAddress)
-				assert.Equal(t, DefaultCDCContainerHost, cfg.Backends.CDC.ContainerHost)
+				require.NotNil(t, cfg.ComposeProvider.Backends.CDC)
+				assert.Equal(t, "127.0.0.1:18080", cfg.ComposeProvider.Backends.CDC.ServerAddress)
+				assert.Equal(t, composeconfig.DefaultCDCContainerHost, cfg.ComposeProvider.Backends.CDC.ContainerHost)
 			},
 		},
 		{
@@ -399,10 +401,10 @@ func TestUnmarshal(t *testing.T) {
 			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
 				"    restore_mode: incremental\n    overwrite: always\n",
 			verify: func(t *testing.T, cfg Config) {
-				require.NotNil(t, cfg.Backends.CDC)
-				assert.Equal(t, RestoreModeIncremental, cfg.Backends.CDC.RestoreMode)
-				assert.Equal(t, OverwriteAlways, cfg.Backends.CDC.Overwrite)
-				assert.Equal(t, DefaultResticImage, cfg.Backends.CDC.Image)
+				require.NotNil(t, cfg.ComposeProvider.Backends.CDC)
+				assert.Equal(t, composeconfig.RestoreModeIncremental, cfg.ComposeProvider.Backends.CDC.RestoreMode)
+				assert.Equal(t, composeconfig.OverwriteAlways, cfg.ComposeProvider.Backends.CDC.Overwrite)
+				assert.Equal(t, composeconfig.DefaultResticImage, cfg.ComposeProvider.Backends.CDC.Image)
 			},
 		},
 		{
@@ -411,9 +413,9 @@ func TestUnmarshal(t *testing.T) {
 			name: "a cdc section under a full-copy project is still defaulted",
 			yaml: "backends:\n  cdc:\n    image: restic/restic:0.18.0\n",
 			verify: func(t *testing.T, cfg Config) {
-				require.NotNil(t, cfg.Backends.CDC)
-				assert.Equal(t, "restic/restic:0.18.0", cfg.Backends.CDC.Image)
-				assert.Equal(t, RestoreModeIncremental, cfg.Backends.CDC.RestoreMode)
+				require.NotNil(t, cfg.ComposeProvider.Backends.CDC)
+				assert.Equal(t, "restic/restic:0.18.0", cfg.ComposeProvider.Backends.CDC.Image)
+				assert.Equal(t, composeconfig.RestoreModeIncremental, cfg.ComposeProvider.Backends.CDC.RestoreMode)
 			},
 		},
 		{
@@ -435,22 +437,22 @@ func TestUnmarshal(t *testing.T) {
 			name: "layers are deduplicated by default",
 			yaml: "",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, model.ImageBackendDedupCopy, cfg.WritableLayers.BackendKind())
+				assert.Equal(t, model.ImageBackendDedupCopy, cfg.ComposeProvider.WritableLayers.BackendKind())
 			},
 		},
 		{
 			name: "writable_layers.backend fullcopy is taken",
 			yaml: "writable_layers:\n  backend: fullcopy\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, model.ImageBackendFullCopy, cfg.WritableLayers.BackendKind())
+				assert.Equal(t, model.ImageBackendFullCopy, cfg.ComposeProvider.WritableLayers.BackendKind())
 			},
 		},
 		{
 			name: "every kind is captured by default",
 			yaml: "",
 			verify: func(t *testing.T, cfg Config) {
-				for _, on := range []*bool{cfg.Capture.WritableLayers, cfg.Capture.Images,
-					cfg.Capture.Volumes.Named, cfg.Capture.Volumes.Bind, cfg.Capture.Volumes.Anonymous} {
+				for _, on := range []*bool{cfg.ComposeProvider.Capture.WritableLayers, cfg.ComposeProvider.Capture.Images,
+					cfg.ComposeProvider.Capture.Volumes.Named, cfg.ComposeProvider.Capture.Volumes.Bind, cfg.ComposeProvider.Capture.Volumes.Anonymous} {
 					require.NotNil(t, on)
 					assert.True(t, *on)
 				}
@@ -460,23 +462,23 @@ func TestUnmarshal(t *testing.T) {
 			name: "a kind left out stays out, the rest default on",
 			yaml: "capture:\n  volumes:\n    bind: false\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.False(t, *cfg.Capture.Volumes.Bind)
-				assert.True(t, *cfg.Capture.Volumes.Named)
-				assert.True(t, *cfg.Capture.WritableLayers)
+				assert.False(t, *cfg.ComposeProvider.Capture.Volumes.Bind)
+				assert.True(t, *cfg.ComposeProvider.Capture.Volumes.Named)
+				assert.True(t, *cfg.ComposeProvider.Capture.WritableLayers)
 			},
 		},
 		{
 			name: "the capture mode defaults to stop",
 			yaml: "",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, string(model.CaptureModeStop), cfg.Capture.Mode)
+				assert.Equal(t, string(model.CaptureModeStop), cfg.ComposeProvider.Capture.Mode)
 			},
 		},
 		{
 			name: "a capture mode is taken",
 			yaml: "capture:\n  mode: pause\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, string(model.CaptureModePause), cfg.Capture.Mode)
+				assert.Equal(t, string(model.CaptureModePause), cfg.ComposeProvider.Capture.Mode)
 			},
 		},
 		{
@@ -488,16 +490,16 @@ func TestUnmarshal(t *testing.T) {
 			name: "the hook defaults: a minute, and a failure fails",
 			yaml: "",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, CaptureHooks{Timeout: time.Minute, OnError: "fail"}, cfg.Capture.Hooks)
-				assert.Equal(t, model.HookOnErrorFail, cfg.Capture.Hooks.OnErrorKind())
+				assert.Equal(t, composeconfig.CaptureHooks{Timeout: time.Minute, OnError: "fail"}, cfg.ComposeProvider.Capture.Hooks)
+				assert.Equal(t, model.HookOnErrorFail, cfg.ComposeProvider.Capture.Hooks.OnErrorKind())
 			},
 		},
 		{
 			name: "the hook defaults are read, a Go duration included",
 			yaml: "capture:\n  hooks:\n    timeout: 2m\n    on_error: continue\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, CaptureHooks{Timeout: 2 * time.Minute, OnError: "continue"}, cfg.Capture.Hooks)
-				assert.Equal(t, model.HookOnErrorContinue, cfg.Capture.Hooks.OnErrorKind())
+				assert.Equal(t, composeconfig.CaptureHooks{Timeout: 2 * time.Minute, OnError: "continue"}, cfg.ComposeProvider.Capture.Hooks)
+				assert.Equal(t, model.HookOnErrorContinue, cfg.ComposeProvider.Capture.Hooks.OnErrorKind())
 			},
 		},
 		{
@@ -628,7 +630,7 @@ func TestUnmarshal_InterpolatesEnvVars(t *testing.T) {
 			name: "an interpolated value still goes through the duration hook",
 			yaml: "compose:\n  wait_timeout: ${ARCAVE_IT_WAIT}\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, 45*time.Second, cfg.Compose.WaitTimeout)
+				assert.Equal(t, 45*time.Second, cfg.ComposeProvider.Compose.WaitTimeout)
 			},
 		},
 		{

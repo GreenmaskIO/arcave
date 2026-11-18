@@ -80,7 +80,7 @@ func TestService_Up_BuildsOverNothing(t *testing.T) {
 		stages.target.expectReap(),
 		inflight.On("Clear", mock.Anything).Return(nil).Once(),
 	)
-	svc := newStagedService(stages, savepoints, locker, inflight)
+	svc := newStagedService(t, stages, savepoints, locker, inflight)
 
 	// Act
 	res, err := svc.Up(zerolog.Nop().WithContext(context.Background()), model.UpRequest{WaitTimeout: time.Minute})
@@ -105,7 +105,7 @@ func TestService_Up_RefusesAPresentComposeProject(t *testing.T) {
 	stages := newMockStages(false)
 	stages.expectSurvey(demoPresent(), true, nil)
 	inflight := &fakeInflight{}
-	svc := newStagedService(stages, savepoints, locker, inflight)
+	svc := newStagedService(t, stages, savepoints, locker, inflight)
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -145,7 +145,7 @@ func TestService_Up_ForceDropsWhatIsThere(t *testing.T) {
 		inflight.On("Clear", mock.Anything).Return(nil).Once(),
 	)
 	inflight.On("Put", mock.Anything, mock.Anything).Return(nil)
-	svc := newStagedService(stages, savepoints, locker, inflight)
+	svc := newStagedService(t, stages, savepoints, locker, inflight)
 
 	// Act
 	res, err := svc.Up(zerolog.Nop().WithContext(context.Background()), model.UpRequest{Force: true})
@@ -185,7 +185,7 @@ func TestService_Up_ForceFailure(t *testing.T) {
 				stages.target.expectDiscard(nil)
 			}
 			inflight := &fakeInflight{}
-			svc := newStagedService(stages, savepoints, locker, inflight)
+			svc := newStagedService(t, stages, savepoints, locker, inflight)
 
 			// Act
 			_, err := svc.Up(zerolog.Nop().WithContext(context.Background()), model.UpRequest{Force: true})
@@ -216,7 +216,7 @@ func TestService_Up_InterruptBeforeTheDrop(t *testing.T) {
 	stages.expectSurveyedPrepare(record.ID, demoPrepareOptions(record, false), nil).Run(func(mock.Arguments) { cancel() })
 	inflight := &mockInflight{}
 	inflight.On("Get", mock.Anything).Return(model.InflightMarker{}, false, nil).Once()
-	svc := newStagedService(stages, savepoints, locker, inflight)
+	svc := newStagedService(t, stages, savepoints, locker, inflight)
 
 	// Act
 	_, err := svc.Up(ctx, model.UpRequest{Force: true})
@@ -240,7 +240,7 @@ func TestService_Up_RefusesUnderAMarker(t *testing.T) {
 				Phase: model.InflightRecreating, Session: model.DefaultSession, ComposeProject: demoProject,
 				Target: record.ID,
 			}}
-			svc := newStagedService(stages, savepoints, locker, inflight)
+			svc := newStagedService(t, stages, savepoints, locker, inflight)
 
 			// Act
 			_, err := svc.Up(zerolog.Nop().WithContext(context.Background()), model.UpRequest{Force: force})
@@ -258,7 +258,7 @@ func TestService_Up_NoSavepoints(t *testing.T) {
 	// Arrange
 	savepoints, locker := latestResolution()
 	stages := newMockStages(true)
-	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+	svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 
 	// Act
 	_, err := svc.Up(zerolog.Nop().WithContext(context.Background()), model.UpRequest{})
@@ -277,7 +277,7 @@ func TestService_Up_RefusesAMissingSavepointBeforeTheLock(t *testing.T) {
 	savepoints.On("List", mock.Anything).Return([]model.Savepoint{demoRecord()}, nil).Once()
 	locker := &mockLocker{}
 	stages := newMockStages(true)
-	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+	svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 
 	// Act
 	_, err := svc.Up(zerolog.Nop().WithContext(context.Background()), model.UpRequest{Name: ptrString("clean")})

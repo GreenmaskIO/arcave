@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // downForce is --force: take the environment down whoever deployed it.
@@ -49,8 +50,8 @@ func runDown(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	ctx := cmd.Context()
-	var opened closers
-	defer opened.release(ctx)
+	var opened utils.Closers
+	defer opened.Release(ctx)
 
 	svc, err := openDownService(ctx, projectRoot, projectCfg, sessionRef, composeProject, &opened)
 	if err != nil {

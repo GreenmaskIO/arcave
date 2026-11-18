@@ -15,35 +15,97 @@
 package compose
 
 import (
+	"context"
+	"io"
+	"os"
+	"strings"
+
+	"github.com/docker/compose/v5/cmd/display"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/rs/zerolog"
+	"golang.org/x/term"
+
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composeclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// The kinds of the steps the provider opens beside a capture's own: <namespace>.<action> for an
-// action, a bare noun for an object.
-const (
-	kindSavepointHold    progress.Kind = "savepoint.hold"
-	kindSavepointRelease progress.Kind = "savepoint.release"
+// composeResourceObject is the resource kind of a compose event whose id names no kind of object.
+const composeResourceObject = "object"
 
-	kindProjectIntrospect progress.Kind = "project.introspect"
-	kindComposeDown       progress.Kind = "compose.down"
-	kindComposeCreate     progress.Kind = "compose.create"
-	kindComposeStart      progress.Kind = "compose.start"
+// composeProgress is where compose's own progress goes.
+type composeProgress struct {
+	// processor is what compose reports its events to.
+	processor api.EventProcessor
+	// stream is the CLI's error stream, which compose writes beside its events.
+	stream io.Writer
+	// events re-emits the events as log records, or on a step; nil when compose renders them itself.
+	events *composeclient.EventLogger
+}
 
-	kindVolumeRestore  progress.Kind = "volume.restore"
-	kindVolume         progress.Kind = "volume"
-	kindLayerRestore   progress.Kind = "layer.restore"
-	kindLayer          progress.Kind = "layer"
-	kindReplicaRebuild progress.Kind = "replica.rebuild"
-	kindReplica        progress.Kind = "replica"
+// newComposeProgress chooses compose's renderer: its own on stderr, nothing, or by default the
+// logger re-emitting its events as log records, which a call's step can take them from.
+func newComposeProgress(mode string, logger zerolog.Logger) composeProgress {
+	switch mode {
+	case composeconfig.ProgressQuiet:
+		// Discarding the stream too covers the warnings compose writes outside the UI.
+		return composeProgress{
+			processor: display.Quiet(),
+			stream:    io.Discard,
+		}
+	case composeconfig.ProgressTTY:
+		processor := display.Plain(os.Stderr)
+		if term.IsTerminal(int(os.Stderr.Fd())) {
+			processor = display.Full(os.Stderr, os.Stderr, false)
+		}
+		return composeProgress{
+			processor: processor,
+			stream:    os.Stderr,
+		}
+	default:
+		events := composeclient.NewEventLogger(logger)
+		return composeProgress{
+			processor: events,
+			stream:    io.Discard,
+			events:    events,
+		}
+	}
+}
 
-	kindDownUntag progress.Kind = "down.untag"
-	kindTag       progress.Kind = "tag"
-)
+// composeEventSink puts compose's events on the progress step of the call, a resource per object.
+type composeEventSink struct {
+	step *progress.StepReporter
+}
 
-// newRestoreSample is the sample a restored unit ends with: its size.
-func newRestoreSample(size int64) progress.Sample {
-	return progress.Sample{Bytes: &progress.Bytes{
-		Done:  size,
-		Total: size,
-	}}
+// newComposeEventSink is the sink of the step ctx carries; nil under a mute one, so the events
+// stay in the log.
+func newComposeEventSink(ctx context.Context) composeclient.EventSink {
+	step := progress.Current(ctx)
+	if step.IsMute() {
+		return nil
+	}
+	return composeEventSink{step: step}
+}
+
+// Event reports one event as its object's line: in flight, settled, or a warning.
+func (s composeEventSink) Event(evt composeclient.Event) {
+	kind := strings.ToLower(evt.Kind)
+	if kind == "" {
+		kind = composeResourceObject
+	}
+	var (
+		resource = progress.Resource{
+			Kind: progress.ResourceKind(kind),
+			ID:   evt.Name,
+		}
+		msg = strings.TrimSpace(evt.Status + " " + evt.Text)
+	)
+	switch evt.State {
+	case composeclient.EventWorking:
+		s.step.UpdateResource(resource, msg)
+	case composeclient.EventDone:
+		s.step.SettleResource(resource, msg)
+	default:
+		s.step.WarnResource(resource, msg)
+	}
 }

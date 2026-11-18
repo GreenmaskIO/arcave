@@ -1,12 +1,12 @@
 ---
 title: MCP tools
-description: The sixteen tools arcave's MCP server exposes — savepoint_create, savepoint_list, savepoint_remove, rollback, up, down, the seven session tools, gc, status and compose_generate — their arguments, their output shapes, and where they differ from the CLI.
+description: The fifteen tools arcave's MCP server exposes — savepoint_create, savepoint_list, savepoint_remove, rollback, up, down, the seven session tools, gc and status — their arguments, their output shapes, and where they differ from the CLI.
 keywords: [arcave MCP tools, savepoint_create, rollback, up, down, session_create, AI agent, model context protocol]
 ---
 
 # MCP tools
 
-[`arcave mcp`](cli/mcp.md) exposes sixteen tools: four for savepoints, [`up`](#up) and [`down`](#down) for the environment, seven for sessions, [`gc`](#gc), [`status`](#status) and [`compose_generate`](#compose_generate). Each savepoint and environment tool takes the compose project it acts on as an argument, so one server addresses every project on the machine.
+[`arcave mcp`](cli/mcp.md) exposes fifteen tools: four for savepoints, [`up`](#up) and [`down`](#down) for the environment, seven for sessions, [`gc`](#gc) and [`status`](#status). Each savepoint and environment tool takes the compose project it acts on as an argument, so one server addresses every project on the machine.
 
 Every tool runs the workflow the CLI runs, under the same rules: the project is stopped and started again, the project lock is claimed, and a rollback of a running project that fails replays its safety snapshot. What an agent takes, you list; what you take, an agent rolls back to.
 
@@ -96,7 +96,7 @@ Either `refs` or the retention fields — not both, and not neither. `retain_rec
 
 ## `rollback`
 
-Returns the environment to a savepoint. Destructive: every volume it covers is overwritten with the savepoint's data, bind mounts included, and a volume a service reaches through `subpath:` goes back whole. When the project is running, arcave takes a safety snapshot of the live state first and replays it by itself if the rollback fails; the result's `safety_snapshot` names it, and rolling back to that id undoes the rollback until a `gc` retires it. A project with no containers is built from the savepoint's spec instead, with no safety snapshot, and [`rollback.leftover_volumes`](configuration.md#rollback) from the config decides about the named volumes it still owns — see [Rolling back a project that is not running](cli/rollback.md#rolling-back-a-project-that-is-not-running).
+Returns the environment to a savepoint. Destructive: every volume it covers is overwritten with the savepoint's data, bind mounts included, and a volume a service reaches through `subpath:` goes back whole. When the project is running, arcave takes a safety snapshot of the live state first and replays it by itself if the rollback fails; the result's `safety_snapshot` names it, and rolling back to that id undoes the rollback until a `gc` retires it. A project with no containers is built from the savepoint's spec instead, with no safety snapshot, and [`compose.leftover_volumes`](configuration.md#compose) from the config decides about the named volumes it still owns — see [Rolling back a project that is not running](cli/rollback.md#rolling-back-a-project-that-is-not-running).
 
 | Argument | Required | Description |
 |---|---|---|
@@ -281,15 +281,6 @@ Takes no arguments. Clears the current session, so calls given no `session` work
 ```text
 this server is pinned to session "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31" by --session or ARCAVE_SESSION, which outranks the current session: pass session on each call, or restart the server without the pin
 ```
-
-## `compose_generate`
-
-| Argument | Required | Description |
-|---|---|---|
-| `compose_project` | yes | The compose project to generate the file of. |
-| `absolute_paths` | no | Keep every bind source absolute instead of relative to the compose project's working directory. |
-
-Returns `{"compose_project": …, "services": [ … ], "spec": "<the compose file, as YAML>"}`. Read-only, and works in no session: see [`arcave tools generate-compose`](cli/tools_generate_compose.md). The file carries every environment value the containers run with, secrets included.
 
 ## `gc`
 

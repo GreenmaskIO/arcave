@@ -25,7 +25,7 @@ arcave rebuilds the project the savepoint recorded, puts the captured writable l
 
 A compose project with no containers — never started on this machine, or taken away with `docker compose down` — can still be rolled back: arcave builds it from the spec the savepoint recorded. There is nothing to stop, so there is no stop, no safety snapshot and no `compose down`; arcave creates the project, writes the volumes and starts it.
 
-Named volumes the project still owns — what `docker compose down` leaves behind — are what [`rollback.leftover_volumes`](../configuration.md#rollback) decides about:
+Named volumes the project still owns — what `docker compose down` leaves behind — are what [`compose.leftover_volumes`](../configuration.md#compose) decides about:
 
 | Value | What happens to a leftover volume the savepoint restores into |
 |---|---|
@@ -191,7 +191,7 @@ Every container the rollback builds carries `io.arcave.deployment.*` labels: whe
 | A Docker daemon older than 25 whose version arcave could not read, on a running project | `pre-rollback safety snapshot failed, nothing changed: capturing the savepoint: … unsupported image archive format: …`. The services are started again. |
 | A stored layer the Docker daemon will not take | `restore the savepoint's writable layers: …` — raised **before** anything is stopped. |
 | A service would be rebuilt on an image the savepoint does not hold and the daemon lacks | `image is neither in the savepoint nor in the daemon: service app runs on myapp:latest` — before anything is stopped. Pull or build the image, then roll back again. |
-| The project is not running, its named volumes survive, and `rollback.leftover_volumes` is `refuse` | `compose project is not running but its volumes survive: myapp_pgdata`. Nothing is created. |
+| The project is not running, its named volumes survive, and `compose.leftover_volumes` is `refuse` | `compose project is not running but its volumes survive: myapp_pgdata`. Nothing is created. |
 | An interrupted rollback is marked | `require no inflight: rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring); recover by rolling back to 019e8491-04c8-7000-8000-000000000000` — except the rollback that is the remedy, which passes: one to the marker's own safety snapshot, or, after a rollback that took none, one to any savepoint of the session and compose project. The log names the command to run. The remedy takes no safety snapshot, since it would capture half-restored volumes, and a failure leaves the marker standing. |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
 | The safety snapshot fails | `pre-rollback safety snapshot failed, nothing changed: …`. The services are started again. |

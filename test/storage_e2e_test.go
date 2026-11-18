@@ -43,8 +43,10 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
 	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // The storage servers the e2e runs against, pinned by digest: the images the
@@ -101,17 +103,17 @@ type storageE2EBackend struct {
 // default stdio transport, into the same store.
 var storageE2EBackends = []storageE2EBackend{
 	{
-		name:    config.SnapshotBackendFullCopy,
-		backend: config.SnapshotBackendFullCopy,
+		name:    composeconfig.SnapshotBackendFullCopy,
+		backend: composeconfig.SnapshotBackendFullCopy,
 	},
 	{
-		name:        config.SnapshotBackendFullCopy + "-" + config.CompressionNone,
-		backend:     config.SnapshotBackendFullCopy,
-		compression: config.CompressionNone,
+		name:        composeconfig.SnapshotBackendFullCopy + "-" + composeconfig.CompressionNone,
+		backend:     composeconfig.SnapshotBackendFullCopy,
+		compression: composeconfig.CompressionNone,
 	},
 	{
-		name:    config.SnapshotBackendCDC,
-		backend: config.SnapshotBackendCDC,
+		name:    composeconfig.SnapshotBackendCDC,
+		backend: composeconfig.SnapshotBackendCDC,
 	},
 }
 
@@ -154,7 +156,7 @@ func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend
 		require.NoError(t, err)
 		env = append(slices.Clone(env), "ARCAVE_ENCRYPTION_KEY="+identity.String())
 	}
-	compose := newImageRollbackEnv(t)
+	compose := newComposeProject(t, "storage-it")
 	projectRoot := t.TempDir()
 	run := func(args ...string) []byte {
 		t.Helper()
@@ -173,12 +175,12 @@ func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend
 	ascending := decode[[]model.Savepoint](t, run("savepoint", "list", "--sort", "asc"))
 	rolledBack := decode[model.RollbackResult](t, run("rollback", "sp1"))
 	replica := compose.replicas(t)[0]
-	volumeAfter, layerAfter := compose.read(t, replica, volumeMarker), compose.read(t, replica, layerMarker)
+	volumeAfter, layerAfter := compose.read(t, replica, daemontest.VolumeMarker), compose.read(t, replica, daemontest.LayerMarker)
 	withSafety := decode[[]model.Savepoint](t, run("savepoint", "list", "--include-safety-snapshots"))
 	fork := decode[model.Session](t, run("session", "create", "--name", "fork", "--from", model.DefaultSessionName))
 	inFork := decode[[]model.Savepoint](t, run("--session", "fork", "savepoint", "list"))
 	run("--session", "fork", "rollback", "sp2")
-	volumeInFork := compose.read(t, compose.replicas(t)[0], volumeMarker)
+	volumeInFork := compose.read(t, compose.replicas(t)[0], daemontest.VolumeMarker)
 	removed := decode[model.RemoveResult](t, run("savepoint", "remove", sp2.ID.String()))
 	afterRemove := decode[[]model.Savepoint](t, run("savepoint", "list"))
 	// runArcave fails on a partial gc's non-zero exit.
@@ -188,7 +190,7 @@ func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend
 	// Assert
 	assert.Equal(t, []model.SnapshotBackendKind{model.SnapshotBackendKind(backend.backend)}, statKinds(sp1),
 		"the volume went through the configured backend")
-	if backend.backend == config.SnapshotBackendFullCopy {
+	if backend.backend == composeconfig.SnapshotBackendFullCopy {
 		assert.Equal(t, []any{wantCompression(backend)}, statCompressions(sp1), "the record names the configured format")
 	}
 	assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(listed), "newest first by default")
@@ -243,7 +245,7 @@ func startS3Storage(t *testing.T) storageTarget {
 	bucket := config.S3Storage{
 		Endpoint:    "http://" + endpoint,
 		Bucket:      storageE2EBucket,
-		Prefix:      "it-" + randomSuffix(t),
+		Prefix:      "it-" + daemontest.RandomSuffix(t),
 		Region:      "us-east-1",
 		AccessKeyID: server.Username,
 	}
@@ -285,7 +287,7 @@ func startAzureStorage(t *testing.T) storageTarget {
 	blobs := config.AzureStorage{
 		Container:      "arcave-e2e",
 		StorageAccount: azurite.AccountName,
-		Prefix:         "it-" + randomSuffix(t),
+		Prefix:         "it-" + daemontest.RandomSuffix(t),
 		AccessKey:      azurite.AccountKey,
 		Endpoint:       serviceURL + "/" + azurite.AccountName,
 	}
@@ -336,7 +338,7 @@ func startSSHStorage(t *testing.T) storageTarget {
 		Port:     port,
 		User:     sftpUser,
 		Password: sftpPassword,
-		Prefix:   path.Join("/upload", "it-"+randomSuffix(t)),
+		Prefix:   path.Join("/upload", "it-"+daemontest.RandomSuffix(t)),
 	}}
 	// The port accepts connections before sshd serves on it; a real ping is the signal.
 	require.Eventually(t, func() bool {
@@ -388,10 +390,10 @@ func writeStorageConfigWith(
 	var cfg config.Config
 	require.NoError(t, yaml.Unmarshal(data, &cfg))
 	cfg.Storage = storage
-	cfg.Snapshot.Backend = backend.backend
+	cfg.ComposeProvider.Snapshot.Backend = backend.backend
 	cfg.Encryption = config.Encryption{Enabled: encrypted}
 	if backend.compression != "" {
-		cfg.Backends.FullCopy.Compression = backend.compression
+		cfg.ComposeProvider.Backends.FullCopy.Compression = backend.compression
 	}
 	data, err = yaml.Marshal(cfg)
 	require.NoError(t, err)
@@ -475,7 +477,7 @@ func savepointNames(savepoints []model.Savepoint) []string {
 // wantCompression is the format a fullcopy row's record names.
 func wantCompression(backend storageE2EBackend) string {
 	if backend.compression == "" {
-		return config.CompressionZstd
+		return composeconfig.CompressionZstd
 	}
 	return backend.compression
 }

@@ -22,9 +22,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/composespec"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // sessionShowSpec is one service holding a named volume.
@@ -32,7 +32,7 @@ const sessionShowSpec = `
 name: %s
 services:
   db:
-    image: ` + busyboxImage + `
+    image: ` + daemontest.BusyboxImage + `
     command: ["sleep", "3600"]
     stop_signal: SIGKILL
     volumes: ["data:/data"]
@@ -51,7 +51,7 @@ func newSessionShowEnv(t *testing.T) *sessionShowEnv {
 	env := &sessionShowEnv{projectRoot: t.TempDir()}
 	runArcave(t, env.projectRoot, nil, "init", "--name", "arcave-session-show-it")
 	writeStorageConfigWith(t, env.projectRoot, startDirectoryStorage(t).file,
-		storageE2EBackend{name: config.SnapshotBackendFullCopy, backend: config.SnapshotBackendFullCopy}, false)
+		storageE2EBackend{name: composeconfig.SnapshotBackendFullCopy, backend: composeconfig.SnapshotBackendFullCopy}, false)
 	return env
 }
 
@@ -59,11 +59,8 @@ func newSessionShowEnv(t *testing.T) *sessionShowEnv {
 func upComposeProject(t *testing.T) model.DockerComposeProjectName {
 	t.Helper()
 
-	compose := newImageRollbackEnv(t)
-	project, err := composespec.NewCodec().Parse(compose.ctx, fmt.Appendf(nil, sessionShowSpec, compose.project))
-	require.NoError(t, err)
-	require.NoError(t, compose.compose.Create(compose.ctx, project, nil))
-	require.NoError(t, compose.compose.Start(compose.ctx, project, 90*time.Second))
+	compose := newComposeProject(t, "session-show-it")
+	compose.upDocument(t, fmt.Sprintf(sessionShowSpec, compose.project))
 	return model.DockerComposeProjectName(compose.project)
 }
 

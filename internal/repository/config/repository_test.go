@@ -25,6 +25,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/greenmaskio/arcave/internal/config"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 func TestRepository_Path(t *testing.T) {
@@ -105,17 +106,19 @@ func TestRepository_Save(t *testing.T) {
 			name: "full config",
 			cfg: config.Config{
 				Project: config.Project{Name: "shop"},
-				Compose: config.Compose{
-					WaitTimeout: 5 * time.Minute,
-					StopTimeout: 30 * time.Second,
-					Progress:    config.ProgressTTY,
-				},
 				Storage: config.Storage{
 					Type:      config.StorageTypeDirectory,
 					Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/shop"},
 				},
-				Snapshot: config.Snapshot{Backend: config.SnapshotBackendFullCopy},
-				Log:      config.Log{Level: "debug", Format: "json"},
+				Log: config.Log{Level: "debug", Format: "json"},
+				ComposeProvider: composeconfig.Config{
+					Compose: composeconfig.Compose{
+						WaitTimeout: 5 * time.Minute,
+						StopTimeout: 30 * time.Second,
+						Progress:    composeconfig.ProgressTTY,
+					},
+					Snapshot: composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendFullCopy},
+				},
 			},
 		},
 		{
@@ -126,7 +129,9 @@ func TestRepository_Save(t *testing.T) {
 					Type:      config.StorageTypeDirectory,
 					Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/shop"},
 				},
-				Snapshot: config.Snapshot{Backend: config.SnapshotBackendFullCopy},
+				ComposeProvider: composeconfig.Config{
+					Snapshot: composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendFullCopy},
+				},
 			},
 		},
 	}
@@ -200,7 +205,9 @@ func savedConfig(name string) config.Config {
 			Type:      config.StorageTypeDirectory,
 			Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/" + name},
 		},
-		Snapshot: config.Snapshot{Backend: config.SnapshotBackendFullCopy},
+		ComposeProvider: composeconfig.Config{
+			Snapshot: composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendFullCopy},
+		},
 	}
 }
 

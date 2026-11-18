@@ -1,0 +1,640 @@
+// Copyright 2026 Greenmask Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package test
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/greenmaskio/storages"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	dockerclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
+	sprepo "github.com/greenmaskio/arcave/internal/provider/compose/internal/repository/savepoint"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/collector/resticrepo"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/eraser"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/gcfinder"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/sessionstore"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
+	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
+	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
+	"github.com/greenmaskio/arcave/internal/service/core/gc"
+	"github.com/greenmaskio/arcave/internal/service/heartbeat"
+	"github.com/greenmaskio/arcave/internal/service/lock"
+	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
+)
+
+// A gc deletes what removed savepoints, rollbacks and dead runs left in the store and the daemon,
+// and nothing a live savepoint needs; the blobs of an image it removes go on the run after.
+func TestGC_DeletesOnlyTheDead(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	env := newSessionEnv(t)
+	env.withComposeProject(t)
+	baseline := env.in(t, model.DefaultSession)
+	replica := baseline.replicas(t)[0]
+	baseline.write(t, replica, "first")
+	first, err := baseline.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "first"})
+	require.NoError(t, err)
+	baseline.write(t, replica, "second")
+	second, err := baseline.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "second"})
+	require.NoError(t, err)
+	// Two rollbacks: the first's tag is left behind unused once the second runs.
+	olderUndo, err := baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &first.ID})
+	require.NoError(t, err)
+	newestUndo, err := baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &second.ID})
+	require.NoError(t, err)
+	_, err = baseline.svc.RemoveSavepoints(env.ctx, model.RemoveRequest{Refs: []string{first.ID.String()}})
+	require.NoError(t, err)
+
+	composeDir := filepath.Join(env.sessionDir(model.DefaultSession), "compose", env.project)
+	// A fresh tree with no heartbeat and one whose heartbeat reads in progress: both are dead.
+	deadTree, staleTree := model.NewSavepointID(), model.NewSavepointID()
+	plant(t, filepath.Join(composeDir, deadTree.String(), "volume-named-x", "data.tar"), "partial capture")
+	plant(t, filepath.Join(composeDir, staleTree.String(), "volume-named-x", "data.tar"), "capture cut off")
+	plantHeartbeat(t, filepath.Join(composeDir, staleTree.String()), heartbeat.StatusInProgress)
+	// An upstream image no record names, whose manifest alone lists a blob.
+	orphanImage, orphanBlob := plantUnreferencedImage(t, composeDir)
+
+	svc := env.newGarbageCollector(t, model.DefaultSession, baseline.engine())
+	// Each image and blob op names a file the store holds, at its size.
+	preview, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
+	require.NoError(t, err)
+	for _, kind := range []model.GarbageDataKind{model.GarbageDataKindImageLayers, model.GarbageDataKindUpstreamImages} {
+		for _, op := range opsByKind(preview)[kind] {
+			info, err := os.Stat(filepath.Join(composeDir, filepath.FromSlash(op.Target)))
+			require.NoError(t, err, "%s names an object the store holds", op.Target)
+			if !info.IsDir() {
+				assert.Equal(t, info.Size(), *op.Bytes, op.Target)
+			}
+		}
+	}
+	before := fileSizes(t, env.storeDir())
+
+	// Act
+	result, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{})
+
+	// Assert
+	require.NoError(t, err)
+	assert.False(t, result.DryRun)
+	ops := opsByKind(result)
+	assert.ElementsMatch(t, []string{deadTree.String(), staleTree.String()}, targetsOf(ops[model.GarbageDataKindSavepointData]),
+		"a dead tree goes however young, whatever its heartbeat says")
+	assert.Contains(t, targetsOf(ops[model.GarbageDataKindUpstreamImages]), orphanImage)
+	assert.Equal(t, []string{olderUndo.SafetySnapshot.String()}, targetsOf(ops[model.GarbageDataKindSafetySnapshots]),
+		"the older of the two rollbacks' safety snapshots goes")
+	assert.NotContains(t, targetsOf(ops[model.GarbageDataKindImageLayers]), orphanBlob, "an unreferenced image's blob waits for its manifest to go")
+	tags := targetsOf(ops[model.GarbageDataKindRestoredLayers])
+	assert.Contains(t, strings.Join(tags, ","), ":sp-"+first.ID.String(), "the first rollback's tag is unused")
+	assert.NotContains(t, strings.Join(tags, ","), ":sp-"+second.ID.String(), "the running container's tag is in use")
+
+	var (
+		deleted []string
+		retired []string
+		freed   int64
+	)
+	for _, report := range result.Reports {
+		switch report.DataKind {
+		case model.GarbageDataKindRestoredLayers:
+			require.NotNil(t, report.Deletion)
+			assert.Empty(t, report.Deletion.Failed)
+			assert.Len(t, report.Deletion.Deleted, report.Summary.Found)
+			for _, tag := range tags {
+				exists, err := baseline.engine().ImageRefExists(env.ctx, tag)
+				require.NoError(t, err)
+				assert.False(t, exists, "%s is untagged", tag)
+			}
+		case model.GarbageDataKindSafetySnapshots:
+			require.NotNil(t, report.Deletion)
+			assert.Empty(t, report.Deletion.Failed)
+			assert.Len(t, report.Deletion.Deleted, report.Summary.Found)
+			assert.Nil(t, report.Deletion.FreedBytes(), "a retired safety snapshot's size is not known")
+			for _, op := range report.Detail.Findings().Ops {
+				retired = append(retired, op.Target)
+			}
+		case model.GarbageDataKindDeduplicatedVolumes:
+			require.Empty(t, report.Detail.Findings().Ops, "no savepoint here is cdc's")
+			assert.Equal(t, &model.GarbageDeletion{}, report.Deletion, "a report that found nothing has nothing left to delete")
+		default:
+			require.NotNil(t, report.Deletion, report.DataKind)
+			assert.Empty(t, report.Deletion.Failed, report.DataKind)
+			assert.Zero(t, report.Deletion.NotRun, report.DataKind)
+			assert.Len(t, report.Deletion.Deleted, report.Summary.Found, report.DataKind)
+			for _, op := range report.Detail.Findings().Ops {
+				deleted = append(deleted, op.Target)
+			}
+			require.NotNil(t, report.Deletion.FreedBytes(), report.DataKind)
+			freed += *report.Deletion.FreedBytes()
+		}
+	}
+	assert.Empty(t, result.Warnings)
+	after := fileSizes(t, env.storeDir())
+	assert.Equal(t, newWithoutTargets(before, composeDir, append(slices.Clone(deleted), retired...)), after,
+		"exactly what was named is gone")
+	retiredBytes := sumSizes(before) - sumSizes(newWithoutTargets(before, composeDir, retired))
+	assert.Equal(t, sumSizes(before)-sumSizes(after), freed+retiredBytes)
+	assert.Nil(t, result.Total.FreedBytes, "what an untag frees in the daemon is not known")
+	assert.Equal(t, len(deleted)+len(retired)+len(tags), result.Total.Deleted)
+
+	// The run after frees what only the removed image and the retired safety snapshot listed.
+	secondRun, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{})
+	require.NoError(t, err)
+	secondOps := opsByKind(secondRun)
+	assert.Contains(t, targetsOf(secondOps[model.GarbageDataKindImageLayers]), orphanBlob)
+	assert.Empty(t, secondOps[model.GarbageDataKindSafetySnapshots], "the newest stays")
+	assert.Empty(t, secondOps[model.GarbageDataKindSavepointData])
+	assert.Empty(t, secondOps[model.GarbageDataKindUpstreamImages])
+	assert.NoFileExists(t, filepath.Join(composeDir, filepath.FromSlash(orphanBlob)))
+
+	// And the one after that finds nothing left in the store, and changes nothing.
+	beforeThird := fileSizes(t, env.storeDir())
+	thirdRun, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
+	require.NoError(t, err)
+	assert.Equal(t, beforeThird, fileSizes(t, env.storeDir()), "a dry run changes nothing")
+	thirdOps := opsByKind(thirdRun)
+	for _, kind := range []model.GarbageDataKind{
+		model.GarbageDataKindSavepointData, model.GarbageDataKindUpstreamImages, model.GarbageDataKindImageLayers,
+	} {
+		assert.Empty(t, thirdOps[kind], kind)
+	}
+
+	// The safety snapshot that stayed is whole: it holds what the second rollback overwrote.
+	_, err = baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &newestUndo.SafetySnapshot})
+	require.NoError(t, err, "nothing a retained safety snapshot needs was deleted")
+	assert.Equal(t, "first", baseline.read(t, baseline.replicas(t)[0], daemontest.VolumeMarker))
+	assert.Equal(t, "first", baseline.read(t, baseline.replicas(t)[0], daemontest.LayerMarker))
+
+	// The surviving savepoint is whole.
+	baseline.write(t, baseline.replicas(t)[0], "drifted")
+	_, err = baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &second.ID})
+	require.NoError(t, err, "nothing a live savepoint needs was deleted")
+	assert.Equal(t, "second", baseline.read(t, baseline.replicas(t)[0], daemontest.VolumeMarker))
+	assert.Equal(t, "second", baseline.read(t, baseline.replicas(t)[0], daemontest.LayerMarker))
+}
+
+// plantUnreferencedImage stores, under composeDir, an upstream image no record names whose intact
+// manifest lists one blob of its own; it returns both keys.
+func plantUnreferencedImage(t *testing.T, composeDir string) (image, blob string) {
+	t.Helper()
+	imageHex, blobHex := strings.Repeat("e", 64), strings.Repeat("f", 64)
+	image, blob = "shared/oci/images/sha256/"+imageHex, "shared/oci/blobs/sha256/"+blobHex
+	manifest, err := json.Marshal(imagebackend.Manifest{
+		ImageID: model.ImageDigestID("sha256:" + imageHex),
+		Format:  imagebackend.FormatBlobs,
+		Members: []imagebackend.Member{{Name: "blobs/sha256/" + blobHex, Kind: imagebackend.KindBlob, Digest: blobHex}},
+	})
+	require.NoError(t, err)
+	plant(t, filepath.Join(composeDir, filepath.FromSlash(image), "image.json"), string(manifest))
+	plant(t, filepath.Join(composeDir, filepath.FromSlash(blob)), "orphan layer")
+	return image, blob
+}
+
+// newWithoutTargets is sizes without the files under dir at each of targets, or under them.
+func newWithoutTargets(sizes map[string]int64, dir string, targets []string) map[string]int64 {
+	kept := map[string]int64{}
+	for name, size := range sizes {
+		gone := slices.ContainsFunc(targets, func(target string) bool {
+			key := filepath.Join(dir, filepath.FromSlash(target))
+			return name == key || strings.HasPrefix(name, key+string(filepath.Separator))
+		})
+		if !gone {
+			kept[name] = size
+		}
+	}
+	return kept
+}
+
+func sumSizes(sizes map[string]int64) int64 {
+	var total int64
+	for _, size := range sizes {
+		total += size
+	}
+	return total
+}
+
+// A gc looks only at its own session's compose projects.
+func TestGC_DryRun_StaysInItsSession(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	env := newSessionEnv(t)
+	env.withComposeProject(t)
+	feat := env.create(t, "feat")
+	_, err := env.in(t, feat.ID).svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "sp"})
+	require.NoError(t, err)
+	deadTree := model.NewSavepointID()
+	plant(t, filepath.Join(env.sessionDir(feat.ID), "compose", env.project, deadTree.String(), "x"), "partial")
+	baselineSvc := env.newGarbageCollector(t, model.DefaultSession, nil)
+	featSvc := env.newGarbageCollector(t, feat.ID, nil)
+
+	// Act
+	request := model.GarbageCollectRequest{
+		DryRun:    true,
+		DataKinds: []model.GarbageDataKind{model.GarbageDataKindSavepointData},
+	}
+	baseline, baselineErr := baselineSvc.GarbageCollect(env.ctx, request)
+	inFeat, featErr := featSvc.GarbageCollect(env.ctx, request)
+
+	// Assert
+	require.NoError(t, baselineErr)
+	require.NoError(t, featErr)
+	assert.Equal(t, model.DefaultSession, baseline.Session)
+	assert.Zero(t, baseline.Total.Found, "feat's dead tree is not baseline's")
+	assert.Equal(t, []string{deadTree.String()}, targetsOf(opsByKind(inFeat)[model.GarbageDataKindSavepointData]))
+}
+
+// newGarbageCollector wires a gc over session the way openGCService does; without engine it
+// finds only what a store holds.
+func (e *sessionEnv) newGarbageCollector(
+	t *testing.T, session model.SessionID, engine *dockerclient.Engine,
+) *gc.GarbageCollector {
+	t.Helper()
+
+	root, err := storefactory.Root(t.Context(), e.storage, e.projectRoot)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = root.Close() })
+	arcaveProjectStore, err := storefactory.ArcaveProject(root, sessionArcaveProject)
+	require.NoError(t, err)
+
+	gcDeps := gcfinder.Deps{
+		NewSavepointReader: newSavepointReader,
+		ArcaveProject:      sessionArcaveProject,
+		Concurrency:        2,
+	}
+	if engine != nil {
+		opener := newResticOpener(t, engine, composeconfig.CDCTransportStdio)
+		gcDeps = gcfinder.Deps{
+			NewSavepointReader: newSavepointReader,
+			Daemon:             engine,
+			ArcaveProject:      sessionArcaveProject,
+			Concurrency:        2,
+			ResticInspectors:   opener,
+			ResticPruners:      resticPrunerOpener{opener},
+		}
+	}
+	return newGC(t, arcaveProjectStore, e.projectRoot, session, gcDeps)
+}
+
+// A cdc savepoint whose record is gone — a remove interrupted past its record — leaves its
+// snapshots for a forget, found by their tag, with restic's estimate of what a prune frees.
+func TestGC_DryRun_ForgetsTheSnapshotsOfADeadSavepoint(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	env := newCDCEnv(t, composeconfig.CDCBackend{
+		RestoreMode: composeconfig.RestoreModeWipe,
+		Overwrite:   composeconfig.OverwriteIfChanged,
+		Image:       composeconfig.DefaultResticImage,
+	})
+	first, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "first"})
+	require.NoError(t, err)
+	env.mutate(t, env.volumes[0])
+	_, err = env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "second"})
+	require.NoError(t, err)
+	require.NoError(t, env.composeProjectStore.Delete(env.ctx, first.ID.String()+"/savepoint.json"))
+	before, err := env.composeProjectStore.List(env.ctx, cdc.NamespaceRepos)
+	require.NoError(t, err)
+
+	root, err := storefactory.Root(t.Context(), env.storageCfg, env.projectRoot)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = root.Close() })
+	arcaveProjectStore, err := storefactory.ArcaveProject(root, cdcArcaveProject)
+	require.NoError(t, err)
+	svc := newGC(t, arcaveProjectStore, env.projectRoot, model.DefaultSession, newCDCGarbage(t, env))
+
+	// Act
+	result, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{
+		DryRun:    true,
+		DataKinds: resticKinds,
+	})
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, result.Reports, 1)
+	stat, ok := result.Reports[0].Detail.(model.ResticRepositoryStat)
+	require.True(t, ok)
+	assert.Len(t, stat.Ops, len(env.volumes), "one snapshot of the dead savepoint per volume")
+	for _, op := range stat.Ops {
+		assert.Equal(t, model.GarbageActionForget, op.Action)
+		assert.Equal(t, first.ID, op.Savepoint)
+	}
+	assert.Equal(t, len(env.volumes), stat.LiveSnapshots, "the second savepoint's snapshots are live")
+	assert.Equal(t, len(env.volumes), stat.LiveRepos)
+	assert.Len(t, stat.Estimates, len(env.volumes))
+	require.NotNil(t, result.Reports[0].Summary.Bytes, "restic estimates every repository")
+	assert.Positive(t, *result.Reports[0].Summary.Bytes, "the mutated volume's old chunks are the first savepoint's alone")
+	require.Len(t, result.Savepoints, 1)
+	assert.Equal(t, first.ID, result.Savepoints[0].Savepoint)
+	after, err := env.composeProjectStore.List(env.ctx, cdc.NamespaceRepos)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "a dry run changes no repository")
+}
+
+// A removed cdc savepoint leaves its snapshots in their repositories; a gc forgets them and prunes
+// what they alone held, and the savepoint that is left still rolls back.
+func TestGC_ForgetsTheSnapshotsOfARemovedSavepoint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		transport string
+	}{
+		{name: "over stdio", transport: composeconfig.CDCTransportStdio},
+		{name: "over tcp", transport: composeconfig.CDCTransportTCP},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Arrange
+			env := newCDCEnv(t, composeconfig.CDCBackend{
+				RestoreMode: composeconfig.RestoreModeWipe,
+				Overwrite:   composeconfig.OverwriteIfChanged,
+				Image:       composeconfig.DefaultResticImage,
+				Transport:   tt.transport,
+			})
+			first, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "first"})
+			require.NoError(t, err)
+			env.mutate(t, env.volumes[0])
+			second, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "second"})
+			require.NoError(t, err)
+			kept := env.hashAll(t)
+			beforeRemove := repoBytes(t, env)
+			_, err = env.svc.RemoveSavepoints(env.ctx, model.RemoveRequest{Refs: []string{first.ID.String()}})
+			require.NoError(t, err)
+			require.Equal(t, beforeRemove, repoBytes(t, env), "a remove frees nothing in the repositories")
+			for _, stat := range first.Stats {
+				exists, err := env.composeProjectStore.Exists(env.ctx,
+					cdc.NewSnapshotKey(stat.Volume.ObjectID, resticPayload(t, stat).SnapshotObjectID))
+				require.NoError(t, err)
+				require.True(t, exists, "a remove leaves the snapshot to a gc")
+			}
+			before := repoBytes(t, env)
+			svc := newCDCGarbageCollector(t, env)
+
+			// Act
+			result, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DataKinds: resticKinds})
+
+			// Assert
+			require.NoError(t, err)
+			require.Len(t, result.Reports, 1)
+			report := result.Reports[0]
+			require.NotNil(t, report.Deletion)
+			assert.Len(t, report.Deletion.Deleted, len(env.volumes), "one snapshot of the removed savepoint per volume")
+			assert.Empty(t, report.Deletion.Failed)
+			require.Len(t, report.Deletion.Reclaimed, len(env.volumes), "one prune per repository")
+			freed := report.Deletion.FreedBytes()
+			require.NotNil(t, freed, "restic reports what every prune freed")
+			assert.Positive(t, *freed, "the mutated volume's old chunks were the first savepoint's alone")
+			assert.Less(t, repoBytes(t, env), before, "the prune shrank the repositories")
+			for _, stat := range first.Stats {
+				exists, err := env.composeProjectStore.Exists(env.ctx,
+					cdc.NewSnapshotKey(stat.Volume.ObjectID, resticPayload(t, stat).SnapshotObjectID))
+				require.NoError(t, err)
+				assert.False(t, exists, "the snapshot is forgotten")
+			}
+
+			// The run after finds nothing left to forget.
+			again, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{
+				DryRun:    true,
+				DataKinds: resticKinds,
+			})
+			require.NoError(t, err)
+			stat, ok := again.Reports[0].Detail.(model.ResticRepositoryStat)
+			require.True(t, ok)
+			assert.Empty(t, stat.Ops)
+			assert.Equal(t, len(env.volumes), stat.LiveSnapshots)
+
+			// The savepoint left is whole.
+			env.mutate(t, env.volumes[0])
+			_, err = env.svc.Rollback(env.ctx, model.RollbackRequest{ID: &second.ID})
+			require.NoError(t, err)
+			assert.Equal(t, kept, env.hashAll(t), "nothing the live savepoint needs was pruned")
+		})
+	}
+}
+
+// resticKinds asks a gc for the restic snapshots alone.
+var resticKinds = []model.GarbageDataKind{model.GarbageDataKindDeduplicatedVolumes}
+
+// newCDCGarbageCollector is a gc over env's default session, judging and deleting its restic
+// snapshots only.
+func newCDCGarbageCollector(t *testing.T, env *cdcEnv) *gc.GarbageCollector {
+	t.Helper()
+	arcaveProjectStore := env.arcaveProjectStore(t)
+	return newGC(t, arcaveProjectStore, env.projectRoot, model.DefaultSession, newCDCGarbage(t, env))
+}
+
+// newCDCGarbage is what a gc of env finds its garbage with, its restic repositories served over
+// env's transport.
+func newCDCGarbage(t *testing.T, env *cdcEnv) gcfinder.Deps {
+	t.Helper()
+	opener := newResticOpener(t, env.engine, env.cdcCfg.Transport)
+	return gcfinder.Deps{
+		NewSavepointReader: newSavepointReader,
+		Daemon:             env.engine,
+		ArcaveProject:      cdcArcaveProject,
+		Concurrency:        1,
+		ResticInspectors:   opener,
+		ResticPruners:      resticPrunerOpener{opener},
+	}
+}
+
+// newGC wires a gc of session over arcaveProjectStore the way openGCService does, its provider
+// finding garbage as gcDeps says.
+func newGC(
+	t *testing.T, arcaveProjectStore storages.Storager, projectRoot string, session model.SessionID,
+	gcDeps gcfinder.Deps,
+) *gc.GarbageCollector {
+	t.Helper()
+	return gc.New(gc.Deps{
+		Sessions: sessionrepo.New(arcaveProjectStore),
+		ProviderSession: sessionstore.New(sessionstore.Deps{
+			Store:   arcaveProjectStore,
+			Session: session,
+			NewSavepointRecords: func(store storages.Storager) sessionstore.SavepointRecords {
+				return sprepo.New(store)
+			},
+			Garbage: gcfinder.New(gcDeps),
+		}),
+		Locker:         lock.New(projectRoot),
+		SessionLocker:  newSessionLocker(t, arcaveProjectStore, session),
+		WriteAdmission: newPlainAdmission(arcaveProjectStore),
+		Inflight:       inflightrepo.New(projectRoot),
+		RetainRecent:   config.DefaultSafetySnapshotRetainRecent,
+	})
+}
+
+// newSavepointReader opens a compose project's savepoints the way the provider does.
+func newSavepointReader(store storages.Storager) garbage.SavepointReader {
+	return sprepo.New(store)
+}
+
+// repoBytes sums the sizes of every object of env's restic repositories.
+func repoBytes(t *testing.T, env *cdcEnv) int64 {
+	t.Helper()
+	objects, err := env.composeProjectStore.List(env.ctx, cdc.NamespaceRepos)
+	require.NoError(t, err)
+	var total int64
+	for _, obj := range objects {
+		total += obj.Size
+	}
+	return total
+}
+
+// resticOpener serves a compose project's repositories over transport, per scope.
+type resticOpener struct {
+	engine        *dockerclient.Engine
+	transport     string
+	hostNetwork   bool
+	containerHost string
+}
+
+func newResticOpener(t *testing.T, engine *dockerclient.Engine, transport string) resticOpener {
+	t.Helper()
+	hostNetwork, containerHost := cdcTransport(t, engine)
+	return resticOpener{
+		engine:        engine,
+		transport:     transport,
+		hostNetwork:   hostNetwork,
+		containerHost: containerHost,
+	}
+}
+
+func (o resticOpener) Open(ctx context.Context, store storages.Navigator) (resticrepo.Inspector, error) {
+	_, opened, err := o.serve(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	return resticInspector{
+		Inspector: cdc.NewInspector(o.engine, opened.transport, o.options()),
+		stop:      opened.stop,
+	}, nil
+}
+
+// serve serves store's repositories over the opener's transport.
+func (o resticOpener) serve(ctx context.Context, store storages.Navigator) (storages.Storager, testTransport, error) {
+	root, err := store.SubStorage(cdc.NamespaceRepos, true)
+	if err != nil {
+		return nil, testTransport{}, err
+	}
+	opened, err := openTestTransport(ctx, o.transport, root, o.hostNetwork, o.containerHost)
+	if err != nil {
+		return nil, testTransport{}, err
+	}
+	return root, opened, nil
+}
+
+func (o resticOpener) options() cdc.Options {
+	return cdc.Options{Image: composeconfig.DefaultResticImage}
+}
+
+// resticInspector is a cdc.Inspector with the stop of the transport it reads through.
+type resticInspector struct {
+	*cdc.Inspector
+	stop func() error
+}
+
+func (i resticInspector) Close(context.Context) { _ = i.stop() }
+
+// resticPrunerOpener serves a compose project's repositories over its transport, per erase.
+type resticPrunerOpener struct{ resticOpener }
+
+func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (eraser.Pruner, error) {
+	root, opened, err := o.serve(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	return resticPruner{
+		Pruner: cdc.NewPruner(o.engine, root, opened.transport, o.options()),
+		stop:   opened.stop,
+	}, nil
+}
+
+// resticPruner is a cdc.Pruner with the stop of the transport it prunes through.
+type resticPruner struct {
+	*cdc.Pruner
+	stop func() error
+}
+
+func (p resticPruner) Close(context.Context) { _ = p.stop() }
+
+// plantHeartbeat writes a capture's heartbeat at the root of the tree at dir.
+func plantHeartbeat(t *testing.T, dir string, status heartbeat.Status) {
+	t.Helper()
+	body, err := json.Marshal(heartbeat.Heartbeat{
+		Operation: model.HeartbeatOperationSavepoint, Status: status,
+		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+	plant(t, filepath.Join(dir, heartbeat.FileName), string(body))
+}
+
+// engine is the daemon as the restored-layer collector reads it.
+func (e *imageRollbackEnv) engine() *dockerclient.Engine {
+	return dockerclient.NewEngine(e.daemon)
+}
+
+func plant(t *testing.T, name, body string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o755))
+	require.NoError(t, os.WriteFile(name, []byte(body), 0o644))
+}
+
+func opsByKind(result model.GarbageCollectResult) map[model.GarbageDataKind][]model.GarbageOp {
+	ops := map[model.GarbageDataKind][]model.GarbageOp{}
+	for _, report := range result.Reports {
+		if report.Detail == nil {
+			continue
+		}
+		switch stat := report.Detail.(type) {
+		case model.SavepointDirectoryStat:
+			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
+		case model.SafetySnapshotStat:
+			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
+		case model.OCIImageStat:
+			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
+		case model.OCIBlobStat:
+			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
+		case model.ResticRepositoryStat:
+			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
+		case model.DockerLayerTagStat:
+			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
+		}
+	}
+	return ops
+}
+
+func targetsOf(ops []model.GarbageOp) []string {
+	targets := make([]string, 0, len(ops))
+	for _, op := range ops {
+		targets = append(targets, op.Target)
+	}
+	return targets
+}

@@ -1,0 +1,69 @@
+// Copyright 2026 Greenmask Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package projectinit writes an arcave project's config, the one workflow of `arcave init`.
+package projectinit
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/greenmaskio/arcave/internal/config"
+)
+
+// configWriter persists the arcave project's config. Only Init uses it: every other
+// command takes a resolved config.Config by value.
+type configWriter interface {
+	Exists() (bool, error)
+	Save(config.Config) error
+	Path() string
+}
+
+// Service creates an arcave project's metadata. It writes one file and holds
+// nothing else: no storage, no snapshot backend, no daemon and no compose project.
+type Service struct {
+	projectRoot  string
+	configWriter configWriter
+}
+
+// New wires a Service for the arcave project rooted at projectRoot.
+func New(projectRoot string, writer configWriter) *Service {
+	return &Service{
+		projectRoot:  projectRoot,
+		configWriter: writer,
+	}
+}
+
+// Init fills cfg's defaults, validates it and writes it to .arcave/config.yaml,
+// returning the resolved project name and the file's path. An initialised project
+// is an error unless override.
+func (s *Service) Init(_ context.Context, cfg config.Config, override bool) (resolvedName, path string, err error) {
+	exists, err := s.configWriter.Exists()
+	if err != nil {
+		return "", "", fmt.Errorf("check existing config: %w", err)
+	}
+	if exists && !override {
+		return "", "", fmt.Errorf("project already initialized: %s exists (use --override to overwrite)", s.configWriter.Path())
+	}
+
+	cfg.ApplyDefaults(s.projectRoot)
+	if err := cfg.Validate(); err != nil {
+		return "", "", err
+	}
+
+	if err := s.configWriter.Save(cfg); err != nil {
+		return "", "", fmt.Errorf("saving config.yaml file: %w", err)
+	}
+	return cfg.Project.Name, s.configWriter.Path(), nil
+}

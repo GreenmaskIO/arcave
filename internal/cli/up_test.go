@@ -21,11 +21,10 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// The ref reads as a rollback's, and none is the newest savepoint; the wait bound is the config's.
+// The ref reads as a rollback's, and none is the newest savepoint; the CLI leaves the wait bound to the provider.
 func TestUpHandler_Up(t *testing.T) {
 	id := model.SavepointID("019e843e-1650-7000-8000-000000000000")
 	tests := []struct {
@@ -34,9 +33,9 @@ func TestUpHandler_Up(t *testing.T) {
 		force   bool
 		wantReq model.UpRequest
 	}{
-		{name: "no ref is latest", wantReq: model.UpRequest{Latest: ptr(true), WaitTimeout: waitTimeout}},
-		{name: "a name", ref: "base", wantReq: model.UpRequest{Name: ptr("base"), WaitTimeout: waitTimeout}},
-		{name: "an id, forced", ref: id.String(), force: true, wantReq: model.UpRequest{ID: ptr(id), WaitTimeout: waitTimeout, Force: true}},
+		{name: "no ref is latest", wantReq: model.UpRequest{Latest: ptr(true)}},
+		{name: "a name", ref: "base", wantReq: model.UpRequest{Name: ptr("base")}},
+		{name: "an id, forced", ref: id.String(), force: true, wantReq: model.UpRequest{ID: ptr(id), Force: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -46,10 +45,9 @@ func TestUpHandler_Up(t *testing.T) {
 			svc.On("Up", mock.Anything, tt.wantReq).Return(res, nil).Once()
 			output := &capturePrinter{}
 			output.On("Print", res).Return(nil).Once()
-			cfg := config.Config{Compose: config.Compose{WaitTimeout: waitTimeout}}
 
 			// Act
-			err := NewUpHandler(svc, output).Up(context.Background(), cfg, tt.ref, tt.force)
+			err := NewUpHandler(svc, output).Up(context.Background(), tt.ref, tt.force)
 
 			// Assert
 			require.NoError(t, err)

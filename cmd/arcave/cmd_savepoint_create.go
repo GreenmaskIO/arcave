@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 var (
@@ -47,15 +48,15 @@ func runSavepointCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	ctx := cmd.Context()
-	var opened closers
-	defer opened.release(ctx)
+	var opened utils.Closers
+	defer opened.Release(ctx)
 
 	svc, err := openSavepointService(ctx, projectRoot, projectCfg, sessionRef, composeProject, &opened)
 	if err != nil {
 		return err
 	}
 	h := cli.NewSavepointCreateHandler(svc, loadRunOutput())
-	return h.SavepointCreate(ctx, projectCfg, name, savepointCreateDescription)
+	return h.SavepointCreate(ctx, name, savepointCreateDescription)
 }
 
 // savepointCreateResolveName reconciles the optional positional name with

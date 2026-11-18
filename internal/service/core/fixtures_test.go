@@ -15,15 +15,20 @@
 package core
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/greenmaskio/storages"
+	"github.com/greenmaskio/storages/directory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 )
 
 // The project every workflow test runs against: one service mounting one named
@@ -82,6 +87,26 @@ func demoSafetySnapshot() model.Savepoint {
 		Stats:                 []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}},
 		Spec:                  demoSpecRef(),
 	}
+}
+
+// newDirStore is a real directory store on a tempdir: the compose project's store a savepoint's
+// heartbeat is written into.
+func newDirStore(t *testing.T) storages.Storager {
+	t.Helper()
+	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, store.Close()) })
+	return store
+}
+
+// readSavepointHeartbeat reads the heartbeat at the root of savepoint id's tree.
+func readSavepointHeartbeat(t *testing.T, store storages.Storager, id model.SavepointID) heartbeat.Heartbeat {
+	t.Helper()
+	tree, err := store.SubStorage(id.String(), true)
+	require.NoError(t, err)
+	beat, err := heartbeat.NewReader(tree).Read(context.Background())
+	require.NoError(t, err)
+	return beat
 }
 
 // expectLock declares a free lock and the release that always follows it —

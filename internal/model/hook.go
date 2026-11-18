@@ -14,8 +14,6 @@
 
 package model
 
-import "time"
-
 // HookPhase names a hook by when it runs, as its labels and its messages spell it.
 type HookPhase string
 
@@ -44,14 +42,4 @@ func ParseHookOnError(token string) (HookOnError, bool) {
 	default:
 		return "", false
 	}
-}
-
-// Hook is one command run in each replica of a service, its defaults applied.
-type Hook struct {
-	// Command is the argv, run with no shell.
-	Command []string
-	// User runs it; empty is the container's user.
-	User    string
-	Timeout time.Duration
-	OnError HookOnError
 }

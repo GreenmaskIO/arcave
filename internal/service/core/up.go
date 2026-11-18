@@ -23,6 +23,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -77,7 +78,7 @@ func (s *Service) up(ctx context.Context, session model.SessionRef, req model.Up
 	// up is for.
 	surveyed, err := s.workload.Survey(ctx)
 	if err != nil {
-		logInterrupt(ctx, "up interrupted before anything was created: nothing changed")
+		workflow.LogInterrupt(ctx, "up interrupted before anything was created: nothing changed")
 		return model.UpResult{}, preferInterrupt(ctx, err)
 	}
 	// Every volume of the compose project counts, not only those the savepoint restores: compose
@@ -134,7 +135,7 @@ func (s *Service) upOver(
 	// An interrupt that landed during the prepare stops here, ahead of the drop: what the daemon
 	// holds is untouched, and a marker would refuse the next workflow over it.
 	if err := context.Cause(ctx); err != nil {
-		logInterrupt(ctx, "up interrupted before anything was created: nothing changed")
+		workflow.LogInterrupt(ctx, "up interrupted before anything was created: nothing changed")
 		return model.RollbackResult{}, fmt.Errorf("up interrupted, nothing changed: %w", err)
 	}
 
@@ -157,7 +158,7 @@ func (s *Service) upOver(
 		return s.buildFromSavepoint(ctx, vacant, prepared, savepoint.ID, "", req.WaitTimeout)
 	})
 	if err != nil {
-		logInterrupt(ctx, "up interrupted: removing what it created")
+		workflow.LogInterrupt(ctx, "up interrupted: removing what it created")
 		s.abortColdStart(ctx, vacant)
 		return model.RollbackResult{}, fmt.Errorf("up failed: %w", preferInterrupt(ctx, err))
 	}

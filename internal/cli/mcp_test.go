@@ -777,11 +777,6 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 			setup: func(svc *mockService) {
 				svc.On("UnsetSession", mock.Anything).Return(model.DefaultSessionRecord, nil).Once()
 			}, want: model.DefaultSessionRecord},
-		{tool: "compose_generate", args: map[string]any{"compose_project": "demo", "absolute_paths": true},
-			setup: func(svc *mockService) {
-				svc.On("GenerateCompose", mock.Anything, model.GenerateComposeRequest{AbsolutePaths: true}).
-					Return(model.GenerateComposeResponse{ComposeProject: "demo", Services: []string{"db"}, Spec: []byte("name: demo\n")}, nil).Once()
-			}, want: composeGenerateOutput{ComposeProject: "demo", Services: []string{"db"}, Spec: "name: demo\n"}, wantComposeProject: "demo"},
 		{tool: "gc", args: map[string]any{"kinds": []string{"upstream-images"}},
 			setup: func(svc *mockService) {
 				svc.On("GarbageCollect", mock.Anything, model.GarbageCollectRequest{
@@ -815,10 +810,6 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 			return svc, func() {}, nil
 		},
 		Session: func(context.Context) (MCPSessionService, func(), error) {
-			return svc, func() {}, nil
-		},
-		Tools: func(_ context.Context, composeProject string) (MCPToolsService, func(), error) {
-			gotComposeProject = composeProject
 			return svc, func() {}, nil
 		},
 		GC: func(context.Context, string) (MCPGCService, func(), error) {

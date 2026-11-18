@@ -23,14 +23,9 @@ import (
 	"github.com/greenmaskio/storages"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/service/sessionref"
-	"github.com/greenmaskio/arcave/internal/storefactory"
 )
-
-// composeContainersReader reads a compose project's containers alone.
-type composeContainersReader interface {
-	ReadContainers(ctx context.Context) (model.ComposeProjectContainers, error)
-}
 
 // inflightMarkerReader reads the interrupted-rollback marker.
 type inflightMarkerReader interface {
@@ -47,25 +42,19 @@ type currentSessionReader interface {
 	Get(ctx context.Context) (id model.SessionID, found bool, err error)
 }
 
-// SavepointLoader reads the records of a compose project's savepoints by id; the DI root opens one
-// per store.
-type SavepointLoader interface {
-	LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error)
-}
-
 // Deps are Service's collaborators.
 type Deps struct {
-	ComposeContainers composeContainersReader
-	Inflight          inflightMarkerReader
+	Observer provider.Observer
+	Inflight inflightMarkerReader
 	// Current is the current-session pointer.
 	Current currentSessionReader
 	// OpenArcaveProjectStore opens the arcave project's store when a status needs it: one that does
 	// not open makes the status partial, not a failure.
 	OpenArcaveProjectStore func(ctx context.Context) (storages.Storager, error)
-	// NewSessionReader builds a SessionReader over an arcave project's store, NewSavepointLoader a
-	// SavepointLoader over a compose project's.
+	// NewSessionReader builds a SessionReader over an arcave project's store, NewProviderSession
+	// the provider's session id in it.
 	NewSessionReader   func(store storages.Storager) SessionReader
-	NewSavepointLoader func(store storages.Storager) SavepointLoader
+	NewProviderSession func(store storages.Navigator, id model.SessionID) provider.Session
 	// ArcaveProject is the one the config names; ComposeProject the one -p names.
 	ArcaveProject  model.ArcaveProjectName
 	ComposeProject model.DockerComposeProjectName
@@ -74,12 +63,12 @@ type Deps struct {
 // Service reports what the daemon runs for one compose project. It takes no lock, writes
 // nothing, and reads the store only to add to what the daemon's labels say.
 type Service struct {
-	composeContainers      composeContainersReader
+	observer               provider.Observer
 	inflight               inflightMarkerReader
 	current                currentSessionReader
 	openArcaveProjectStore func(ctx context.Context) (storages.Storager, error)
 	newSessionReader       func(store storages.Storager) SessionReader
-	newSavepointLoader     func(store storages.Storager) SavepointLoader
+	newProviderSession     func(store storages.Navigator, id model.SessionID) provider.Session
 	arcaveProject          model.ArcaveProjectName
 	composeProject         model.DockerComposeProjectName
 }
@@ -87,12 +76,12 @@ type Service struct {
 // New builds a Service from deps.
 func New(deps Deps) *Service {
 	return &Service{
-		composeContainers:      deps.ComposeContainers,
+		observer:               deps.Observer,
 		inflight:               deps.Inflight,
 		current:                deps.Current,
 		openArcaveProjectStore: deps.OpenArcaveProjectStore,
 		newSessionReader:       deps.NewSessionReader,
-		newSavepointLoader:     deps.NewSavepointLoader,
+		newProviderSession:     deps.NewProviderSession,
 		arcaveProject:          deps.ArcaveProject,
 		composeProject:         deps.ComposeProject,
 	}
@@ -115,7 +104,7 @@ type storeView struct {
 func (s *Service) Status(ctx context.Context, req model.StatusRequest) (model.ComposeProjectStatus, error) {
 	var (
 		checkedAt        = time.Now().UTC()
-		containers       model.ComposeProjectContainers
+		containers       provider.ObservedWorkload
 		deployments      containerDeployments
 		services         []model.ServiceStatus
 		marker           *model.InflightMarker
@@ -125,7 +114,7 @@ func (s *Service) Status(ctx context.Context, req model.StatusRequest) (model.Co
 		state            model.ComposeProjectState
 		err              error
 	)
-	if containers, err = s.composeContainers.ReadContainers(ctx); err != nil {
+	if containers, err = s.observer.Observe(ctx); err != nil {
 		return model.ComposeProjectStatus{}, err
 	}
 	deployments = findDeployments(containers)
@@ -231,23 +220,20 @@ func (s *Service) readDeployedSavepoint(
 	if !s.readsRecordOf(deployment) {
 		return nil, nil
 	}
-	sessionStore, err := storefactory.Session(store, deployment.Session.ID)
+	savepoints, err := s.newProviderSession(store, deployment.Session.ID).
+		Savepoints(provider.WorkloadName(s.composeProject))
 	if err != nil {
 		return nil, fmt.Errorf("open session %s: %w", deployment.Session.ID, err)
 	}
-	composeProjectStore, err := storefactory.ComposeProject(sessionStore, s.composeProject)
-	if err != nil {
-		return nil, fmt.Errorf("open compose project %s: %w", s.composeProject, err)
-	}
 	id := deployment.Savepoint.ID
-	savepoints, err := s.newSavepointLoader(composeProjectStore).LoadSavepoints(ctx, []model.SavepointID{id})
+	savepoint, found, err := savepoints.Load(ctx, id)
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("read savepoint %s of compose project %s: %w", id, s.composeProject, err)
-	case len(savepoints) == 0:
+	case !found:
 		return nil, nil
 	default:
-		return &savepoints[0], nil
+		return &savepoint, nil
 	}
 }
 

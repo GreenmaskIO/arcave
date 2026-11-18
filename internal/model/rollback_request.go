@@ -31,7 +31,7 @@ type RollbackRequest struct {
 	Name   *string      // savepoint name; ambiguous names are an error, never a guess
 	Latest *bool        // when true, the newest savepoint by CreatedAt
 
-	WaitTimeout time.Duration // bounds the health check on restart; <= 0 lets the compose runner apply its default
+	WaitTimeout time.Duration // bounds the health check on restart; <= 0 is the provider's default
 
 	// SkipSafetySnapshot rolls a running compose project back capturing nothing of it, neither
 	// volumes nor writable layers: nothing undoes it, and after a failure the way back is the same

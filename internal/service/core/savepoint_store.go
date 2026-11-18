@@ -29,6 +29,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -135,9 +136,9 @@ func locked[T any](
 	ctx context.Context, s *SavepointStoreService, operation model.SessionLockOperation,
 	fn func(ctx context.Context, grantedLock model.GrantedSessionLock, session model.SessionRef) (T, error),
 ) (T, error) {
-	return withWriteUnlock(ctx, s.projectLocker, s.writeAdmission, func() (T, error) {
-		return withSessionLock(ctx, s.sessionLocker, operation, func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error) {
-			session, err := readSessionRef(ctx, s.sessions, s.session)
+	return workflow.WithWriteUnlock(ctx, s.projectLocker, s.writeAdmission, func() (T, error) {
+		return workflow.WithSessionLock(ctx, s.sessionLocker, operation, func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error) {
+			session, err := workflow.ReadSessionRef(ctx, s.sessions, s.session)
 			if err != nil {
 				var zero T
 				return zero, err
@@ -204,7 +205,7 @@ func (s *SavepointStoreService) removeSavepoints(
 	}
 	if len(removed) > 0 {
 		if err := s.applyRemoval(ctx, grantedLock, removed); err != nil {
-			logInterrupt(ctx, "removal interrupted: the savepoints not yet removed are kept, "+
+			workflow.LogInterrupt(ctx, "removal interrupted: the savepoints not yet removed are kept, "+
 				"a partly removed one is left as an orphan directory")
 			return model.RemoveResult{}, err
 		}
@@ -441,7 +442,7 @@ func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring
 		Str("compose_project", marker.ComposeProject.String()).
 		Str("safety_snapshot_id", marker.Safety.String()).
 		Str("phase", string(marker.Phase)).
-		Msg(recoveryHint(marker))
+		Msg(workflow.RecoveryHint(marker))
 	return rollbackRecovery{}, err
 }
 

@@ -28,6 +28,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
@@ -51,7 +52,7 @@ func TestResolveConfig(t *testing.T) {
 				assert.Equal(t, config.StorageTypeDirectory, cfg.Storage.Type)
 				// No project segment: storefactory roots the store at the project itself.
 				assert.Equal(t, filepath.Join(".arcave", "storage"), cfg.Storage.DirectoryPath())
-				assert.Equal(t, config.SnapshotBackendFullCopy, cfg.Snapshot.Backend)
+				assert.Equal(t, composeconfig.SnapshotBackendFullCopy, cfg.ComposeProvider.Snapshot.Backend)
 				assert.Empty(t, cfg.Log.Level, "the output picks the level when none is set")
 				assert.Equal(t, utils.DefaultLogFormat, cfg.Log.Format)
 			},
@@ -79,7 +80,7 @@ func TestResolveConfig(t *testing.T) {
 			env:       map[string]string{"ARCAVE_CAPTURE_HOOKS_TIMEOUT": "2m", "ARCAVE_CAPTURE_HOOKS_ON_ERROR": "continue"},
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
-				assert.Equal(t, config.CaptureHooks{Timeout: 2 * time.Minute, OnError: "continue"}, cfg.Capture.Hooks)
+				assert.Equal(t, composeconfig.CaptureHooks{Timeout: 2 * time.Minute, OnError: "continue"}, cfg.ComposeProvider.Capture.Hooks)
 			},
 		},
 		{
@@ -92,10 +93,10 @@ func TestResolveConfig(t *testing.T) {
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
 				assert.Equal(t, "proj", cfg.Project.Name)
-				assert.Equal(t, "unix:///tmp/d.sock", cfg.Docker.Host)
+				assert.Equal(t, "unix:///tmp/d.sock", cfg.ComposeProvider.Docker.Host)
 				assert.Equal(t, config.StorageTypeDirectory, cfg.Storage.Type)
 				assert.Equal(t, "/snaps", cfg.Storage.DirectoryPath())
-				assert.Equal(t, config.SnapshotBackendFullCopy, cfg.Snapshot.Backend)
+				assert.Equal(t, composeconfig.SnapshotBackendFullCopy, cfg.ComposeProvider.Snapshot.Backend)
 				assert.Equal(t, "warn", cfg.Log.Level)
 				assert.Equal(t, "json", cfg.Log.Format)
 			},
@@ -146,9 +147,9 @@ func TestResolveConfig(t *testing.T) {
 			file:      "compose:\n  wait_timeout: 5m\n  stop_timeout: 45s\n  progress: tty\n",
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
-				assert.Equal(t, 5*time.Minute, cfg.Compose.WaitTimeout)
-				assert.Equal(t, 45*time.Second, cfg.Compose.StopTimeout)
-				assert.Equal(t, config.ProgressTTY, cfg.Compose.Progress)
+				assert.Equal(t, 5*time.Minute, cfg.ComposeProvider.Compose.WaitTimeout)
+				assert.Equal(t, 45*time.Second, cfg.ComposeProvider.Compose.StopTimeout)
+				assert.Equal(t, composeconfig.ProgressTTY, cfg.ComposeProvider.Compose.Progress)
 			},
 		},
 		{
@@ -157,7 +158,7 @@ func TestResolveConfig(t *testing.T) {
 			flags:     map[string]string{"wait-timeout": "30s"},
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
-				assert.Equal(t, 30*time.Second, cfg.Compose.WaitTimeout)
+				assert.Equal(t, 30*time.Second, cfg.ComposeProvider.Compose.WaitTimeout)
 			},
 		},
 		{
@@ -167,7 +168,7 @@ func TestResolveConfig(t *testing.T) {
 			file:      "compose:\n  progress: quiet\n",
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
-				assert.Equal(t, config.ProgressQuiet, cfg.Compose.Progress)
+				assert.Equal(t, composeconfig.ProgressQuiet, cfg.ComposeProvider.Compose.Progress)
 			},
 		},
 		{
@@ -176,15 +177,15 @@ func TestResolveConfig(t *testing.T) {
 			env:       map[string]string{"ARCAVE_COMPOSE_WAIT_TIMEOUT": "90s"},
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
-				assert.Equal(t, 90*time.Second, cfg.Compose.WaitTimeout)
+				assert.Equal(t, 90*time.Second, cfg.ComposeProvider.Compose.WaitTimeout)
 			},
 		},
 		{
 			name: "a key the file does not carry is read from the environment",
-			env:  map[string]string{"ARCAVE_BACKENDS_CDC_RESTORE_MODE": config.RestoreModeWipe},
+			env:  map[string]string{"ARCAVE_BACKENDS_CDC_RESTORE_MODE": composeconfig.RestoreModeWipe},
 			verify: func(t *testing.T, _ string, cfg config.Config) {
-				require.NotNil(t, cfg.Backends.CDC)
-				assert.Equal(t, config.RestoreModeWipe, cfg.Backends.CDC.RestoreMode)
+				require.NotNil(t, cfg.ComposeProvider.Backends.CDC)
+				assert.Equal(t, composeconfig.RestoreModeWipe, cfg.ComposeProvider.Backends.CDC.RestoreMode)
 			},
 		},
 		{
@@ -362,9 +363,9 @@ func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	fs.String("log-level", "", "")
 	fs.String("log-format", utils.DefaultLogFormat, "")
-	fs.Duration("wait-timeout", config.DefaultWaitTimeout, "")
-	fs.Duration("stop-timeout", config.DefaultStopTimeout, "")
-	fs.String("compose-progress", config.ProgressLog, "")
+	fs.Duration("wait-timeout", composeconfig.DefaultWaitTimeout, "")
+	fs.Duration("stop-timeout", composeconfig.DefaultStopTimeout, "")
+	fs.String("compose-progress", composeconfig.ProgressLog, "")
 	viperBind(v, fs, map[string]string{
 		"log-level":        "log.level",
 		"log-format":       "log.format",

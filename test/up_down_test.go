@@ -17,29 +17,28 @@ package test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"testing"
-	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/compose/v5/pkg/api"
 	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/composespec"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
+
+// absent is what readOrAbsent reads of a file that is not there.
+const absent = "<absent>"
 
 // upDownSpec mounts every kind of volume an up or a down meets: a named one the compose project
 // owns, an anonymous one, an external one and a bind.
@@ -68,7 +67,7 @@ func TestUpDown_TheEnvironmentCycle(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
-	env := newImageRollbackEnv(t)
+	env := newComposeProject(t, "updown")
 	shared := env.project + "-shared"
 	data := env.project + "_data"
 	extra := env.project + "_extra"
@@ -83,7 +82,7 @@ func TestUpDown_TheEnvironmentCycle(t *testing.T) {
 	writeStorageConfig(t, projectRoot, config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: t.TempDir()},
-	}, config.SnapshotBackendFullCopy)
+	}, composeconfig.SnapshotBackendFullCopy)
 	run := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, projectRoot, nil, append([]string{"-p", env.project}, args...)...)
@@ -96,16 +95,14 @@ func TestUpDown_TheEnvironmentCycle(t *testing.T) {
 
 	// Act, Assert: what compose's own down leaves refuses an up; --force drops it, the volume the
 	// savepoint does not hold too.
-	parsed, err := composespec.NewCodec().Parse(env.ctx, []byte(document))
-	require.NoError(t, err)
 	anonymous := env.anonymousVolumes(t)
-	require.NoError(t, env.compose.Down(env.ctx, parsed))
+	env.down(t)
 	// compose's own down orphans the anonymous volume, which carries no label of the project.
 	for _, name := range anonymous {
 		_, err := env.daemon.VolumeRemove(env.ctx, name, client.VolumeRemoveOptions{})
 		require.NoError(t, err)
 	}
-	_, err = env.daemon.VolumeCreate(env.ctx, client.VolumeCreateOptions{
+	_, err := env.daemon.VolumeCreate(env.ctx, client.VolumeCreateOptions{
 		Name: extra, Labels: map[string]string{api.ProjectLabel: env.project},
 	})
 	require.NoError(t, err)
@@ -113,7 +110,7 @@ func TestUpDown_TheEnvironmentCycle(t *testing.T) {
 	forced := decode[model.UpResult](t, run("up", "--force"))
 	require.NotNil(t, forced.Discarded)
 	assert.ElementsMatch(t, []string{data, extra}, forced.Discarded.Volumes)
-	assert.Equal(t, "base", env.read(t, env.replicas(t)[0], volumeMarker))
+	assert.Equal(t, "base", env.read(t, env.replicas(t)[0], daemontest.VolumeMarker))
 	_, err = env.daemon.VolumeInspect(env.ctx, extra, client.VolumeInspectOptions{})
 	assert.Error(t, err, "the volume the savepoint does not hold is gone")
 
@@ -130,7 +127,7 @@ func TestUpDown_TheEnvironmentCycle(t *testing.T) {
 	assert.Equal(t, model.DefaultSession, down.Deployment.Session.ID)
 	assert.False(t, down.Forced)
 	assert.NotEmpty(t, down.RemovedTags, "the restored layer's tag")
-	env.requireGone(t)
+	daemontest.RequireComposeProjectGone(t, env.daemon, env.project)
 	assert.Empty(t, env.layerTags(t))
 	_, err = env.daemon.VolumeInspect(env.ctx, shared, client.VolumeInspectOptions{})
 	assert.NoError(t, err, "the external volume stays")
@@ -138,78 +135,26 @@ func TestUpDown_TheEnvironmentCycle(t *testing.T) {
 
 	// Act, Assert: up brings the savepoint back.
 	run("up", "x")
-	assert.Equal(t, "x", env.read(t, env.replicas(t)[0], volumeMarker))
-	assert.Equal(t, "x", env.read(t, env.replicas(t)[0], layerMarker))
+	assert.Equal(t, "x", env.read(t, env.replicas(t)[0], daemontest.VolumeMarker))
+	assert.Equal(t, "x", env.read(t, env.replicas(t)[0], daemontest.LayerMarker))
 
 	// Act, Assert: another session's environment refuses the down; --force takes it.
 	runArcave(t, projectRoot, nil, "session", "create", "--name", "feat", "--from", model.DefaultSessionName)
 	run("--session", "feat", "rollback", "base")
 	assert.Contains(t, refuse("down"), "--session feat")
 	assert.True(t, decode[model.DownResult](t, run("down", "--force")).Forced)
-	env.requireGone(t)
+	daemontest.RequireComposeProjectGone(t, env.daemon, env.project)
 
 	// Act, Assert: compose's own environment refuses the down; --force takes it.
 	env.upDocument(t, document)
 	assert.Contains(t, refuse("down"), "no deployment labels on app-1")
 	run("down", "--force")
-	env.requireGone(t)
+	daemontest.RequireComposeProjectGone(t, env.daemon, env.project)
 
 	// Act, Assert: a second down finds nothing to do.
 	again := decode[model.DownResult](t, run("down"))
 	assert.Empty(t, again.Discarded.Containers)
 	assert.Empty(t, again.Discarded.Volumes)
-}
-
-// compose's down by name alone takes a project down in its dependency order, and one with no
-// container left still loses its volumes and networks.
-func TestUpDown_DownWithVolumesByName(t *testing.T) {
-	t.Parallel()
-
-	// Arrange: web waits on db, so a down that ignored the order would fail on the network.
-	env := newImageRollbackEnv(t)
-	document := fmt.Sprintf(`
-name: %s
-services:
-  db:
-    image: busybox
-    command: ["sleep", "3600"]
-    stop_signal: SIGKILL
-    volumes: ["data:/data"]
-  web:
-    image: busybox
-    command: ["sleep", "3600"]
-    stop_signal: SIGKILL
-    depends_on: [db]
-volumes:
-  data: {}
-`, env.project)
-	env.upDocument(t, document)
-	since := time.Now()
-
-	// Act
-	err := env.compose.DownWithVolumes(env.ctx, env.project)
-
-	// Assert
-	require.NoError(t, err)
-	env.requireGone(t)
-	assert.Equal(t, []string{"web", "db"}, env.destroyedServices(t, since), "in reverse dependency order")
-
-	// Arrange: the containers gone, the volume and the network left.
-	env.upDocument(t, document)
-	byProject := make(client.Filters).Add("label", api.ProjectLabel+"="+env.project)
-	containers, err := env.daemon.ContainerList(env.ctx, client.ContainerListOptions{All: true, Filters: byProject})
-	require.NoError(t, err)
-	for _, c := range containers.Items {
-		_, err := env.daemon.ContainerRemove(env.ctx, c.ID, client.ContainerRemoveOptions{Force: true})
-		require.NoError(t, err)
-	}
-
-	// Act
-	err = env.compose.DownWithVolumes(env.ctx, env.project)
-
-	// Assert
-	require.NoError(t, err)
-	env.requireGone(t)
 }
 
 // A volume of the compose project something outside it holds survives compose's down, which only
@@ -219,7 +164,7 @@ func TestUpDown_ABusyVolumeIsNeverReused(t *testing.T) {
 	t.Parallel()
 
 	// Arrange: data is left out of the savepoint, so only a fresh volume can come back empty.
-	env := newImageRollbackEnv(t)
+	env := newComposeProject(t, "updown")
 	env.upDocument(t, fmt.Sprintf(`
 name: %s
 services:
@@ -241,7 +186,7 @@ volumes:
 	writeStorageConfig(t, projectRoot, config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: t.TempDir()},
-	}, config.SnapshotBackendFullCopy)
+	}, composeconfig.SnapshotBackendFullCopy)
 	run := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, projectRoot, nil, append([]string{"-p", env.project}, args...)...)
@@ -256,23 +201,22 @@ volumes:
 
 	// Act, Assert: the forced up refuses before it builds anything.
 	assert.Contains(t, refuse("up", "--force", "base"), data)
-	resources, err := env.inspector.ReadResources(env.ctx)
-	require.NoError(t, err)
+	resources := daemontest.ReadComposeProjectResources(t, env.daemon, env.project)
 	assert.Empty(t, resources.Containers, "nothing was built over the busy volume")
 	assert.Equal(t, []string{data}, resources.Volumes)
 
 	// Act, Assert: once it is free, the forced up comes up on an empty one.
 	release()
 	run("up", "--force", "base")
-	assert.Equal(t, absent, env.readOrAbsent(t, env.replicas(t)[0], volumeMarker), "the old data is gone")
-	assert.Equal(t, "base", env.read(t, env.replicas(t)[0], layerMarker))
+	assert.Equal(t, absent, env.readOrAbsent(t, env.replicas(t)[0], daemontest.VolumeMarker), "the old data is gone")
+	assert.Equal(t, "base", env.read(t, env.replicas(t)[0], daemontest.LayerMarker))
 
 	// Act, Assert: the down refuses to call a busy volume gone.
 	release = env.holdVolume(t, data)
 	assert.Contains(t, refuse("down"), "the daemon still holds the compose project after its drop")
 	release()
 	run("down", "--force")
-	env.requireGone(t)
+	daemontest.RequireComposeProjectGone(t, env.daemon, env.project)
 }
 
 // compose's down keys the volumes it removes by their logical name, so of two that share one, or
@@ -292,7 +236,7 @@ func TestUpDown_VolumesSharingALogicalName(t *testing.T) {
 			t.Parallel()
 
 			// Arrange
-			env := newImageRollbackEnv(t)
+			env := newComposeProject(t, "updown")
 			for _, suffix := range []string{"_extra_a", "_extra_b"} {
 				labels := map[string]string{api.ProjectLabel: env.project}
 				maps.Copy(labels, tt.labels)
@@ -304,13 +248,13 @@ func TestUpDown_VolumesSharingALogicalName(t *testing.T) {
 			writeStorageConfig(t, projectRoot, config.Storage{
 				Type:      config.StorageTypeDirectory,
 				Directory: &config.DirectoryStorage{Path: t.TempDir()},
-			}, config.SnapshotBackendFullCopy)
+			}, composeconfig.SnapshotBackendFullCopy)
 
 			// Act
 			runArcave(t, projectRoot, nil, "-p", env.project, "down", "--force")
 
 			// Assert
-			env.requireGone(t)
+			daemontest.RequireComposeProjectGone(t, env.daemon, env.project)
 		})
 	}
 }
@@ -340,14 +284,14 @@ func TestUpDown_ContainersBesideTheReplicas(t *testing.T) {
 			t.Parallel()
 
 			// Arrange
-			env := newImageRollbackEnv(t)
+			env := newComposeProject(t, "updown")
 			networkMode := container.NetworkMode("none")
 			if tt.network {
 				networkMode = container.NetworkMode(env.createProjectNetwork(t))
 			}
 			labels := map[string]string{api.ProjectLabel: env.project, api.ServiceLabel: "app", api.ConfigHashLabel: "x"}
 			maps.Copy(labels, tt.labels)
-			containerConfig := &container.Config{Image: busyboxImage, Cmd: []string{"sleep", "3600"}, Labels: labels}
+			containerConfig := &container.Config{Image: daemontest.BusyboxImage, Cmd: []string{"sleep", "3600"}, Labels: labels}
 			if tt.cache {
 				containerConfig.Volumes = map[string]struct{}{"/cache": {}}
 			}
@@ -377,7 +321,7 @@ func TestUpDown_ContainersBesideTheReplicas(t *testing.T) {
 			// Assert
 			assert.Equal(t, []string{env.project + "-app-run"}, down.Discarded.Containers)
 			assert.Empty(t, down.Notices, "nothing was left to explain")
-			env.requireGone(t)
+			daemontest.RequireComposeProjectGone(t, env.daemon, env.project)
 			for _, name := range anonymous {
 				_, err := env.daemon.VolumeInspect(env.ctx, name, client.VolumeInspectOptions{})
 				assert.True(t, cerrdefs.IsNotFound(err), "the anonymous volume %s went with its container: %v", name, err)
@@ -392,11 +336,11 @@ func TestUpDown_ANetworkInUseOutsideStays(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
-	env := newImageRollbackEnv(t)
+	env := newComposeProject(t, "updown")
 	network := env.createProjectNetwork(t)
 	user, err := env.daemon.ContainerCreate(env.ctx, client.ContainerCreateOptions{
-		Name:       env.project + "-outside-" + randomSuffix(t),
-		Config:     &container.Config{Image: busyboxImage, Cmd: []string{"sleep", "3600"}},
+		Name:       env.project + "-outside-" + daemontest.RandomSuffix(t),
+		Config:     &container.Config{Image: daemontest.BusyboxImage, Cmd: []string{"sleep", "3600"}},
 		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(network)},
 	})
 	require.NoError(t, err)
@@ -407,6 +351,12 @@ func TestUpDown_ANetworkInUseOutsideStays(t *testing.T) {
 	_, err = env.daemon.ContainerStart(env.ctx, user.ID, client.ContainerStartOptions{})
 	require.NoError(t, err)
 	projectRoot := initDownProject(t)
+	podman, err := daemontest.IsPodman(env.ctx, env.daemon)
+	require.NoError(t, err)
+	reason := "active endpoints"
+	if podman {
+		reason = "network is being used"
+	}
 
 	// Act
 	down := decode[model.DownResult](t, runArcave(t, projectRoot, nil, "-p", env.project, "down", "--force"))
@@ -414,9 +364,8 @@ func TestUpDown_ANetworkInUseOutsideStays(t *testing.T) {
 	// Assert
 	require.Len(t, down.Notices, 1)
 	assert.Contains(t, down.Notices[0].Message, network)
-	assert.Contains(t, down.Notices[0].Message, "active endpoints", "the daemon's reason, not a guess")
-	resources, err := env.inspector.ReadResources(env.ctx)
-	require.NoError(t, err)
+	assert.Contains(t, down.Notices[0].Message, reason, "the daemon's reason, not a guess")
+	resources := daemontest.ReadComposeProjectResources(t, env.daemon, env.project)
 	assert.Equal(t, []string{network}, resources.Networks)
 }
 
@@ -430,7 +379,7 @@ func initDownProject(t *testing.T) string {
 	writeStorageConfig(t, projectRoot, config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: t.TempDir()},
-	}, config.SnapshotBackendFullCopy)
+	}, composeconfig.SnapshotBackendFullCopy)
 	return projectRoot
 }
 
@@ -446,25 +395,8 @@ func runArcaveRefused(t *testing.T, projectRoot string, args ...string) string {
 	return stderr.String()
 }
 
-// requireGone checks the daemon holds nothing of the compose project by its label: no container,
-// network or volume.
-func (e *imageRollbackEnv) requireGone(t *testing.T) {
-	t.Helper()
-
-	byProject := make(client.Filters).Add("label", api.ProjectLabel+"="+e.project)
-	containers, err := e.daemon.ContainerList(e.ctx, client.ContainerListOptions{All: true, Filters: byProject})
-	require.NoError(t, err)
-	assert.Empty(t, containers.Items, "containers")
-	networks, err := e.daemon.NetworkList(e.ctx, client.NetworkListOptions{Filters: byProject})
-	require.NoError(t, err)
-	assert.Empty(t, networks.Items, "networks")
-	volumes, err := e.daemon.VolumeList(e.ctx, client.VolumeListOptions{Filters: byProject})
-	require.NoError(t, err)
-	assert.Empty(t, volumes.Items, "volumes")
-}
-
 // layerTags are the restored layer tags of the compose project the daemon holds.
-func (e *imageRollbackEnv) layerTags(t *testing.T) []string {
+func (e *composeProject) layerTags(t *testing.T) []string {
 	t.Helper()
 
 	images, err := e.daemon.ImageList(e.ctx, client.ImageListOptions{
@@ -478,32 +410,37 @@ func (e *imageRollbackEnv) layerTags(t *testing.T) []string {
 	return tags
 }
 
-// anonymousVolumes are the docker names of the compose project's anonymous volumes, read off its
-// containers' mounts: no label of the project marks them.
-func (e *imageRollbackEnv) anonymousVolumes(t *testing.T) []string {
+// anonymousVolumes are the docker names of the volumes the compose project's containers mount at
+// /cache, upDownSpec's anonymous one: no label of the project marks them.
+func (e *composeProject) anonymousVolumes(t *testing.T) []string {
 	t.Helper()
 
-	introspection, err := e.inspector.Introspect(e.ctx)
-	require.NoError(t, err)
 	var names []string
-	for _, service := range introspection.Project.Services {
-		for _, mount := range service.Volumes {
-			if mount.Type == model.VolumeTypeAnon && mount.VolumeName != "" {
-				names = append(names, mount.VolumeName)
+	for _, inspected := range e.containers(t) {
+		for _, mount := range inspected.Mounts {
+			if mount.Destination == "/cache" && mount.Name != "" {
+				names = append(names, mount.Name)
 			}
 		}
 	}
 	return names
 }
 
+// readOrAbsent reads path in the container, absent when it holds none.
+func (e *composeProject) readOrAbsent(t *testing.T, containerID, path string) string {
+	t.Helper()
+
+	return e.exec(t, containerID, "sh", "-c", fmt.Sprintf("cat %s 2>/dev/null || printf %%s '%s'", path, absent))
+}
+
 // holdVolume mounts volume into a stopped container outside the compose project, so the daemon
 // refuses to remove it; the returned func removes that container, at most once.
-func (e *imageRollbackEnv) holdVolume(t *testing.T, volume string) func() {
+func (e *composeProject) holdVolume(t *testing.T, volume string) func() {
 	t.Helper()
 
 	created, err := e.daemon.ContainerCreate(e.ctx, client.ContainerCreateOptions{
-		Name:       e.project + "-holder-" + randomSuffix(t),
-		Config:     &container.Config{Image: busyboxImage, Cmd: []string{"true"}},
+		Name:       e.project + "-holder-" + daemontest.RandomSuffix(t),
+		Config:     &container.Config{Image: daemontest.BusyboxImage, Cmd: []string{"true"}},
 		HostConfig: &container.HostConfig{NetworkMode: "none", Binds: []string{volume + ":/data"}},
 	})
 	require.NoError(t, err)
@@ -518,40 +455,9 @@ func (e *imageRollbackEnv) holdVolume(t *testing.T, volume string) func() {
 	return release
 }
 
-// destroyedServices are the services of the compose project whose containers the daemon destroyed
-// since then, in the order it did.
-func (e *imageRollbackEnv) destroyedServices(t *testing.T, since time.Time) []string {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(e.ctx, 30*time.Second)
-	defer cancel()
-	stream := e.daemon.Events(ctx, client.EventsListOptions{
-		Since: strconv.FormatInt(since.Unix(), 10),
-		Until: strconv.FormatInt(time.Now().Add(time.Second).Unix(), 10),
-		Filters: make(client.Filters).Add("type", "container").Add("event", string(events.ActionDestroy)).
-			Add("label", api.ProjectLabel+"="+e.project),
-	})
-	var services []string
-	for {
-		select {
-		case msg, ok := <-stream.Messages:
-			if !ok {
-				return services
-			}
-			services = append(services, msg.Actor.Attributes[api.ServiceLabel])
-		case err := <-stream.Err:
-			if errors.Is(err, io.EOF) {
-				return services
-			}
-			require.NoError(t, err)
-			return services
-		}
-	}
-}
-
 // createProjectNetwork creates the compose project's default network as compose labels it, and
 // returns its name.
-func (e *imageRollbackEnv) createProjectNetwork(t *testing.T) string {
+func (e *composeProject) createProjectNetwork(t *testing.T) string {
 	t.Helper()
 
 	name := e.project + "_default"
@@ -563,7 +469,7 @@ func (e *imageRollbackEnv) createProjectNetwork(t *testing.T) string {
 }
 
 // mountedVolumes are the names of the volumes a container mounts.
-func (e *imageRollbackEnv) mountedVolumes(t *testing.T, containerID string) []string {
+func (e *composeProject) mountedVolumes(t *testing.T, containerID string) []string {
 	t.Helper()
 
 	inspected, err := e.daemon.ContainerInspect(e.ctx, containerID, client.ContainerInspectOptions{})

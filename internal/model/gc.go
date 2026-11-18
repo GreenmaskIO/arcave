@@ -143,22 +143,6 @@ func (m GarbageCollectRequest) Validate() error {
 	return nil
 }
 
-// TaggedImage is one tag the daemon holds, with the image it names and that image's origin;
-// Origin is zero for an image whose labels name none.
-type TaggedImage struct {
-	Ref     ImageRef
-	ImageID ImageDigestID
-	Origin  LayerOrigin
-}
-
-// ContainerImage is what one container, running or not, was created from.
-type ContainerImage struct {
-	ContainerID string
-	// Ref is the reference the container was created with.
-	Ref     ImageRef
-	ImageID ImageDigestID
-}
-
 // GarbageStat is one collector's finding over one scope. Every kind reports the same
 // summary; the detail behind it is the kind's own type.
 type GarbageStat interface {

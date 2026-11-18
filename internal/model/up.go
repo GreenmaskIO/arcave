@@ -69,20 +69,3 @@ type DiscardedResources struct {
 	Volumes    []string `json:"volumes"`
 	Networks   []string `json:"networks"`
 }
-
-// NewDiscardedResources is what dropping resources removes, every list non-nil.
-func NewDiscardedResources(resources ComposeProjectResources) DiscardedResources {
-	return DiscardedResources{
-		Containers: nonNil(resources.Containers),
-		Volumes:    nonNil(resources.Volumes),
-		Networks:   nonNil(resources.Networks),
-	}
-}
-
-// nonNil is names, or an empty list for none, so it marshals as [] rather than null.
-func nonNil(names []string) []string {
-	if names == nil {
-		return []string{}
-	}
-	return names
-}

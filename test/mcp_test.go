@@ -31,9 +31,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/service/lock"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // mcpCallTimeout bounds one tool call; a rollback restarts the compose project.
@@ -58,7 +59,7 @@ func buildArcave(t *testing.T) string {
 		arcaveBin = filepath.Join(dir, "arcave")
 		var out bytes.Buffer
 		build := exec.Command("go", "build", "-o", arcaveBin, "./cmd/arcave")
-		build.Dir = ".."
+		build.Dir = moduleRoot(t)
 		build.Stdout, build.Stderr = &out, &out
 		if err := build.Run(); err != nil {
 			arcaveBinErr = err
@@ -67,6 +68,15 @@ func buildArcave(t *testing.T) string {
 	})
 	require.NoError(t, arcaveBinErr, "build arcave: %s", arcaveBin)
 	return arcaveBin
+}
+
+// moduleRoot is the directory of arcave's go.mod, where the binary builds from.
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+
+	gomod, err := exec.Command("go", "env", "GOMOD").Output()
+	require.NoError(t, err)
+	return filepath.Dir(strings.TrimSpace(string(gomod)))
 }
 
 // arcaveCommand runs the binary in the session env's project root, unswayed by the caller's
@@ -91,8 +101,8 @@ func arcaveCommandIn(t *testing.T, projectRoot string, args ...string) *exec.Cmd
 	return cmd
 }
 
-// initArcave writes the config `arcave mcp` reads: the arcave project and the default storage
-// newSessionEnv already opened, so the env's helpers see what the server writes.
+// initArcave writes the config `arcave mcp` reads: the arcave project and the default storage, the
+// one the env's helpers read on disk.
 func initArcave(t *testing.T, env *sessionEnv) {
 	t.Helper()
 
@@ -252,8 +262,7 @@ func TestMCP_PinnedServer(t *testing.T) {
 	assert.NotContains(t, removeMsg, "arcave")
 
 	// The pin is the session, not its name: a new "feat" is not the pinned one.
-	_, err := env.sessions.RemoveSession(env.ctx, model.RemoveSessionRequest{Session: "feat"})
-	require.NoError(t, err)
+	runArcave(t, env.projectRoot, nil, "session", "remove", "feat")
 	env.create(t, "feat")
 	assert.Contains(t, callToolErr(t, cs, "session_current", nil), feat.ID.String())
 }
@@ -383,12 +392,8 @@ func TestMCP_SavepointsFollowTheCurrentSession(t *testing.T) {
 	assert.Equal(t, []model.SavepointID{v1.ID}, savepointIDs(inBaseline.Savepoints))
 	assert.Equal(t, v1.ID, rolledBack.RolledBackTo.ID)
 
-	forkStore, err := env.in(t, fork.ID).svc.ListSavepoints(env.ctx, model.ListRequest{})
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []model.SavepointID{v1.ID, v2.ID}, savepointIDs(forkStore))
-	baselineStore, err := env.in(t, model.DefaultSession).svc.ListSavepoints(env.ctx, model.ListRequest{})
-	require.NoError(t, err)
-	assert.Equal(t, []model.SavepointID{v1.ID}, savepointIDs(baselineStore))
+	assert.ElementsMatch(t, []model.SavepointID{v1.ID, v2.ID}, savepointIDs(env.listSavepoints(t, fork.ID.String(), false)))
+	assert.Equal(t, []model.SavepointID{v1.ID}, savepointIDs(env.listSavepoints(t, model.DefaultSessionName, false)))
 }
 
 // The environment's cycle through `arcave mcp`: up refuses a running compose project and down one
@@ -415,7 +420,7 @@ func TestMCP_UpAndDown(t *testing.T) {
 	assert.True(t, taken.Forced)
 	assert.Nil(t, taken.Deployment, "compose's own replicas name no deployment")
 	assert.NotEmpty(t, taken.Discarded.Containers)
-	env.in(t, model.DefaultSession).requireGone(t)
+	daemontest.RequireComposeProjectGone(t, env.composeProject.daemon, env.project)
 
 	// Act, Assert: up brings the newest savepoint back, and the session's own down needs no force.
 	up := callTool[model.UpResult](t, cs, "up", project)
@@ -426,7 +431,7 @@ func TestMCP_UpAndDown(t *testing.T) {
 	assert.Equal(t, model.DefaultSession, down.Deployment.Session.ID)
 	assert.Equal(t, v1.ID, down.Deployment.Savepoint.ID)
 	assert.False(t, down.Forced)
-	env.in(t, model.DefaultSession).requireGone(t)
+	daemontest.RequireComposeProjectGone(t, env.composeProject.daemon, env.project)
 
 	// Act, Assert: nothing is left to take down.
 	again := callTool[model.DownResult](t, cs, "down", project)
@@ -444,9 +449,9 @@ func TestMCP_CDCOverStdio(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendCDC)
+	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendCDC)
 	cs := newMCPClient(t, env)
-	compose := env.in(t, model.DefaultSession)
+	compose := env.composeProject
 	compose.write(t, compose.replicas(t)[0], "v1")
 	v1 := callTool[model.Savepoint](t, cs, "savepoint_create", map[string]any{"compose_project": env.project, "name": "v1"})
 	compose.write(t, compose.replicas(t)[0], "v2")
@@ -466,7 +471,7 @@ func TestMCP_CDCOverStdio(t *testing.T) {
 	// Assert
 	assert.Equal(t, []model.SnapshotBackendKind{model.SnapshotBackendCDC}, statKinds(v1))
 	assert.Equal(t, v1.ID, rolledBack.RolledBackTo.ID)
-	assert.Equal(t, "v1", compose.read(t, compose.replicas(t)[0], volumeMarker), "the volume is back at v1")
+	assert.Equal(t, "v1", compose.read(t, compose.replicas(t)[0], daemontest.VolumeMarker), "the volume is back at v1")
 	require.Len(t, collected.Reports, 1)
 	deletion := collected.Reports[0].Deletion
 	require.NotNil(t, deletion, "the gc deleted nothing: %s", collected.Reports[0].Error)

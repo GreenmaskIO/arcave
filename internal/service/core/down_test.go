@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -30,7 +31,10 @@ import (
 )
 
 // featSession is a session a down does not run in.
-var featSession = model.SessionRef{ID: otherSession, Name: "feat"}
+var featSession = model.SessionRef{
+	ID:   model.SessionID(uuid.MustParse("7d1e3b2a-4c5f-4a6e-8b9d-0e1f2a3b4c5d")),
+	Name: "feat",
+}
 
 // demoOwnDeployment is a build of demoRecord in the default session of demoArcaveProject.
 func demoOwnDeployment() model.SavepointDeployment {

@@ -27,6 +27,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -156,7 +157,7 @@ func initRoot(cmd *cobra.Command) error {
 	// this call would leave in logrus's own format on a stream arcave does not
 	// control.
 	utils.BridgeLogrus(logger, logger.GetLevel())
-	warnIgnoredCDCKeys(logger, projectCfg.Backends.CDC)
+	warnIgnoredCDCKeys(logger, projectCfg.ComposeProvider.Backends.CDC)
 	return nil
 }
 
@@ -170,7 +171,7 @@ func readFlagEnvs() {
 }
 
 // warnIgnoredCDCKeys warns, once per run, of the tcp transport's keys set under another.
-func warnIgnoredCDCKeys(logger zerolog.Logger, cdc *config.CDCBackend) {
+func warnIgnoredCDCKeys(logger zerolog.Logger, cdc *composeconfig.CDCBackend) {
 	if cdc == nil {
 		return
 	}
@@ -221,8 +222,8 @@ func requireComposeProject() (model.DockerComposeProjectName, error) {
 // resolveSession turns a --session value into the id of a session that exists, for a command that
 // opens no compose project; "" is the current session, else the default.
 func resolveSession(ctx context.Context, ref string) (model.SessionID, error) {
-	var opened closers
-	defer opened.release(ctx)
+	var opened utils.Closers
+	defer opened.Release(ctx)
 
 	svc, err := openSessionService(ctx, projectRoot, projectCfg, &opened)
 	if err != nil {
@@ -263,9 +264,9 @@ func init() {
 	// last would silently own the key for both, so the other command's flag would
 	// parse and then be ignored. Declared once here, every command that restarts
 	// the compose project inherits them and the binding is unambiguous.
-	persistentFlags.Duration("wait-timeout", config.DefaultWaitTimeout,
+	persistentFlags.Duration("wait-timeout", composeconfig.DefaultWaitTimeout,
 		"How long to wait for services to become healthy after they are started, e.g. 2m or 90s")
-	persistentFlags.Duration("stop-timeout", config.DefaultStopTimeout,
+	persistentFlags.Duration("stop-timeout", composeconfig.DefaultStopTimeout,
 		"The least time a container gets to exit on its own before it is killed; a service's stop_grace_period raises it, e.g. 30s")
 	// Unbound, like --session: how one run renders, not what the project is.
 	persistentFlags.StringVar(&progressMode, "progress", "",
@@ -275,9 +276,9 @@ func init() {
 	persistentFlags.StringVar(&resultFormat, "format", "",
 		fmt.Sprintf("How the result is printed on stdout: %s (%s on a terminal stdout, else %s), %s or %s (env %s)",
 			formatAuto, formatText, formatJSON, formatJSON, formatText, formatEnv))
-	persistentFlags.String("compose-progress", config.ProgressLog,
+	persistentFlags.String("compose-progress", composeconfig.ProgressLog,
 		fmt.Sprintf("Where docker compose's own progress goes: %s (arcave log records), %s (compose's own renderer) or %s",
-			config.ProgressLog, config.ProgressTTY, config.ProgressQuiet))
+			composeconfig.ProgressLog, composeconfig.ProgressTTY, composeconfig.ProgressQuiet))
 
 	viperBind(cfgViper, persistentFlags, map[string]string{
 		"log-level":        "log.level",

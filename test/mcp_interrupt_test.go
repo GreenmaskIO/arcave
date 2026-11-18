@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // mcpExitTimeout bounds how long the server may take to exit once its rollback is over.
@@ -105,7 +106,7 @@ func waitForPhase(t *testing.T, env *sessionEnv, phase model.InflightPhase) {
 func oneShotContainers(t *testing.T, env *sessionEnv) []string {
 	t.Helper()
 
-	containers, err := env.daemon.ContainerList(env.ctx, client.ContainerListOptions{
+	containers, err := env.composeProject.daemon.ContainerList(env.ctx, client.ContainerListOptions{
 		All: true, Filters: make(client.Filters).
 			Add("label", "arcave.oneshot").
 			Add("volume", env.project+"_data"),
@@ -153,7 +154,7 @@ func TestMCP_InterruptedRollback(t *testing.T) {
 			env := newSessionEnv(t)
 			env.withComposeProject(t)
 			initArcave(t, env)
-			app := env.in(t, model.DefaultSession)
+			app := env.composeProject
 			app.write(t, app.replicas(t)[0], "v1")
 			srv := startMCPServer(t, env)
 			callTool[model.Savepoint](t, srv.cs, "savepoint_create", map[string]any{"compose_project": env.project, "name": "v1"})
@@ -188,10 +189,9 @@ func TestMCP_InterruptedRollback(t *testing.T) {
 			require.NoError(t, err)
 			assert.False(t, found, "the rollback must not leave its marker")
 			replica := app.replicas(t)[0]
-			assert.Equal(t, tt.wantContent, app.read(t, replica, volumeMarker), "the volume")
-			assert.Equal(t, tt.wantContent, app.read(t, replica, layerMarker), "the writable layer")
-			all, err := app.svc.ListSavepoints(env.ctx, model.ListRequest{IncludeSafetySnapshots: true})
-			require.NoError(t, err)
+			assert.Equal(t, tt.wantContent, app.read(t, replica, daemontest.VolumeMarker), "the volume")
+			assert.Equal(t, tt.wantContent, app.read(t, replica, daemontest.LayerMarker), "the writable layer")
+			all := env.listSavepoints(t, model.DefaultSessionName, true)
 			require.Len(t, all, 2, "the safety snapshot stays")
 			assert.True(t, all[0].IsSafetySnapshot(), "newest first")
 			assert.Equal(t, "v1", all[1].Name)

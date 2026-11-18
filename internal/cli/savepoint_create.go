@@ -17,7 +17,6 @@ package cli
 import (
 	"context"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
@@ -37,13 +36,12 @@ func NewSavepointCreateHandler(svc savepointCreateService, printer printer) *Sav
 	}
 }
 
-// SavepointCreate creates a savepoint and prints its metadata as JSON. The
-// health-check bound comes from cfg (compose.wait_timeout, --wait-timeout).
-func (h *SavepointCreateHandler) SavepointCreate(ctx context.Context, cfg config.Config, name, description string) error {
+// SavepointCreate creates a savepoint and prints its metadata as JSON. The health-check bound is
+// the provider's own (compose.wait_timeout, --wait-timeout).
+func (h *SavepointCreateHandler) SavepointCreate(ctx context.Context, name, description string) error {
 	savepoint, err := h.svc.CreateSavepoint(ctx, model.CreateSavepointRequest{
 		Name:        name,
 		Description: description,
-		WaitTimeout: cfg.Compose.WaitTimeout,
 	})
 	if err != nil {
 		return composeProjectAbsentError(err, "-p")

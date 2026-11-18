@@ -23,8 +23,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // safetySnapshotGarbage is the part of `arcave gc`'s JSON these tests read.
@@ -68,8 +69,8 @@ func TestGC_RetainsTheNewestSafetySnapshot(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendCDC)
-	compose := env.in(t, model.DefaultSession)
+	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendCDC)
+	compose := env.composeProject
 	arcave := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, env.projectRoot, nil, append([]string{"-p", env.project}, args...)...)
@@ -100,7 +101,7 @@ func TestGC_RetainsTheNewestSafetySnapshot(t *testing.T) {
 	afterGC := listed()
 	undone := decode[model.RollbackResult](t, arcave("rollback", third.SafetySnapshot.String()))
 	replica := compose.replicas(t)[0]
-	volumeUndone, layerUndone := compose.read(t, replica, volumeMarker), compose.read(t, replica, layerMarker)
+	volumeUndone, layerUndone := compose.read(t, replica, daemontest.VolumeMarker), compose.read(t, replica, daemontest.LayerMarker)
 	freeing := gc()
 	afterFreeing := listed()
 
@@ -138,7 +139,7 @@ func TestRollback_SafetySnapshotNamesItsRollback(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendFullCopy)
+	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
 	arcave := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, env.projectRoot, nil, append([]string{"-p", env.project}, args...)...)
@@ -195,8 +196,8 @@ func TestRollback_WithoutASafetySnapshot(t *testing.T) {
 			env := newSessionEnv(t)
 			env.withComposeProject(t)
 			initArcave(t, env)
-			writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendFullCopy)
-			compose := env.in(t, model.DefaultSession)
+			writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
+			compose := env.composeProject
 			var environment []string
 			if tt.config != "" {
 				environment = []string{tt.config}
@@ -213,7 +214,7 @@ func TestRollback_WithoutASafetySnapshot(t *testing.T) {
 			rolledBack := arcave(append([]string{"rollback"}, append(tt.flags, "v1")...)...)
 			listed := decode[[]model.Savepoint](t, arcave("savepoint", "list", "--include-safety-snapshots"))
 			replica := compose.replicas(t)[0]
-			volumeAfter, layerAfter := compose.read(t, replica, volumeMarker), compose.read(t, replica, layerMarker)
+			volumeAfter, layerAfter := compose.read(t, replica, daemontest.VolumeMarker), compose.read(t, replica, daemontest.LayerMarker)
 
 			// Assert
 			var response map[string]json.RawMessage
@@ -239,8 +240,8 @@ func TestGC_RetainRecentFromTheEnvironment(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendFullCopy)
-	compose := env.in(t, model.DefaultSession)
+	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
+	compose := env.composeProject
 	arcave := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, env.projectRoot, nil, append([]string{"-p", env.project}, args...)...)
@@ -268,8 +269,8 @@ func TestSavepointRemove_RetainRecentZero(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendFullCopy)
-	compose := env.in(t, model.DefaultSession)
+	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
+	compose := env.composeProject
 	arcave := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, env.projectRoot, nil, append([]string{"-p", env.project}, args...)...)
@@ -300,7 +301,7 @@ func TestMCP_RollbackSafetySnapshot(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendFullCopy)
+	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
 	command := arcaveCommand(t, env, "mcp")
 	command.Env = append(command.Env, "ARCAVE_ROLLBACK_SAFETY_SNAPSHOT=false")
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "arcave-it", Version: "0"}, nil)
@@ -318,4 +319,13 @@ func TestMCP_RollbackSafetySnapshot(t *testing.T) {
 	// Assert
 	assert.Empty(t, byDefault.SafetySnapshot)
 	assert.NotEmpty(t, asked.SafetySnapshot)
+}
+
+// targetsOf is what each of ops names, in order.
+func targetsOf(ops []model.GarbageOp) []string {
+	targets := make([]string, 0, len(ops))
+	for _, op := range ops {
+		targets = append(targets, op.Target)
+	}
+	return targets
 }

@@ -1,0 +1,101 @@
+// Copyright 2026 Greenmask Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package inspection reads the live compose project off the daemon, under its own step, and
+// refuses a daemon the provider cannot work on.
+package inspection
+
+import (
+	"context"
+	"fmt"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
+)
+
+// kindProjectIntrospect is the step an introspection runs under.
+const kindProjectIntrospect progress.Kind = "project.introspect"
+
+// composeIntrospector reads the live compose project as the daemon holds it, in full or by its
+// label alone.
+type composeIntrospector interface {
+	Introspect(ctx context.Context) (composemodel.IntrospectionResult, error)
+	ReadResources(ctx context.Context) (composemodel.ComposeProjectResources, error)
+}
+
+// Deps are Inspector's collaborators.
+type Deps struct {
+	ComposeReader composeIntrospector
+	// DaemonVersion is the version the engine reports; Inspect judges it.
+	DaemonVersion string
+	// MinDaemonMajor is the oldest major of that engine a workflow runs on; 0 requires none.
+	MinDaemonMajor int
+}
+
+// Inspector reads one compose project as the daemon holds it.
+type Inspector struct {
+	composeReader  composeIntrospector
+	daemonVersion  string
+	minDaemonMajor int
+}
+
+// New builds an Inspector from deps.
+func New(deps Deps) *Inspector {
+	return &Inspector{
+		composeReader:  deps.ComposeReader,
+		daemonVersion:  deps.DaemonVersion,
+		minDaemonMajor: deps.MinDaemonMajor,
+	}
+}
+
+// Inspect reads the compose project as the daemon holds it now, and refuses a daemon older than
+// the provider runs on.
+func (s *Inspector) Inspect(ctx context.Context) (composemodel.IntrospectionResult, error) {
+	introspection, err := s.Introspect(ctx)
+	if err != nil {
+		return composemodel.IntrospectionResult{}, err
+	}
+	if err := s.RequireDaemon(ctx); err != nil {
+		return composemodel.IntrospectionResult{}, err
+	}
+	return introspection, nil
+}
+
+// RequireDaemon refuses a daemon older than the provider runs on.
+func (s *Inspector) RequireDaemon(ctx context.Context) error {
+	return requireDaemon(ctx, s.daemonVersion, s.minDaemonMajor)
+}
+
+// Introspect reads the compose project as the daemon holds it now, under its own step.
+func (s *Inspector) Introspect(ctx context.Context) (composemodel.IntrospectionResult, error) {
+	ctx, step := progress.Run(ctx, progress.Step{Kind: kindProjectIntrospect})
+	introspection, err := s.composeReader.Introspect(ctx)
+	step.End(err)
+	if err != nil {
+		return composemodel.IntrospectionResult{}, fmt.Errorf("introspect compose project: %w", err)
+	}
+	return introspection, nil
+}
+
+// ReadResources reads what the daemon holds of the compose project by its label, under the
+// introspection's step; it refuses no daemon.
+func (s *Inspector) ReadResources(ctx context.Context) (composemodel.ComposeProjectResources, error) {
+	ctx, step := progress.Run(ctx, progress.Step{Kind: kindProjectIntrospect})
+	resources, err := s.composeReader.ReadResources(ctx)
+	step.End(err)
+	if err != nil {
+		return composemodel.ComposeProjectResources{}, fmt.Errorf("read the compose project's resources: %w", err)
+	}
+	return resources, nil
+}

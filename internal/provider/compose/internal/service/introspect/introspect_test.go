@@ -1,0 +1,1349 @@
+// Copyright 2026 Greenmask Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package introspect
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"maps"
+	"slices"
+	"strconv"
+	"testing"
+
+	cerrdefs "github.com/containerd/errdefs"
+	"github.com/docker/compose/v5/pkg/api"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+
+	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
+)
+
+const (
+	composeProject = model.DockerComposeProjectName("demo")
+	anonName       = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	ownedName      = "demo_pgdata"
+
+	testImageID     = model.ImageDigestID("sha256:1111111111111111111111111111111111111111111111111111111111111111")
+	testBaseImageID = model.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+)
+
+func TestReader_Introspect(t *testing.T) {
+	// Arrange
+	daemon := &mockDockerAPI{}
+	daemon.expectContainers(
+		summary("c-db-1", "db", "postgres:16", 1,
+			mountPoint(mount.TypeVolume, ownedName, "", "/var/lib/postgresql/data", true)),
+		summary("c-app-1", "app", "busybox", 1,
+			mountPoint(mount.TypeVolume, ownedName, "", "/mnt/data", false),
+			mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", true)),
+	)
+	daemon.expectInspect("c-db-1", "c-app-1")
+	daemon.expectVolumes(ownedVolume(ownedName, "pgdata"), ownedVolume("demo_orphan", "orphan"))
+	daemon.expectNetworks(network.Summary{Name: "demo_back", Labels: map[string]string{api.NetworkLabel: "back"}})
+	daemon.expectImage(testImageID, nil)
+	inspector := NewReader(daemon, composeProject)
+
+	// Act
+	got, err := inspector.Introspect(context.Background())
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, "demo", got.Project.Name)
+
+	require.Len(t, got.Project.Services, 2)
+	assert.Equal(t, "app", got.Project.Services[0].Name, "services sort by name")
+	assert.Equal(t, "db", got.Project.Services[1].Name)
+	assert.Equal(t, []composemodel.ServiceVolume{
+		{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg",
+			ReadOnly: true, Bind: &composemodel.BindMount{CreateHostPath: true}},
+		{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/mnt/data",
+			VolumeName: ownedName},
+	}, got.Project.Services[0].Volumes, "mounts sort by target")
+
+	require.Len(t, got.Project.Volumes, 2)
+	assert.Equal(t, "orphan", got.Project.Volumes[0].Key)
+	assert.Empty(t, got.Project.Volumes[0].UsedBy)
+	assert.Equal(t, []model.ServiceReference{
+		{Service: "app", Target: "/mnt/data"},
+		{Service: "db", Target: "/var/lib/postgresql/data", ReadOnly: true},
+	}, got.Project.Volumes[1].UsedBy, "users sort by (service, target)")
+
+	assert.Equal(t, []composemodel.Network{{Key: "back", Name: "demo_back",
+		Inspect: network.Inspect{Name: "demo_back", Labels: map[string]string{api.NetworkLabel: "back"}}}},
+		got.Project.Networks)
+	daemon.AssertExpectations(t)
+}
+
+func TestReader_Introspect_Referenced(t *testing.T) {
+	const (
+		vpnID  = "c-vpn"
+		goneID = "c-gone"
+	)
+	inNamespaces := func(id string, h container.HostConfig) container.InspectResponse {
+		r := inspected(id, testImageID.String())
+		r.HostConfig = &h
+		return r
+	}
+	vpn := container.InspectResponse{ID: vpnID, Name: "/vpn"}
+
+	tests := []struct {
+		name     string
+		replicas []container.InspectResponse
+		inspects map[string]error // the foreign references inspected, each once; nil error answers vpn
+		want     map[string]container.InspectResponse
+	}{
+		{
+			name: "one inspect per distinct foreign container",
+			replicas: []container.InspectResponse{
+				inNamespaces("c-app-1", container.HostConfig{
+					NetworkMode: "container:" + vpnID, IpcMode: "container:" + vpnID, PidMode: "container:" + vpnID,
+				}),
+				inNamespaces("c-app-2", container.HostConfig{NetworkMode: "container:" + vpnID}),
+			},
+			inspects: map[string]error{vpnID: nil},
+			want:     map[string]container.InspectResponse{vpnID: vpn},
+		},
+		{
+			name: "a replica of the project is no reference",
+			replicas: []container.InspectResponse{
+				inNamespaces("c-app-1", container.HostConfig{
+					NetworkMode: "container:c-app-2", VolumesFrom: []string{"c-app-2:ro"},
+				}),
+				inNamespaces("c-app-2", container.HostConfig{}),
+			},
+			want: map[string]container.InspectResponse{},
+		},
+		{
+			name: "volumes_from names a foreign container",
+			replicas: []container.InspectResponse{
+				inNamespaces("c-app-1", container.HostConfig{VolumesFrom: []string{vpnID + ":ro"}}),
+			},
+			inspects: map[string]error{vpnID: nil},
+			want:     map[string]container.InspectResponse{vpnID: vpn},
+		},
+		{
+			name: "a container the daemon no longer has is left out",
+			replicas: []container.InspectResponse{
+				inNamespaces("c-app-1", container.HostConfig{NetworkMode: "container:" + goneID}),
+			},
+			inspects: map[string]error{goneID: cerrdefs.ErrNotFound},
+			want:     map[string]container.InspectResponse{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemon := &mockDockerAPI{}
+			summaries := make([]container.Summary, 0, len(tt.replicas))
+			for n, r := range tt.replicas {
+				summaries = append(summaries, summary(r.ID, "app", "busybox", n+1))
+			}
+			daemon.expectContainers(summaries...)
+			daemon.expectInspected(tt.replicas...)
+			for id, err := range tt.inspects {
+				answer := vpn
+				if err != nil {
+					answer = container.InspectResponse{}
+				}
+				daemon.On("ContainerInspect", mock.Anything, id, client.ContainerInspectOptions{}).Return(answer, err).Once()
+			}
+			daemon.expectVolumes()
+			daemon.expectNetworks()
+			daemon.expectImage(testImageID, nil)
+
+			// Act
+			got, err := NewReader(daemon, composeProject).Introspect(context.Background())
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.Referenced)
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+func TestReader_Introspect_JoinsTheTwoVolumeLevels(t *testing.T) {
+	// Arrange
+	daemon := &mockDockerAPI{}
+	daemon.expectContainers(summary("c-db-1", "db", "postgres:16", 1,
+		mountPoint(mount.TypeVolume, ownedName, "", "/data", false)))
+	daemon.expectInspect("c-db-1")
+	daemon.expectVolumes(ownedVolume(ownedName, "pgdata"))
+	daemon.expectNetworks()
+	daemon.expectImage(testImageID, nil)
+
+	// Act
+	got, err := NewReader(daemon, composeProject).Introspect(context.Background())
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, got.Project.Volumes, 1)
+	require.Len(t, got.Project.Services[0].Volumes, 1)
+	assert.Equal(t,
+		got.Project.Volumes[0].ObjectID(),
+		got.Project.Services[0].Volumes[0].ObjectID("db"))
+	daemon.AssertExpectations(t)
+}
+
+func TestReader_Introspect_ClassifiesMounts(t *testing.T) {
+	tests := []struct {
+		name   string
+		mount  container.MountPoint
+		labels map[string]string // what VolumeInspect reports for an unowned volume
+		want   composemodel.ServiceVolume
+	}{
+		{
+			name:  "a volume the project owns is named, keyed by its compose key",
+			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume",
+				Source: "pgdata", Target: "/data", VolumeName: ownedName},
+		},
+		{
+			name:   "the daemon's own anonymous label wins",
+			mount:  mountPoint(mount.TypeVolume, "short-name", "", "/data", false),
+			labels: map[string]string{anonymousVolumeLabel: "true"},
+			// The generated name is carried: a reaper has no other way to name the volume.
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume",
+				Target: "/data", Replica: 1, VolumeName: "short-name"},
+		},
+		{
+			name:  "a generated name is anonymous where the label is missing",
+			mount: mountPoint(mount.TypeVolume, anonName, "", "/data", false),
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume",
+				Target: "/data", Replica: 1, VolumeName: anonName},
+		},
+		{
+			name:  "an unowned, unlabelled volume is an external named one",
+			mount: mountPoint(mount.TypeVolume, "shared", "", "/data", false),
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume",
+				Source: "shared", Target: "shared-placeholder", VolumeName: "shared"},
+		},
+		{
+			name:  "a bind carries the host path and its propagation",
+			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", false),
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind",
+				Source: "/host/cfg", Target: "/etc/cfg", Bind: &composemodel.BindMount{CreateHostPath: true}},
+		},
+		{
+			name:  "tmpfs",
+			mount: mountPoint(mount.TypeTmpfs, "", "", "/run", false),
+			want:  composemodel.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run"},
+		},
+		{
+			name:  "npipe",
+			mount: mountPoint(mount.TypeNamedPipe, "", `\\.\pipe\d`, "/pipe", false),
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNPipe, RawType: "npipe",
+				Target: "/pipe"},
+		},
+		{
+			name:  "an unrecognised type is reported, diagnosed by RawType",
+			mount: mountPoint("newfangled", "", "", "/x", false),
+			want:  composemodel.ServiceVolume{Type: model.VolumeTypeUnknown, RawType: "newfangled", Target: "/x"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			want := tt.want
+			if want.Target == "shared-placeholder" {
+				want.Target = "/data"
+			}
+			daemon := &mockDockerAPI{}
+			daemon.expectContainers(summary("c-db-1", "db", "busybox", 1, tt.mount))
+			daemon.expectInspect("c-db-1")
+			daemon.expectVolumes(ownedVolume(ownedName, "pgdata"))
+			daemon.expectNetworks()
+			daemon.expectImage(testImageID, nil)
+			if tt.mount.Type == mount.TypeVolume && tt.mount.Name != ownedName {
+				daemon.On("VolumeInspect", mock.Anything, tt.mount.Name, client.VolumeInspectOptions{}).
+					Return(volume.Volume{Name: tt.mount.Name, Labels: tt.labels}, nil).Once()
+			}
+
+			// Act
+			got, err := NewReader(daemon, composeProject).Introspect(context.Background())
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, []composemodel.ServiceVolume{want}, got.Project.Services[0].Volumes)
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+func TestReader_Introspect_MountOptions(t *testing.T) {
+	tests := []struct {
+		name  string
+		mount container.MountPoint
+		host  container.HostConfig
+		want  composemodel.ServiceVolume
+	}{
+		{
+			name:  "the mount API carries a volume's nocopy, subpath and labels",
+			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: ownedName,
+				Target: "/data", VolumeOptions: &mount.VolumeOptions{
+					NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"},
+				}}}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+				Target: "/data", VolumeName: ownedName, Volume: &composemodel.VolumeMount{
+					NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"},
+				}},
+		},
+		{
+			name:  "empty volume options are kept",
+			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: ownedName,
+				Target: "/data", VolumeOptions: &mount.VolumeOptions{}}}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+				Target: "/data", VolumeName: ownedName, Volume: &composemodel.VolumeMount{}},
+		},
+		{
+			name:  "a volume requested without options has none",
+			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: ownedName,
+				Target: "/data"}}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+				Target: "/data", VolumeName: ownedName},
+		},
+		{
+			name:  "the bind API's nocopy flag",
+			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
+			host:  container.HostConfig{Binds: []string{ownedName + ":/data:rw,nocopy"}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+				Target: "/data", VolumeName: ownedName, Volume: &composemodel.VolumeMount{NoCopy: true}},
+		},
+		{
+			name:  "the bind API's SELinux relabel",
+			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", true),
+			host:  container.HostConfig{Binds: []string{"/host/cfg:/etc/cfg:ro,Z"}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
+				Target: "/etc/cfg", ReadOnly: true, Bind: &composemodel.BindMount{SELinux: "Z", CreateHostPath: true}},
+		},
+		{
+			name:  "a bind through the mount API creates no host path unless asked",
+			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", false),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeBind, Source: "/host/cfg",
+				Target: "/etc/cfg"}}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
+				Target: "/etc/cfg", Bind: &composemodel.BindMount{}},
+		},
+		{
+			name:  "a bind's recursion and host path creation through the mount API",
+			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", false),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeBind, Source: "/host/cfg",
+				Target: "/etc/cfg", BindOptions: &mount.BindOptions{
+					CreateMountpoint: true, ReadOnlyNonRecursive: true,
+				}}}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
+				Target: "/etc/cfg", Bind: &composemodel.BindMount{CreateHostPath: true, Recursive: "writable"}},
+		},
+		{
+			name:  "a bind's source is the path its request names, not the mount's",
+			mount: mountPoint(mount.TypeBind, "", "/host_mnt/srv/cfg", "/etc/cfg", false),
+			host:  container.HostConfig{Binds: []string{"/srv/cfg:/etc/cfg:rw"}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/cfg",
+				Target: "/etc/cfg", Bind: &composemodel.BindMount{CreateHostPath: true}},
+		},
+		{
+			name:  "a tmpfs mount's size and mode",
+			mount: mountPoint(mount.TypeTmpfs, "", "", "/run", false),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeTmpfs, Target: "/run",
+				TmpfsOptions: &mount.TmpfsOptions{SizeBytes: 1 << 20, Mode: 0o1777}}}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run",
+				Tmpfs: &composemodel.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
+		},
+		{
+			name:  "an image mount's reference and subpath",
+			mount: mountPoint(mount.TypeImage, "", "", "/assets", true),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeImage, Source: "assets:1",
+				Target: "/assets", ReadOnly: true, ImageOptions: &mount.ImageOptions{Subpath: "static"}}}},
+			want: composemodel.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1",
+				Target: "/assets", ReadOnly: true, Image: &composemodel.ImageMount{Subpath: "static"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			host := tt.host
+			inspect := inspected("c-db-1", testImageID.String(), tt.mount)
+			inspect.HostConfig = &host
+			daemon := &mockDockerAPI{}
+			daemon.expectContainers(summary("c-db-1", "db", "busybox", 1, tt.mount))
+			daemon.expectInspected(inspect)
+			daemon.expectVolumes(ownedVolume(ownedName, "pgdata"))
+			daemon.expectNetworks()
+			daemon.expectImage(testImageID, nil)
+
+			// Act
+			got, err := NewReader(daemon, composeProject).Introspect(context.Background())
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, []composemodel.ServiceVolume{tt.want}, got.Project.Services[0].Volumes)
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+func TestReader_Introspect_GroupsReplicas(t *testing.T) {
+	// Arrange
+	second := summary("c-web-2", "web", "nginx:1", 2)
+	second.Labels[api.ContainerReplaceLabel] = "demo-web-2-old"
+	first := summary("c-web-1", "web", "nginx:1", 1)
+	oneoff := summary("c-web-run", "web", "nginx:1", 1)
+	oneoff.Labels[api.OneoffLabel] = "True"
+
+	daemon := &mockDockerAPI{}
+	daemon.expectContainers(second, oneoff, first)
+	daemon.expectInspect("c-web-1", "c-web-2")
+	daemon.expectVolumes()
+	daemon.expectNetworks()
+	daemon.expectImage(testImageID, nil)
+
+	// Act
+	got, err := NewReader(daemon, composeProject).Introspect(context.Background())
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, got.Project.Services, 1)
+	require.Len(t, got.Project.Services[0].Containers, 2, "the one-off is not a replica")
+	assert.Equal(t, 1, got.Project.Services[0].Containers[0].Number, "replicas sort by number")
+	assert.Equal(t, 2, got.Project.Services[0].Containers[1].Number)
+	assert.Equal(t, "c-web-1", got.Project.Services[0].Containers[0].Name)
+	assert.Equal(t, "demo-web-2-old", got.Project.Services[0].Containers[1].Replaces,
+		"a replica compose recreated names the one it replaced")
+	daemon.AssertExpectations(t)
+}
+
+func TestReader_Observe(t *testing.T) {
+	// Arrange: two services, one waiting on the other to complete, a hook's runner and a one-off,
+	// in one listing.
+	web := summary("c-web-1", "web", "nginx:1", 1)
+	web.Labels[api.DependenciesLabel] = "migrate:service_completed_successfully:false"
+	migrate := summary("c-migrate-1", "migrate", "nginx:1", 1)
+	runner := summary("c-web-hook", "web", "nginx:1", 0)
+	maps.Copy(runner.Labels, map[string]string{api.HookLabel: "pre_start", api.HookIndexLabel: "0"})
+	oneoff := summary("c-web-run", "web", "nginx:1", 1)
+	oneoff.Labels[api.OneoffLabel] = "True"
+	daemon := &mockDockerAPI{}
+	daemon.expectContainers(web, migrate, runner, oneoff)
+	daemon.expectInspect("c-migrate-1", "c-web-1")
+
+	// Act: no volume, network or image is read, so none is expected.
+	got, err := NewReader(daemon, composeProject).Observe(context.Background())
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, got.Services, 2)
+	assert.Equal(t, "migrate", got.Services[0].Name)
+	assert.True(t, got.Services[0].Job, "web waits on it to complete")
+	assert.Equal(t, "web", got.Services[1].Name)
+	assert.False(t, got.Services[1].Job)
+	require.Len(t, got.Services[1].Replicas, 1, "neither a hook's runner nor a one-off is a replica")
+	assert.Equal(t, "c-web-1", got.Services[1].Replicas[0].ContainerID)
+	daemon.AssertExpectations(t)
+}
+
+// The resources are every container of the compose project, the replicas among them, and what its
+// label names, with no container too; the volumes and networks are listed by that label exactly, so
+// an external volume, which carries none, is never among them.
+func TestReader_ReadResources(t *testing.T) {
+	oneoff := summary("c-web-run", "web", "nginx:1", 1)
+	oneoff.Labels[api.OneoffLabel] = "True"
+	hook := summary("c-web-hook", "web", "nginx:1", 0)
+	maps.Copy(hook.Labels, map[string]string{api.HookLabel: "pre_start", api.HookIndexLabel: "0"})
+	tests := []struct {
+		name           string
+		containers     []container.Summary
+		replicas       []string
+		wantContainers []string
+		wantReplicas   []string
+	}{
+		{
+			name:           "a running compose project, a one-off and a hook's runner beside it",
+			containers:     []container.Summary{summary("c-web-1", "web", "nginx:1", 1), oneoff, hook},
+			replicas:       []string{"c-web-1"},
+			wantContainers: []string{"c-web-1", "c-web-hook", "c-web-run"},
+			wantReplicas:   []string{"c-web-1"},
+		},
+		{
+			name:           "a lone one-off",
+			containers:     []container.Summary{oneoff},
+			wantContainers: []string{"c-web-run"},
+		},
+		{name: "a compose project taken down without its volumes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemon := &mockDockerAPI{}
+			daemon.expectContainers(tt.containers...)
+			daemon.expectInspect(tt.replicas...)
+			byLabel := map[string]bool{api.ProjectLabel + "=" + composeProject.String(): true}
+			daemon.On("VolumeList", mock.Anything, mock.MatchedBy(func(opts client.VolumeListOptions) bool {
+				return assert.ObjectsAreEqual(byLabel, opts.Filters["label"])
+			})).Return([]volume.Volume{{Name: "demo_db"}, {Name: "demo_cache"}}, nil).Once()
+			daemon.On("NetworkList", mock.Anything, mock.MatchedBy(func(opts client.NetworkListOptions) bool {
+				return assert.ObjectsAreEqual(byLabel, opts.Filters["label"])
+			})).Return([]network.Summary{{Network: network.Network{Name: "demo_default"}}}, nil).Once()
+
+			// Act
+			got, err := NewReader(daemon, composeProject).ReadResources(context.Background())
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantContainers, got.Containers)
+			var replicas []string
+			for _, service := range got.Replicas {
+				for _, replica := range service.Containers {
+					replicas = append(replicas, replica.ID)
+				}
+			}
+			assert.Equal(t, tt.wantReplicas, replicas, "one-offs and hooks' runners are no replicas")
+			assert.Equal(t, []string{"demo_cache", "demo_db"}, got.Volumes, "sorted")
+			assert.Equal(t, []string{"demo_default"}, got.Networks)
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+func TestReader_Observe_GoneUnderTheRead(t *testing.T) {
+	// Arrange: web-2 and the only migrate replica go between the listing and their inspect, as a
+	// rollback rebuilding them removes them.
+	daemon := &mockDockerAPI{}
+	daemon.expectContainers(
+		summary("c-web-1", "web", "nginx:1", 1),
+		summary("c-web-2", "web", "nginx:1", 2),
+		summary("c-migrate-1", "migrate", "nginx:1", 1),
+	)
+	daemon.expectInspect("c-web-1")
+	for _, id := range []string{"c-web-2", "c-migrate-1"} {
+		daemon.On("ContainerInspect", mock.Anything, id, client.ContainerInspectOptions{}).
+			Return(container.InspectResponse{}, cerrdefs.ErrNotFound).Once()
+	}
+
+	// Act
+	got, err := NewReader(daemon, composeProject).Observe(context.Background())
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, got.Services, 1, "a service with no container left is left out")
+	assert.Equal(t, "web", got.Services[0].Name)
+	require.Len(t, got.Services[0].Replicas, 1)
+	assert.Equal(t, "c-web-1", got.Services[0].Replicas[0].ContainerID)
+	daemon.AssertExpectations(t)
+}
+
+func TestReader_Observe_DaemonFailures(t *testing.T) {
+	daemonErr := errors.New("daemon refused")
+	tests := []struct {
+		name  string
+		setup func(daemon *mockDockerAPI)
+	}{
+		{
+			name: "the listing",
+			setup: func(daemon *mockDockerAPI) {
+				daemon.On("ContainerList", mock.Anything, mock.Anything).Return(nil, daemonErr).Once()
+			},
+		},
+		{
+			name: "a replica's inspect",
+			setup: func(daemon *mockDockerAPI) {
+				daemon.expectContainers(summary("c-web-1", "web", "nginx:1", 1))
+				daemon.On("ContainerInspect", mock.Anything, "c-web-1", client.ContainerInspectOptions{}).
+					Return(container.InspectResponse{}, daemonErr).Once()
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemon := &mockDockerAPI{}
+			tt.setup(daemon)
+
+			// Act
+			got, err := NewReader(daemon, composeProject).Observe(context.Background())
+
+			// Assert
+			require.ErrorIs(t, err, daemonErr)
+			assert.Equal(t, provider.ObservedWorkload{}, got)
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+func TestKeepProjectContainers(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels map[string]string
+		kept   bool
+	}{
+		{name: "a replica", labels: nil, kept: true},
+		{name: "a one-off", labels: map[string]string{api.OneoffLabel: "True"}, kept: false},
+		{name: "a one-off label other than True", labels: map[string]string{api.OneoffLabel: "False"}, kept: true},
+		{name: "a lifecycle hook", labels: map[string]string{api.HookLabel: "pre_start"}, kept: false},
+		{name: "a provider's relay", labels: map[string]string{api.RelayLabel: "3f2a"}, kept: false},
+		{name: "an empty hook label", labels: map[string]string{api.HookLabel: ""}, kept: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			candidate := summary("c-web-1", "web", "nginx:1", 1)
+			maps.Copy(candidate.Labels, tt.labels)
+
+			// Act
+			got := keepProjectContainers([]container.Summary{candidate})
+
+			// Assert
+			if tt.kept {
+				assert.Equal(t, []container.Summary{candidate}, got)
+			} else {
+				assert.Empty(t, got)
+			}
+		})
+	}
+}
+
+func TestReader_Introspect_AnonymousVolumePerReplica(t *testing.T) {
+	anon := func(name string) volume.Volume {
+		return volume.Volume{Name: name, Labels: map[string]string{anonymousVolumeLabel: ""}}
+	}
+	cache := func(name string) container.MountPoint {
+		return mountPoint(mount.TypeVolume, name, "", "/cache", false)
+	}
+	data := mountPoint(mount.TypeVolume, ownedName, "", "/data", false)
+	wantAnon := func(name string, replica int) composemodel.ServiceVolume {
+		return composemodel.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache",
+			VolumeName: name, Replica: replica}
+	}
+	wantData := composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+		Target: "/data", VolumeName: ownedName}
+
+	tests := []struct {
+		name     string
+		replicas []replica
+		want     []composemodel.ServiceVolume
+		wantWarn string // the target warned of
+	}{
+		{
+			name: "every replica's anonymous volume is its own, a shared mount is reported once",
+			replicas: []replica{
+				{id: "c-worker-1", service: "worker", image: testImageID.String(),
+					mounts: []container.MountPoint{cache("anon-1"), data}},
+				{id: "c-worker-2", service: "worker", image: testImageID.String(),
+					mounts: []container.MountPoint{cache("anon-2"), data}},
+				{id: "c-worker-3", service: "worker", image: testImageID.String(),
+					mounts: []container.MountPoint{cache("anon-3"), data}},
+			},
+			want: []composemodel.ServiceVolume{wantAnon("anon-1", 1), wantAnon("anon-2", 2), wantAnon("anon-3", 3), wantData},
+		},
+		{
+			name: "a bind the first replica does not declare is warned of, the anonymous volumes still reported",
+			replicas: []replica{
+				{id: "c-worker-1", service: "worker", image: testImageID.String(),
+					mounts: []container.MountPoint{cache("anon-1")}},
+				{id: "c-worker-2", service: "worker", image: testImageID.String(),
+					mounts: []container.MountPoint{cache("anon-2"), mountPoint(mount.TypeBind, "", "/host/logs", "/logs", false)}},
+			},
+			want:     []composemodel.ServiceVolume{wantAnon("anon-1", 1), wantAnon("anon-2", 2)},
+			wantWarn: "/logs",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemon := &mockDockerAPI{}
+			daemon.expectReplicas(tt.replicas...)
+			daemon.expectVolumes(ownedVolume(ownedName, "pgdata"))
+			for _, r := range tt.replicas {
+				for _, m := range r.mounts {
+					if m.Type == mount.TypeVolume && m.Name != ownedName {
+						daemon.On("VolumeInspect", mock.Anything, m.Name, client.VolumeInspectOptions{}).Return(anon(m.Name), nil).Once()
+					}
+				}
+			}
+			daemon.expectNetworks()
+			daemon.expectImage(testImageID, nil)
+			var logs bytes.Buffer
+			ctx := zerolog.New(&logs).WithContext(context.Background())
+
+			// Act
+			got, err := NewReader(daemon, composeProject).Introspect(ctx)
+
+			// Assert
+			require.NoError(t, err)
+			require.Len(t, got.Project.Services, 1)
+			assert.Equal(t, tt.want, got.Project.Services[0].Volumes)
+			if tt.wantWarn != "" {
+				assert.Contains(t, logs.String(), `"replica":2`)
+				assert.Contains(t, logs.String(), `"target":"`+tt.wantWarn+`"`)
+				assert.Contains(t, logs.String(), "docker compose up -d --force-recreate worker")
+			} else {
+				assert.Empty(t, logs.String())
+			}
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+func TestReader_Introspect_InheritedMounts(t *testing.T) {
+	const vpnID = "c-vpn"
+	anon := func(name, target string) container.MountPoint {
+		return mountPoint(mount.TypeVolume, name, "/var/lib/docker/volumes/"+name+"/_data", target, false)
+	}
+	vpnBind := mountPoint(mount.TypeBind, "", "/host/vpn", "/vpn", false)
+	withVolumesFrom := func(r container.InspectResponse, volumesFrom ...string) container.InspectResponse {
+		r.HostConfig = &container.HostConfig{VolumesFrom: volumesFrom}
+		return r
+	}
+	vpn := container.InspectResponse{
+		ID: vpnID, Name: "/vpn",
+		Mounts: []container.MountPoint{vpnBind},
+	}
+
+	tests := []struct {
+		name    string
+		app     container.InspectResponse
+		foreign bool              // app refers to vpn, which the daemon is asked for
+		want    map[string]string // target -> InheritedFrom, app's mounts
+	}{
+		{
+			name: "a mount of a replica of the project",
+			app:  withVolumesFrom(inspected("c-app-1", testImageID.String(), anon("anon-d", "/data"), anon("anon-a", "/cache")), "c-data-1"),
+			want: map[string]string{"/cache": "", "/data": "c-data-1"},
+		},
+		{
+			name:    "a mount of a container outside the project",
+			app:     withVolumesFrom(inspected("c-app-1", testImageID.String(), vpnBind, anon("anon-a", "/cache")), "vpn:ro"),
+			want:    map[string]string{"/cache": "", "/vpn": vpnID},
+			foreign: true,
+		},
+		{
+			name: "the container's own mount at a target its source also mounts",
+			app:  withVolumesFrom(inspected("c-app-1", testImageID.String(), anon("anon-a", "/data")), "c-data-1"),
+			want: map[string]string{"/data": ""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			data := inspected("c-data-1", testImageID.String(), anon("anon-d", "/data"))
+			daemon := &mockDockerAPI{}
+			daemon.expectContainers(
+				summary("c-app-1", "app", "busybox", 1, tt.app.Mounts...),
+				summary("c-data-1", "data", "busybox", 1, data.Mounts...),
+			)
+			daemon.expectInspected(tt.app, data)
+			if tt.foreign {
+				daemon.On("ContainerInspect", mock.Anything, "vpn", client.ContainerInspectOptions{}).Return(vpn, nil).Once()
+			}
+			daemon.expectVolumes()
+			var names []string
+			for _, m := range append(slices.Clone(tt.app.Mounts), data.Mounts...) {
+				if m.Type == mount.TypeVolume && !slices.Contains(names, m.Name) {
+					names = append(names, m.Name)
+					daemon.On("VolumeInspect", mock.Anything, m.Name, client.VolumeInspectOptions{}).
+						Return(volume.Volume{Name: m.Name, Labels: map[string]string{anonymousVolumeLabel: ""}}, nil).Once()
+				}
+			}
+			daemon.expectNetworks()
+			daemon.expectImage(testImageID, nil)
+
+			// Act
+			got, err := NewReader(daemon, composeProject).Introspect(context.Background())
+
+			// Assert
+			require.NoError(t, err)
+			require.Len(t, got.Project.Services, 2)
+			inherited := map[string]string{}
+			for _, v := range got.Project.Services[0].Volumes {
+				inherited[v.Target] = v.InheritedFrom
+			}
+			assert.Equal(t, tt.want, inherited)
+			for _, v := range got.Project.Services[1].Volumes {
+				assert.Empty(t, v.InheritedFrom, "the source's own mount is not inherited")
+			}
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+func TestUndeclaredMounts(t *testing.T) {
+	anon := func(target string) composemodel.ServiceVolume {
+		return composemodel.ServiceVolume{Type: model.VolumeTypeAnon, Target: target}
+	}
+	bind := func(target string) composemodel.ServiceVolume {
+		return composemodel.ServiceVolume{Type: model.VolumeTypeBind, Target: target}
+	}
+
+	tests := []struct {
+		name  string
+		first []composemodel.ServiceVolume
+		own   []composemodel.ServiceVolume
+		want  []composemodel.ServiceVolume
+	}{
+		{
+			name:  "the same mounts",
+			first: []composemodel.ServiceVolume{anon("/cache"), bind("/logs")},
+			own:   []composemodel.ServiceVolume{anon("/cache"), bind("/logs")},
+		},
+		{
+			name:  "an extra anonymous volume is captured and comes back through the layer",
+			first: []composemodel.ServiceVolume{anon("/cache")},
+			own:   []composemodel.ServiceVolume{anon("/cache"), anon("/extra")},
+		},
+		{
+			name:  "a mount the replica lacks is given back by the spec",
+			first: []composemodel.ServiceVolume{anon("/cache"), bind("/logs")},
+			own:   []composemodel.ServiceVolume{anon("/cache")},
+		},
+		{
+			name:  "an extra bind is neither captured nor in the spec",
+			first: []composemodel.ServiceVolume{anon("/cache")},
+			own:   []composemodel.ServiceVolume{anon("/cache"), bind("/logs")},
+			want:  []composemodel.ServiceVolume{bind("/logs")},
+		},
+		{
+			name:  "a bind where the first has an anonymous volume",
+			first: []composemodel.ServiceVolume{anon("/cache")},
+			own:   []composemodel.ServiceVolume{bind("/cache")},
+			want:  []composemodel.ServiceVolume{bind("/cache")},
+		},
+		{
+			name:  "an anonymous volume where the first has a bind",
+			first: []composemodel.ServiceVolume{bind("/cache")},
+			own:   []composemodel.ServiceVolume{anon("/cache")},
+			want:  []composemodel.ServiceVolume{anon("/cache")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := undeclaredMounts(tt.first, tt.own)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// A compose project taken down is reported, not refused: no service, and the named
+// volumes `compose down` kept.
+func TestReader_Introspect_NoContainers(t *testing.T) {
+	oneoff := summary("c-web-run", "web", "nginx:1", 1)
+	oneoff.Labels[api.OneoffLabel] = "True"
+	hook := summary("c-web-hook", "web", "nginx:1", 0)
+	hook.Labels[api.HookLabel] = "pre_start"
+	delete(hook.Labels, api.ContainerNumberLabel)
+
+	tests := []struct {
+		name       string
+		containers []container.Summary
+	}{
+		{name: "the daemon holds none"},
+		{name: "only one-off containers are left", containers: []container.Summary{oneoff}},
+		{name: "only a failed pre_start hook is left", containers: []container.Summary{hook}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemon := &mockDockerAPI{}
+			daemon.expectContainers(tt.containers...)
+			daemon.expectVolumes(ownedVolume("demo_pgdata", "pgdata"))
+			daemon.expectNetworks()
+
+			// Act
+			introspection, err := NewReader(daemon, composeProject).Introspect(context.Background())
+
+			// Assert
+			require.NoError(t, err)
+			assert.Empty(t, introspection.Project.Services)
+			require.Len(t, introspection.Project.Volumes, 1)
+			assert.Equal(t, "demo_pgdata", introspection.Project.Volumes[0].Name)
+			assert.Empty(t, introspection.Project.Volumes[0].UsedBy)
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+func TestReader_Introspect_DaemonFailures(t *testing.T) {
+	daemonErr := errors.New("daemon refused")
+
+	tests := []struct {
+		name    string
+		setup   func(daemon *mockDockerAPI)
+		wantErr error  // daemonErr when nil
+		wantMsg string // the context the error carries
+	}{
+		{
+			name:    "listing containers",
+			wantMsg: `read containers of compose project "demo"`,
+			setup: func(daemon *mockDockerAPI) {
+				daemon.On("ContainerList", mock.Anything, mock.Anything).
+					Return([]container.Summary(nil), daemonErr).Once()
+			},
+		},
+		{
+			name:    "listing volumes",
+			wantMsg: `read volumes of compose project "demo"`,
+			setup: func(daemon *mockDockerAPI) {
+				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
+				daemon.On("VolumeList", mock.Anything, mock.Anything).
+					Return([]volume.Volume(nil), daemonErr).Once()
+			},
+		},
+		{
+			name:    "inspecting a container",
+			wantMsg: `read services of compose project "demo": service "db": inspect container c-db-1`,
+			setup: func(daemon *mockDockerAPI) {
+				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
+				daemon.expectVolumes()
+				daemon.On("ContainerInspect", mock.Anything, "c-db-1", client.ContainerInspectOptions{}).
+					Return(container.InspectResponse{}, daemonErr).Once()
+			},
+		},
+		{
+			name:    "inspecting a mounted volume",
+			wantMsg: `read services of compose project "demo": service "db": inspect volume "shared"`,
+			setup: func(daemon *mockDockerAPI) {
+				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1,
+					mountPoint(mount.TypeVolume, "shared", "", "/data", false)))
+				daemon.expectVolumes()
+				daemon.expectInspect("c-db-1")
+				daemon.On("VolumeInspect", mock.Anything, "shared", client.VolumeInspectOptions{}).
+					Return(volume.Volume{}, daemonErr).Once()
+			},
+		},
+		{
+			name:    "listing networks",
+			wantMsg: `read networks of compose project "demo"`,
+			setup: func(daemon *mockDockerAPI) {
+				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
+				daemon.expectVolumes()
+				daemon.expectInspect("c-db-1")
+				daemon.On("NetworkList", mock.Anything, mock.Anything).
+					Return([]network.Summary(nil), daemonErr).Once()
+			},
+		},
+		{
+			name:    "inspecting a container's image",
+			wantMsg: `read images of compose project "demo": inspect image ` + testImageID.String(),
+			setup: func(daemon *mockDockerAPI) {
+				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
+				daemon.expectVolumes()
+				daemon.expectInspect("c-db-1")
+				daemon.expectNetworks()
+				daemon.On("ImageInspect", mock.Anything, testImageID.String()).
+					Return(image.InspectResponse{}, daemonErr).Once()
+			},
+		},
+		{
+			name:    "a container's image the daemon does not hold",
+			wantMsg: `inspect image ` + testImageID.String(),
+			setup: func(daemon *mockDockerAPI) {
+				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
+				daemon.expectVolumes()
+				daemon.expectInspect("c-db-1")
+				daemon.expectNetworks()
+				daemon.On("ImageInspect", mock.Anything, testImageID.String()).
+					Return(image.InspectResponse{}, cerrdefs.ErrNotFound).Once()
+			},
+			wantErr: cerrdefs.ErrNotFound,
+		},
+		{
+			name:    "a container whose image is no id",
+			wantMsg: `read images of compose project "demo": image of container c-db-1`,
+			setup: func(daemon *mockDockerAPI) {
+				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
+				daemon.expectVolumes()
+				daemon.expectInspected(inspected("c-db-1", "busybox"))
+				daemon.expectNetworks()
+			},
+			wantErr: model.ErrInvalidDigestID,
+		},
+		{
+			name:    "inspecting a base image",
+			wantMsg: `inspect base image ` + testBaseImageID.String() + ` of image ` + testImageID.String(),
+			setup: func(daemon *mockDockerAPI) {
+				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
+				daemon.expectVolumes()
+				daemon.expectInspect("c-db-1")
+				daemon.expectNetworks()
+				daemon.expectImage(testImageID, map[string]string{string(model.SystemLabelBaseImageID): testBaseImageID.String()})
+				daemon.On("ImageInspect", mock.Anything, testBaseImageID.String()).
+					Return(image.InspectResponse{}, daemonErr).Once()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemon := &mockDockerAPI{}
+			tt.setup(daemon)
+
+			// Act
+			_, err := NewReader(daemon, composeProject).Introspect(context.Background())
+
+			// Assert
+			wantErr := tt.wantErr
+			if wantErr == nil {
+				wantErr = daemonErr
+			}
+			require.ErrorIs(t, err, wantErr)
+			assert.Contains(t, err.Error(), tt.wantMsg)
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+func TestReader_Introspect_Images(t *testing.T) {
+	labelledBase := map[string]string{string(model.SystemLabelBaseImageID): testBaseImageID.String()}
+
+	tests := []struct {
+		name     string
+		replicas []replica
+		images   map[model.ImageDigestID]map[string]string // inspected once each, with these labels
+		missing  []model.ImageDigestID                     // inspected once each, not found
+		want     []model.ImageDigestID
+	}{
+		{
+			name: "replicas and services on one image read it once",
+			replicas: []replica{
+				{id: "c-web-1", service: "web", image: testImageID.String()},
+				{id: "c-web-2", service: "web", image: testImageID.String()},
+				{id: "c-worker-1", service: "worker", image: testImageID.String()},
+			},
+			images: map[model.ImageDigestID]map[string]string{testImageID: nil},
+			want:   []model.ImageDigestID{testImageID},
+		},
+		{
+			name:     "a base named by the label is read",
+			replicas: []replica{{id: "c-web-1", service: "web", image: testImageID.String()}},
+			images:   map[model.ImageDigestID]map[string]string{testImageID: labelledBase, testBaseImageID: nil},
+			want:     []model.ImageDigestID{testImageID, testBaseImageID},
+		},
+		{
+			name: "a base a container already runs on is not read again",
+			replicas: []replica{
+				{id: "c-web-1", service: "web", image: testImageID.String()},
+				{id: "c-plain-1", service: "plain", image: testBaseImageID.String()},
+			},
+			images: map[model.ImageDigestID]map[string]string{testImageID: labelledBase, testBaseImageID: nil},
+			want:   []model.ImageDigestID{testImageID, testBaseImageID},
+		},
+		{
+			name:     "a base the daemon no longer holds is left out",
+			replicas: []replica{{id: "c-web-1", service: "web", image: testImageID.String()}},
+			images:   map[model.ImageDigestID]map[string]string{testImageID: labelledBase},
+			missing:  []model.ImageDigestID{testBaseImageID},
+			want:     []model.ImageDigestID{testImageID},
+		},
+		{
+			name:     "a label that is no id is not followed",
+			replicas: []replica{{id: "c-web-1", service: "web", image: testImageID.String()}},
+			images: map[model.ImageDigestID]map[string]string{
+				testImageID: {string(model.SystemLabelBaseImageID): "postgres:16"},
+			},
+			want: []model.ImageDigestID{testImageID},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemon := &mockDockerAPI{}
+			daemon.expectReplicas(tt.replicas...)
+			daemon.expectVolumes()
+			daemon.expectNetworks()
+			for id, labels := range tt.images {
+				daemon.expectImage(id, labels)
+			}
+			for _, id := range tt.missing {
+				daemon.On("ImageInspect", mock.Anything, id.String()).
+					Return(image.InspectResponse{}, cerrdefs.ErrNotFound).Once()
+			}
+
+			// Act
+			got, err := NewReader(daemon, composeProject).Introspect(context.Background())
+
+			// Assert
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tt.want, slices.Collect(maps.Keys(got.Images)))
+			for _, id := range tt.want {
+				assert.Equal(t, imageInspect(id, tt.images[id]), got.Images[id], "image %s verbatim", id)
+			}
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+func TestReader_Introspect_Volumes(t *testing.T) {
+	shared := volume.Volume{Name: "shared", Driver: "local"}
+	anonFirst := volume.Volume{Name: anonName, Labels: map[string]string{anonymousVolumeLabel: ""}}
+	anonSecond := volume.Volume{Name: "second-anon", Labels: map[string]string{anonymousVolumeLabel: ""}}
+
+	tests := []struct {
+		name     string
+		replicas []replica
+		owned    []volume.Volume
+		foreign  []volume.Volume // inspected once each
+		want     []volume.Volume
+	}{
+		{
+			name:     "the project's own volumes are indexed from the list",
+			replicas: []replica{{id: "c-db-1", service: "db", image: testImageID.String()}},
+			owned:    []volume.Volume{ownedVolume(ownedName, "pgdata"), ownedVolume("demo_orphan", "orphan")},
+			want:     []volume.Volume{ownedVolume(ownedName, "pgdata"), ownedVolume("demo_orphan", "orphan")},
+		},
+		{
+			name: "a foreign volume two services mount is read once",
+			replicas: []replica{
+				{id: "c-a-1", service: "a", image: testImageID.String(),
+					mounts: []container.MountPoint{mountPoint(mount.TypeVolume, "shared", "", "/a", false)}},
+				{id: "c-b-1", service: "b", image: testImageID.String(),
+					mounts: []container.MountPoint{mountPoint(mount.TypeVolume, "shared", "", "/b", false)}},
+			},
+			foreign: []volume.Volume{shared},
+			want:    []volume.Volume{shared},
+		},
+		{
+			name: "the anonymous volume of a second replica is read",
+			replicas: []replica{
+				{id: "c-web-1", service: "web", image: testImageID.String(),
+					mounts: []container.MountPoint{mountPoint(mount.TypeVolume, anonFirst.Name, "", "/cache", false)}},
+				{id: "c-web-2", service: "web", image: testImageID.String(),
+					mounts: []container.MountPoint{mountPoint(mount.TypeVolume, anonSecond.Name, "", "/cache", false)}},
+			},
+			foreign: []volume.Volume{anonFirst, anonSecond},
+			want:    []volume.Volume{anonFirst, anonSecond},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemon := &mockDockerAPI{}
+			daemon.expectReplicas(tt.replicas...)
+			daemon.expectVolumes(tt.owned...)
+			for _, v := range tt.foreign {
+				daemon.On("VolumeInspect", mock.Anything, v.Name, client.VolumeInspectOptions{}).Return(v, nil).Once()
+			}
+			daemon.expectNetworks()
+			daemon.expectImage(testImageID, nil)
+
+			want := make(map[string]volume.Volume, len(tt.want))
+			for _, v := range tt.want {
+				want[v.Name] = v
+			}
+
+			// Act
+			got, err := NewReader(daemon, composeProject).Introspect(context.Background())
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, want, got.Volumes)
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+// replica is one container of the compose project: its summary and its inspect agree on the mounts.
+type replica struct {
+	id, service, image string
+	mounts             []container.MountPoint
+}
+
+// summary builds the container the daemon reports for one replica.
+func summary(id, service, image string, number int, mounts ...container.MountPoint) container.Summary {
+	return container.Summary{
+		ID:    id,
+		Names: []string{"/" + id},
+		Image: image,
+		Labels: map[string]string{
+			api.ProjectLabel:         composeProject.String(),
+			api.ServiceLabel:         service,
+			api.ContainerNumberLabel: strconv.Itoa(number),
+		},
+		Mounts: mounts,
+	}
+}
+
+func mountPoint(t mount.Type, name, source, destination string, readOnly bool) container.MountPoint {
+	return container.MountPoint{
+		Type:        t,
+		Name:        name,
+		Source:      source,
+		Destination: destination,
+		RW:          !readOnly,
+	}
+}
+
+// inspected is what `docker container inspect` reports for one container.
+func inspected(id, imageID string, mounts ...container.MountPoint) container.InspectResponse {
+	return container.InspectResponse{
+		ID: id, Image: imageID,
+		Mounts: mounts,
+	}
+}
+
+// imageInspect is what `docker image inspect` reports for an image carrying labels.
+func imageInspect(id model.ImageDigestID, labels map[string]string) image.InspectResponse {
+	return image.InspectResponse{
+		ID:     id.String(),
+		Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Labels: labels}},
+	}
+}
+
+// ownedVolume is a volume compose created for the project, carrying its compose key.
+func ownedVolume(name, key string) volume.Volume {
+	return volume.Volume{Name: name, Labels: map[string]string{
+		api.ProjectLabel: composeProject.String(),
+		api.VolumeLabel:  key,
+	}}
+}
+
+type mockDockerAPI struct{ mock.Mock }
+
+func (m *mockDockerAPI) expectContainers(summaries ...container.Summary) {
+	m.On("ContainerList", mock.Anything, mock.MatchedBy(func(opts client.ContainerListOptions) bool {
+		return opts.All && len(opts.Filters["label"]) == 1
+	})).Return(summaries, nil).Once()
+}
+
+// expectInspect answers each container as running on testImageID.
+func (m *mockDockerAPI) expectInspect(ids ...string) {
+	for _, id := range ids {
+		m.expectInspected(inspected(id, testImageID.String()))
+	}
+}
+
+func (m *mockDockerAPI) expectInspected(responses ...container.InspectResponse) {
+	for _, r := range responses {
+		m.On("ContainerInspect", mock.Anything, r.ID, client.ContainerInspectOptions{}).Return(r, nil).Once()
+	}
+}
+
+// expectReplicas lists the replicas, numbered per service in order, and inspects each.
+func (m *mockDockerAPI) expectReplicas(replicas ...replica) {
+	numbers := map[string]int{}
+	summaries := make([]container.Summary, 0, len(replicas))
+	for _, r := range replicas {
+		numbers[r.service]++
+		summaries = append(summaries, summary(r.id, r.service, "img", numbers[r.service], r.mounts...))
+		m.expectInspected(inspected(r.id, r.image, r.mounts...))
+	}
+	m.expectContainers(summaries...)
+}
+
+func (m *mockDockerAPI) expectImage(id model.ImageDigestID, labels map[string]string) {
+	m.On("ImageInspect", mock.Anything, id.String()).Return(imageInspect(id, labels), nil).Once()
+}
+
+func (m *mockDockerAPI) expectVolumes(volumes ...volume.Volume) {
+	m.On("VolumeList", mock.Anything, mock.Anything).Return(volumes, nil).Once()
+}
+
+func (m *mockDockerAPI) expectNetworks(summaries ...network.Summary) {
+	m.On("NetworkList", mock.Anything, mock.Anything).Return(summaries, nil).Once()
+}
+
+func (m *mockDockerAPI) ContainerList(
+	ctx context.Context, opts client.ContainerListOptions,
+) (client.ContainerListResult, error) {
+	args := m.Called(ctx, opts)
+	summaries, _ := args.Get(0).([]container.Summary)
+	return client.ContainerListResult{Items: summaries}, args.Error(1)
+}
+
+func (m *mockDockerAPI) ContainerInspect(
+	ctx context.Context, id string, opts client.ContainerInspectOptions,
+) (client.ContainerInspectResult, error) {
+	args := m.Called(ctx, id, opts)
+	return client.ContainerInspectResult{Container: args.Get(0).(container.InspectResponse)}, args.Error(1)
+}
+
+func (m *mockDockerAPI) VolumeList(ctx context.Context, opts client.VolumeListOptions) (client.VolumeListResult, error) {
+	args := m.Called(ctx, opts)
+	volumes, _ := args.Get(0).([]volume.Volume)
+	return client.VolumeListResult{Items: volumes}, args.Error(1)
+}
+
+func (m *mockDockerAPI) VolumeInspect(
+	ctx context.Context, name string, opts client.VolumeInspectOptions,
+) (client.VolumeInspectResult, error) {
+	args := m.Called(ctx, name, opts)
+	return client.VolumeInspectResult{Volume: args.Get(0).(volume.Volume)}, args.Error(1)
+}
+
+func (m *mockDockerAPI) NetworkList(ctx context.Context, opts client.NetworkListOptions) (client.NetworkListResult, error) {
+	args := m.Called(ctx, opts)
+	summaries, _ := args.Get(0).([]network.Summary)
+	return client.NetworkListResult{Items: summaries}, args.Error(1)
+}
+
+func (m *mockDockerAPI) ImageInspect(
+	ctx context.Context, imageID string, _ ...client.ImageInspectOption,
+) (client.ImageInspectResult, error) {
+	args := m.Called(ctx, imageID)
+	return client.ImageInspectResult{InspectResponse: args.Get(0).(image.InspectResponse)}, args.Error(1)
+}
+
+func TestContainerName(t *testing.T) {
+	tests := []struct {
+		name  string
+		names []string
+		want  string
+	}{
+		{name: "none", names: nil, want: ""},
+		{name: "the own name", names: []string{"/demo-db-1"}, want: "demo-db-1"},
+		{
+			name:  "a legacy link target lists the link paths first",
+			names: []string{"/demo-app-1/demo-db-1", "/demo-app-1/database", "/demo-db-1"},
+			want:  "demo-db-1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := containerName(tt.names)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

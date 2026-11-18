@@ -37,10 +37,6 @@ const (
 	kindUp progress.Kind = "up"
 
 	kindDown progress.Kind = "down"
-
-	kindSessionRemove progress.Kind = "session.remove"
-	kindSessionLock   progress.Kind = "session.lock"
-	kindSessionFork   progress.Kind = "session.fork"
 )
 
 // runStep runs fn under a workflow step of kind, ended with fn's error.

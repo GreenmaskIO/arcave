@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // upForce is --force: drop what the daemon holds of the compose project first.
@@ -46,8 +47,8 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	ctx := cmd.Context()
-	var opened closers
-	defer opened.release(ctx)
+	var opened utils.Closers
+	defer opened.Release(ctx)
 
 	svc, err := openSavepointService(ctx, projectRoot, projectCfg, sessionRef, composeProject, &opened)
 	if err != nil {
@@ -57,7 +58,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
 		ref = args[0]
 	}
-	return cli.NewUpHandler(svc, loadRunOutput()).Up(ctx, projectCfg, ref, upForce)
+	return cli.NewUpHandler(svc, loadRunOutput()).Up(ctx, ref, upForce)
 }
 
 func init() {

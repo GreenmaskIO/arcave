@@ -12,7 +12,7 @@ Serves arcave's workflows as MCP tools.
 arcave mcp [--session <id|name>]
 ```
 
-No arguments and no flags of its own; `--session` is the [global flag](index.md#global-flags), and here it pins the server — see [Sessions](#sessions). The sixteen tools — four for savepoints, `up` and `down` for the environment, seven for sessions, `gc`, `status` and `compose_generate` — their arguments and their output shapes are in [MCP tools](../mcp_tools.md).
+No arguments and no flags of its own; `--session` is the [global flag](index.md#global-flags), and here it pins the server — see [Sessions](#sessions). The fifteen tools — four for savepoints, `up` and `down` for the environment, seven for sessions, `gc` and `status` — their arguments and their output shapes are in [MCP tools](../mcp_tools.md).
 
 `arcave mcp` takes no `-p/--project-name`: one server addresses many compose projects, and each tool call names the one it means. Every call wires the store and the daemon clients for the project it names and releases them when the call returns.
 
@@ -57,7 +57,7 @@ Start the server **in the project directory**: `.arcave/config.yaml` is resolved
 | Another arcave run holds the project lock | A call that changes something fails at once rather than queuing. |
 | An interrupted rollback is marked | Mutating calls are refused until it is resolved. |
 
-A tool call runs the same workflow the CLI runs, under the same rules: the project is stopped and started again, the project lock is claimed, and a failed rollback replays its safety snapshot. A rollback of a project that is not running takes the [cold-start path](rollback.md#rolling-back-a-project-that-is-not-running), with `rollback.leftover_volumes` from the config. `rollback.safety_snapshot` is the default for the `rollback` tool, whose `safety_snapshot` argument overrides it per call. A savepoint an agent takes is listed and applied by the CLI, and the reverse.
+A tool call runs the same workflow the CLI runs, under the same rules: the project is stopped and started again, the project lock is claimed, and a failed rollback replays its safety snapshot. A rollback of a project that is not running takes the [cold-start path](rollback.md#rolling-back-a-project-that-is-not-running), with `compose.leftover_volumes` from the config. `rollback.safety_snapshot` is the default for the `rollback` tool, whose `safety_snapshot` argument overrides it per call. A savepoint an agent takes is listed and applied by the CLI, and the reverse.
 
 ## Examples
 
@@ -84,4 +84,4 @@ arcave --log-format json mcp 2> arcave-mcp.log
 
 ## Next step
 
-[MCP tools](../mcp_tools.md) — the sixteen tools, their arguments and what they return.
+[MCP tools](../mcp_tools.md) — the fifteen tools, their arguments and what they return.

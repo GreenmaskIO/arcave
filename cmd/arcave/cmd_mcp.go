@@ -22,6 +22,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/cli"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 var mcpCmd = &cobra.Command{
@@ -58,7 +59,6 @@ func newMCPFactories() cli.MCPFactories {
 		Down:           mcpDownServiceFactory,
 		SavepointStore: mcpSavepointStoreServiceFactory,
 		Session:        mcpSessionServiceFactory,
-		Tools:          mcpToolsServiceFactory,
 		GC:             mcpGCServiceFactory,
 		Status:         mcpStatusServiceFactory,
 	}
@@ -69,13 +69,13 @@ func newMCPFactories() cli.MCPFactories {
 func mcpSavepointServiceFactory(
 	ctx context.Context, composeProject, sessionRef string,
 ) (cli.MCPSavepointService, func(), error) {
-	var opened closers
+	var opened utils.Closers
 	svc, err := openSavepointService(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
-		opened.release(ctx)
+		opened.Release(ctx)
 		return nil, nil, err
 	}
-	return svc, func() { opened.release(ctx) }, nil
+	return svc, func() { opened.Release(ctx) }, nil
 }
 
 // mcpDownServiceFactory wires down for a tool call's compose project and session ("" is the
@@ -83,13 +83,13 @@ func mcpSavepointServiceFactory(
 func mcpDownServiceFactory(
 	ctx context.Context, composeProject, sessionRef string,
 ) (cli.MCPDownService, func(), error) {
-	var opened closers
+	var opened utils.Closers
 	svc, err := openDownService(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
-		opened.release(ctx)
+		opened.Release(ctx)
 		return nil, nil, fmt.Errorf("init down dependencies: %w", err)
 	}
-	return svc, func() { opened.release(ctx) }, nil
+	return svc, func() { opened.Release(ctx) }, nil
 }
 
 // mcpSavepointStoreServiceFactory is mcpSavepointServiceFactory for a tool that reads or deletes
@@ -97,57 +97,46 @@ func mcpDownServiceFactory(
 func mcpSavepointStoreServiceFactory(
 	ctx context.Context, composeProject, sessionRef string,
 ) (cli.MCPSavepointStoreService, func(), error) {
-	var opened closers
+	var opened utils.Closers
 	svc, err := openSavepointStoreService(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
-		opened.release(ctx)
+		opened.Release(ctx)
 		return nil, nil, err
 	}
-	return svc, func() { opened.release(ctx) }, nil
+	return svc, func() { opened.Release(ctx) }, nil
 }
 
 // mcpSessionServiceFactory wires the session commands for one tool call.
 func mcpSessionServiceFactory(ctx context.Context) (cli.MCPSessionService, func(), error) {
-	var opened closers
+	var opened utils.Closers
 	svc, err := openSessionService(ctx, projectRoot, projectCfg, &opened)
 	if err != nil {
-		opened.release(ctx)
+		opened.Release(ctx)
 		return nil, nil, err
 	}
-	return svc, func() { opened.release(ctx) }, nil
-}
-
-// mcpToolsServiceFactory wires the tools commands for the compose project a tool call named.
-func mcpToolsServiceFactory(ctx context.Context, composeProject string) (cli.MCPToolsService, func(), error) {
-	var opened closers
-	svc, err := openComposeToolsService(ctx, projectCfg, model.DockerComposeProjectName(composeProject), &opened)
-	if err != nil {
-		opened.release(ctx)
-		return nil, nil, err
-	}
-	return svc, func() { opened.release(ctx) }, nil
+	return svc, func() { opened.Release(ctx) }, nil
 }
 
 // mcpGCServiceFactory wires the gc for the session a tool call named.
 func mcpGCServiceFactory(ctx context.Context, sessionRef string) (cli.MCPGCService, func(), error) {
-	var opened closers
+	var opened utils.Closers
 	svc, err := openGCService(ctx, projectRoot, projectCfg, sessionRef, &opened)
 	if err != nil {
-		opened.release(ctx)
+		opened.Release(ctx)
 		return nil, nil, err
 	}
-	return svc, func() { opened.release(ctx) }, nil
+	return svc, func() { opened.Release(ctx) }, nil
 }
 
 // mcpStatusServiceFactory wires the status of the compose project a tool call named.
 func mcpStatusServiceFactory(ctx context.Context, composeProject string) (cli.MCPStatusService, func(), error) {
-	var opened closers
+	var opened utils.Closers
 	svc, err := openStatusService(projectRoot, projectCfg, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
-		opened.release(ctx)
+		opened.Release(ctx)
 		return nil, nil, err
 	}
-	return svc, func() { opened.release(ctx) }, nil
+	return svc, func() { opened.Release(ctx) }, nil
 }
 
 func init() {

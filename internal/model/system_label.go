@@ -72,9 +72,4 @@ var deploymentLabels = []SystemLabel{
 	SystemLabelDeploymentServiceReplicas,
 }
 
-// NewMountStampLabel is the capture stamp of the volume or bind a service mounts at target.
-func NewMountStampLabel(target string) SystemLabel {
-	return SystemLabel(CaptureStampLabelPrefix + "mount." + target)
-}
-
 func (m SystemLabel) String() string { return string(m) }

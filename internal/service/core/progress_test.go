@@ -16,7 +16,6 @@ package core
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -90,7 +89,7 @@ func TestService_CreateSavepointProgress(t *testing.T) {
 		stages.expectCommit(demoRecord(), nil).Run(openStep("stage.commit")),
 		stages.expectRelease(0, nil).Run(openStep("stage.release")),
 	)
-	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+	svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 
 	// Act
 	_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
@@ -134,7 +133,7 @@ func TestService_Rollback_Progress(t *testing.T) {
 		// rollback.cleanup is an activity: a provider warns on it and opens no step under it.
 		stages.target.expectReap(),
 	)
-	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+	svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
@@ -197,81 +196,4 @@ func TestService_RemoveSavepoints_Progress(t *testing.T) {
 	}, recorder.ended)
 	locker.AssertExpectations(t)
 	savepoints.AssertExpectations(t)
-}
-
-// A lost lock cancels the work under it, and the root, opened outside the lock, carries why.
-func TestWithSessionLock_LostLockCancelsTheWork(t *testing.T) {
-	// Arrange
-	ctx, recorder := newProgressContext()
-	locker := &mockSessionLocker{}
-	grantedLock := &mockGrantedSessionLock{lostCause: model.ErrSessionLockLost}
-	locker.On("Lock", mock.Anything, model.SessionLockOperationSavepointCreate).Return(grantedLock, nil).Once()
-	grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
-	ctx, root := progress.Begin(ctx, progress.Step{Kind: kindSavepointCreate})
-
-	// Act
-	_, err := withSessionLock(ctx, locker, model.SessionLockOperationSavepointCreate,
-		func(ctx context.Context, _ model.GrantedSessionLock) (string, error) {
-			_, step := progress.Run(ctx, progress.Step{Kind: "stage.teardown"})
-			err := preferInterrupt(ctx, errWorkflow)
-			step.End(err)
-			return "", err
-		})
-	root.End(err)
-
-	// Assert
-	require.ErrorIs(t, err, model.ErrSessionLockLost)
-	require.Len(t, recorder.ended, 2)
-	assert.Equal(t, "savepoint.create/stage.teardown cancelled", recorder.ended[0])
-	assert.True(t, strings.HasPrefix(recorder.ended[1], "savepoint.create failed error=interrupted: "),
-		"the cause is on the root: %s", recorder.ended[1])
-	assert.Contains(t, recorder.ended[1], model.ErrSessionLockLost.Error())
-	locker.AssertExpectations(t)
-	grantedLock.AssertExpectations(t)
-}
-
-// The lock's step is shown only once the locker waits on another holder.
-func TestWithSessionLock_ShowsTheWaitOnlyWhenHeld(t *testing.T) {
-	tests := []struct {
-		name string
-		held bool
-		want []string
-	}{
-		{
-			name: "a free lock shows nothing, so the lazy root never opens",
-		},
-		{
-			name: "a held lock shows the wait",
-			held: true,
-			want: []string{"savepoint.create/session.lock succeeded", "savepoint.create succeeded"},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			ctx, recorder := newProgressContext()
-			locker := &mockSessionLocker{}
-			grantedLock := &mockGrantedSessionLock{}
-			locker.On("Lock", mock.Anything, model.SessionLockOperationSavepointCreate).
-				Run(func(args mock.Arguments) {
-					if tt.held {
-						progress.Current(args.Get(0).(context.Context)).Warn("waiting: held by rollback")
-					}
-				}).
-				Return(grantedLock, nil).Once()
-			grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
-			ctx, root := progress.Begin(ctx, progress.Step{Kind: kindSavepointCreate})
-
-			// Act
-			_, err := withSessionLock(ctx, locker, model.SessionLockOperationSavepointCreate,
-				func(context.Context, model.GrantedSessionLock) (string, error) { return "", nil })
-			root.End(err)
-
-			// Assert
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, recorder.ended)
-			locker.AssertExpectations(t)
-			grantedLock.AssertExpectations(t)
-		})
-	}
 }

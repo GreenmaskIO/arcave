@@ -25,6 +25,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -69,11 +70,12 @@ func (s *Service) createSavepoint(
 
 	plan, err := s.prepare(ctx)
 	if err != nil {
-		logInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
+		workflow.LogInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
 		return model.Savepoint{}, preferInterrupt(ctx, err)
 	}
 
-	return captureHeld(ctx, grantedLock, plan, provider.CaptureRequest{
+	return s.captureHeld(ctx, grantedLock, plan, provider.CaptureRequest{
+		ID:          model.NewSavepointID(),
 		Name:        req.Name,
 		Description: req.Description,
 		Labels:      req.Labels,
@@ -81,9 +83,10 @@ func (s *Service) createSavepoint(
 	}, req.WaitTimeout)
 }
 
-// captureHeld holds the project, captures it and releases it on every path; the hold's or the
-// capture's error wins, a release failing under it is only logged. On error the record is zero.
-func captureHeld(
+// captureHeld holds the project, captures it and releases it on every path, a heartbeat in the
+// savepoint's tree framing the hold and the capture; the hold's or the capture's error wins, a
+// release failing under it is only logged. On error the record is zero.
+func (s *Service) captureHeld(
 	ctx context.Context,
 	grantedLock model.GrantedSessionLock,
 	plan provider.CapturePlan,
@@ -92,18 +95,26 @@ func captureHeld(
 ) (model.Savepoint, error) {
 	var (
 		log                             = zerolog.Ctx(ctx)
+		beatCtx                         context.Context
+		beat                            savepointHeartbeat
 		held                            provider.HeldWorkload
 		savepoint                       model.Savepoint
+		err                             error
 		beforeErr, captureErr, afterErr error
 	)
-	if held, beforeErr = plan.Hold(ctx); beforeErr != nil {
+	if beatCtx, beat, err = s.startSavepointHeartbeat(ctx, req.ID); err != nil {
+		workflow.LogInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
+		return model.Savepoint{}, fmt.Errorf("capturing the savepoint: %w", preferInterrupt(ctx, err))
+	}
+	if held, beforeErr = plan.Hold(beatCtx); beforeErr != nil {
 		// A hold that failed or was interrupted partway may have held some services.
-		logInterrupt(ctx, "savepoint interrupted while holding the services: resuming them, nothing captured")
-	} else if savepoint, captureErr = commitCaptured(ctx, grantedLock, held, req); captureErr != nil {
-		logInterrupt(ctx, "savepoint interrupted during capture: resuming the services, nothing committed")
+		beforeErr = beat.fail(ctx, beatCtx, beforeErr)
+		workflow.LogInterrupt(ctx, "savepoint interrupted while holding the services: resuming them, nothing captured")
+	} else if savepoint, captureErr = captureAndCommit(ctx, beatCtx, beat, grantedLock, held, req); captureErr != nil {
+		workflow.LogInterrupt(ctx, "savepoint interrupted during capture: resuming the services, nothing committed")
 		captureErr = preferInterrupt(ctx, captureErr)
 	} else {
-		logInterrupt(ctx, "savepoint committed before the interrupt: resuming the services")
+		workflow.LogInterrupt(ctx, "savepoint committed before the interrupt: resuming the services")
 	}
 	afterErr = releaseHeld(ctx, plan, waitTimeout)
 
@@ -124,21 +135,29 @@ func captureHeld(
 	return savepoint, nil
 }
 
-// commitCaptured captures what held holds and commits it while the session's lock is still this
-// workflow's; a lost lock abandons the capture. On error the record is zero.
-func commitCaptured(
-	ctx context.Context, grantedLock model.GrantedSessionLock, held provider.HeldWorkload, req provider.CaptureRequest,
+// captureAndCommit captures what held holds on beatCtx and commits it while beat is alive and the
+// session's lock still this workflow's. On error the record is zero and beat failed.
+func captureAndCommit(
+	ctx, beatCtx context.Context,
+	beat savepointHeartbeat,
+	grantedLock model.GrantedSessionLock,
+	held provider.HeldWorkload,
+	req provider.CaptureRequest,
 ) (model.Savepoint, error) {
-	captured, err := held.Capture(ctx, req)
+	captured, err := held.Capture(beatCtx, req)
 	if err != nil {
-		return model.Savepoint{}, err
+		return model.Savepoint{}, beat.fail(ctx, beatCtx, err)
 	}
-	if err := grantedLock.Verify(ctx); err != nil {
-		err = fmt.Errorf("commit savepoint %s: %w", captured.ID(), err)
-		captured.Abandon(ctx, err)
-		return model.Savepoint{}, err
+	var savepoint model.Savepoint
+	commit := func(ctx context.Context) error {
+		var err error
+		savepoint, err = captured.Commit(ctx)
+		return err
 	}
-	return captured.Commit(ctx)
+	if err := beat.run.Commit(ctx, grantedLock.Verify, commit); err != nil {
+		return model.Savepoint{}, beat.fail(ctx, beatCtx, fmt.Errorf("commit savepoint %s: %w", req.ID, err))
+	}
+	return savepoint, nil
 }
 
 // requireUniqueName refuses a name another of the visible savepoints carries. Safety

@@ -32,8 +32,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -58,7 +58,7 @@ volumes:
 
 // hooksEnv is a compose project and an arcave project over it, driven by the binary.
 type hooksEnv struct {
-	*imageRollbackEnv
+	*composeProject
 	root string
 }
 
@@ -72,7 +72,7 @@ type arcaveRun struct {
 func newHooksEnv(t *testing.T, replicas int, labels map[string]string) *hooksEnv {
 	t.Helper()
 
-	env := newImageRollbackEnv(t)
+	env := newComposeProject(t, "hooks")
 	var rendered []string
 	for _, key := range slices.Sorted(maps.Keys(labels)) {
 		rendered = append(rendered, fmt.Sprintf("      %s: %s", strconv.Quote(key), strconv.Quote(labels[key])))
@@ -83,15 +83,15 @@ func newHooksEnv(t *testing.T, replicas int, labels map[string]string) *hooksEnv
 
 // newBinaryEnv is an arcave project over env's compose project, storing to a directory by fullcopy;
 // bringing the compose project up is the caller's.
-func newBinaryEnv(t *testing.T, env *imageRollbackEnv) *hooksEnv {
+func newBinaryEnv(t *testing.T, env *composeProject) *hooksEnv {
 	t.Helper()
 
 	root := t.TempDir()
 	runArcave(t, root, nil, "init", "--name", env.project)
-	writeStorageConfig(t, root, startDirectoryStorage(t).file, config.SnapshotBackendFullCopy)
+	writeStorageConfig(t, root, startDirectoryStorage(t).file, composeconfig.SnapshotBackendFullCopy)
 	return &hooksEnv{
-		imageRollbackEnv: env,
-		root:             root,
+		composeProject: env,
+		root:           root,
 	}
 }
 
@@ -420,7 +420,8 @@ func TestSavepoint_PreHookSkippedOnPausedReplica(t *testing.T) {
 		"arcave.hook.pre-capture":  "touch /tmp/pre",
 		"arcave.hook.post-capture": "touch /tmp/post",
 	})
-	require.NoError(t, env.engine().PauseContainers(env.ctx, []string{env.replica(t, 2)}))
+	_, err := env.daemon.ContainerPause(env.ctx, env.replica(t, 2), client.ContainerPauseOptions{})
+	require.NoError(t, err)
 
 	// Act
 	run := env.arcave(t, nil, "--progress", "json", "savepoint", "create", "sp1")
@@ -513,35 +514,4 @@ func TestSavepoint_InvalidHookLabelStopsNothing(t *testing.T) {
 	assert.Contains(t, string(run.stderr),
 		`arcave.hook.pre-capture.timeout="5" on service app: want a positive Go duration, e.g. 30s: time: missing unit in duration "5"`)
 	assert.Equal(t, before.State.StartedAt, after.State.StartedAt)
-}
-
-// An exec keeps its streams apart and reports its exit; a replica frozen, stopped or gone is
-// model.ErrContainerNotRunning, whichever engine says it how.
-func TestEngine_ExecInContainer(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	env := newHooksEnv(t, 3, nil)
-	engine := newRuntimeProfile(t, env.daemon).engine
-	running, paused, stopped := env.replica(t, 1), env.replica(t, 2), env.replica(t, 3)
-	require.NoError(t, engine.PauseContainers(env.ctx, []string{paused}))
-	t.Cleanup(func() { _ = engine.UnpauseContainers(env.ctx, []string{paused}) })
-	_, err := env.daemon.ContainerStop(env.ctx, stopped, client.ContainerStopOptions{})
-	require.NoError(t, err)
-
-	// Act
-	result, runErr := engine.ExecInContainer(env.ctx, running, model.ExecSpec{
-		Cmd:  []string{"sh", "-c", "echo out; echo err >&2; exit 3"},
-		User: "nobody",
-	})
-	_, pausedErr := engine.ExecInContainer(env.ctx, paused, model.ExecSpec{Cmd: []string{"true"}})
-	_, stoppedErr := engine.ExecInContainer(env.ctx, stopped, model.ExecSpec{Cmd: []string{"true"}})
-	_, goneErr := engine.ExecInContainer(env.ctx, "arcave-no-such-container", model.ExecSpec{Cmd: []string{"true"}})
-
-	// Assert
-	require.NoError(t, runErr)
-	assert.Equal(t, model.ExecResult{ExitCode: 3, Stdout: []byte("out\n"), Stderr: []byte("err\n")}, result)
-	assert.ErrorIs(t, pausedErr, model.ErrContainerNotRunning)
-	assert.ErrorIs(t, stoppedErr, model.ErrContainerNotRunning)
-	assert.ErrorIs(t, goneErr, model.ErrContainerNotRunning)
 }

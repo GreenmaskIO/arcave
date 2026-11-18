@@ -11,6 +11,7 @@ linters:
   enable:
     - errcheck
     - govet
+    - importas
     - ineffassign
     - recvcheck
     - staticcheck
@@ -51,6 +52,21 @@ linters:
         - (*hash/maphash.Hash).Write
         - (*hash/maphash.Hash).WriteByte
         - (*hash/maphash.Hash).WriteString
+    importas:
+      # The compose provider's own model shares its package name with internal/model, which
+      # nearly every importer of it also imports.
+      no-unaliased: true
+      alias:
+        - pkg: github.com/greenmaskio/arcave/internal/provider/compose/internal/model
+          alias: composemodel
+        # The compose client shares its package name with the provider root that wires it.
+        - pkg: github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose
+          alias: composeclient
+        - pkg: github.com/greenmaskio/arcave/internal/provider/compose/config
+          alias: composeconfig
+        # The REST backend's model shares its package name with internal/model.
+        - pkg: github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model
+          alias: restmodel
     recvcheck:
       # ImageDigestID and SessionID must mix: an unmarshaler has to take a pointer
       # to write through, while every other method reads. The exclusions name the
@@ -73,10 +89,10 @@ linters:
       - path: ^internal/utils/testutils/
         linters:
           - errcheck
-      - path: ^internal/service/backend/restic/rest/modeltest/
+      - path: ^internal/provider/compose/internal/service/volumebackend/cdc/rest/modeltest/
         linters:
           - errcheck
-      - path: ^internal/provider/compose/utils/composetest/
+      - path: ^internal/provider/compose/internal/utils/composetest/
         linters:
           - errcheck
       - path: ^pkg/common/mocks/

@@ -22,7 +22,7 @@ No variable reaches the file `arcave init` writes — it is a template of the de
 
 ## `ARCAVE_COMPOSE_PROJECT_NAME`
 
-The compose project `savepoint create`, `savepoint list`, `savepoint remove`, `rollback` and `tools generate-compose` act on — the same thing `-p/--project-name` names, as `docker compose ls` shows it, and beaten by it. It is not a config key: one directory may hold several compose projects. `gc` ignores it, since it covers every compose project of a session.
+The compose project `savepoint create`, `savepoint list`, `savepoint remove` and `rollback` act on — the same thing `-p/--project-name` names, as `docker compose ls` shows it, and beaten by it. It is not a config key: one directory may hold several compose projects. `gc` ignores it, since it covers every compose project of a session.
 
 ```shell title="Name the compose project once per shell"
 export ARCAVE_COMPOSE_PROJECT_NAME=myapp

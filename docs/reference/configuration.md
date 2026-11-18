@@ -21,6 +21,7 @@ compose:
     wait_timeout: 2m0s
     stop_timeout: 10s
     progress: log
+    leftover_volumes: overwrite
 storage:
     type: directory
     directory:
@@ -40,7 +41,6 @@ capture:
         bind: true
         anonymous: true
 rollback:
-    leftover_volumes: overwrite
     safety_snapshot: true
 gc:
     safety_snapshots:
@@ -136,13 +136,14 @@ initialise docker client: docker.cert_file is set but docker.key_file is missing
 
 ## `compose`
 
-How patient arcave is with the project, and how loudly compose reports its own progress.
+How patient arcave is with the project, how loudly compose reports its own progress, and what a rollback does with volumes a taken-down project left behind.
 
 | Key | Flag | Default | Description |
 |---|---|---|---|
 | `compose.wait_timeout` | `--wait-timeout` | `2m0s` | How long to wait for services to become healthy after a start. |
 | `compose.stop_timeout` | `--stop-timeout` | `10s` | The least time a container gets to exit on its own before it is killed; a service's `stop_grace_period` raises it. |
 | `compose.progress` | `--compose-progress` | `log` | Where compose's own progress goes: `log`, `tty` or `quiet`. |
+| `compose.leftover_volumes` | — | `overwrite` | What a rollback does when the compose project has no containers but still owns named volumes the savepoint restores into: `overwrite` them, each named in the result's warnings and `leftover_volumes`, or `refuse`. |
 
 **`wait_timeout` must be positive.** "Wait forever" is not on offer: it is exactly the failure this bound exists to turn into an error, since a crash-looping container with `restart: always` would otherwise hold a savepoint open indefinitely.
 
@@ -168,6 +169,16 @@ All three keep compose off stdout, which carries the result and nothing else.
 
 ```text
 unsupported compose.progress "loud" (supported: log, tty, quiet)
+```
+
+**`leftover_volumes` matters only for a compose project that is not running** — never started, or taken down with `docker compose down`, which leaves named volumes behind. A running project is always overwritten; that is what a rollback is for. [`arcave up`](cli/up.md) ignores the key: a leftover volume always refuses an `up`, unless `--force` drops it. `refuse` fails before anything is created:
+
+```text
+compose project is not running but its volumes survive: myapp_pgdata
+```
+
+```text
+unsupported compose.leftover_volumes "keep" (supported: overwrite, refuse)
 ```
 
 ## `storage`
@@ -397,18 +408,7 @@ These are the defaults a label overrides: `capture.volumes.bind: false` with `ar
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `rollback.leftover_volumes` | string | `overwrite` | What a rollback does when the compose project has no containers but still owns named volumes the savepoint restores into: `overwrite` them, each named in the result's warnings and `leftover_volumes`, or `refuse`. |
 | `rollback.safety_snapshot` | bool | `true` | Whether a rollback of a running project captures its live volumes and writable layers first. `false` captures neither: it is faster, but what the containers wrote to their own filesystem and the volumes hold is gone for good, nothing can undo the rollback, and after a failure the project stays as it is, and refused, until the same rollback is run again. `--no-safety-snapshot` and `--safety-snapshot` override it per command, the `safety_snapshot` argument of the MCP tool per call. |
-
-`rollback.leftover_volumes` matters only for a compose project that is not running — never started, or taken down with `docker compose down`, which leaves named volumes behind. A running project is always overwritten; that is what a rollback is for. [`arcave up`](cli/up.md) ignores the key: a leftover volume always refuses an `up`, unless `--force` drops it. `refuse` fails before anything is created:
-
-```text
-compose project is not running but its volumes survive: myapp_pgdata
-```
-
-```text
-unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)
-```
 
 ## `gc`
 

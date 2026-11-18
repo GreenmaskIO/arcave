@@ -82,15 +82,6 @@ type MCPSessionService interface {
 // MCPSessionServiceFactory builds the session commands, plus the release the tool call invokes on return.
 type MCPSessionServiceFactory func(ctx context.Context) (svc MCPSessionService, release func(), err error)
 
-// MCPToolsService is the MCP adapter's view of the tools commands.
-type MCPToolsService interface {
-	GenerateCompose(ctx context.Context, req model.GenerateComposeRequest) (model.GenerateComposeResponse, error)
-}
-
-// MCPToolsServiceFactory builds the tools commands for one compose project, plus the release the
-// tool call invokes on return; they open no store and resolve no session.
-type MCPToolsServiceFactory func(ctx context.Context, composeProject string) (svc MCPToolsService, release func(), err error)
-
 // MCPGCService is the MCP adapter's view of gc.
 type MCPGCService interface {
 	GarbageCollect(ctx context.Context, req model.GarbageCollectRequest) (model.GarbageCollectResult, error)
@@ -115,7 +106,6 @@ type MCPFactories struct {
 	Down           MCPDownServiceFactory
 	SavepointStore MCPSavepointStoreServiceFactory
 	Session        MCPSessionServiceFactory
-	Tools          MCPToolsServiceFactory
 	GC             MCPGCServiceFactory
 	Status         MCPStatusServiceFactory
 }
@@ -266,11 +256,6 @@ const (
 		"current_source says which: source flag or env for the pin the server was started with, pointer for the " +
 		"current session session_set made, default for none; overrides names the session the pin hides, " +
 		"when it hides another. Fails when the current session no longer exists; session_unset or session_set repairs it."
-	descComposeGenerate = "Generate a docker compose file for a running compose project, from what the Docker " +
-		"daemon reports about its containers, volumes and networks — for a project whose compose file is lost, " +
-		"or was never written. Read-only: nothing is stopped or written, and the file is returned as spec. " +
-		"Bind sources under the project's working directory are relative (./…) unless absolute_paths is set. " +
-		"The file carries every environment value the containers run with, secrets included."
 	descGC = "Report the garbage arcave left in one session's store and in the Docker daemon; with dry_run " +
 		"false, delete it. Nothing runs it for you: call it after a rollback, or periodically. Each compose " +
 		"project keeps its newest safety snapshots, the project's gc.safety_snapshots.retain_recent, and " +
@@ -500,34 +485,6 @@ func (h *MCPHandler) downMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in 
 		return nil, model.DownResult{}, h.mcpError(deploymentError(err, mcpDeploymentFixHints))
 	}
 	return nil, res, nil
-}
-
-// composeGenerateInput is compose_generate's input schema.
-type composeGenerateInput struct {
-	ComposeProject string `json:"compose_project" jsonschema:"the docker compose project to generate the file of, as docker compose ls names it"`
-	AbsolutePaths  bool   `json:"absolute_paths,omitempty" jsonschema:"keep every bind source absolute instead of relative to the project's working directory"`
-}
-
-// composeGenerateOutput is the compose file and what it declares.
-type composeGenerateOutput struct {
-	ComposeProject model.DockerComposeProjectName `json:"compose_project" jsonschema:"the compose project the file describes"`
-	Services       []string                       `json:"services" jsonschema:"the services the file declares, sorted"`
-	Spec           string                         `json:"spec" jsonschema:"the compose file, as YAML"`
-}
-
-// generateComposeMCP returns the compose file of a running compose project.
-func (h *MCPHandler) generateComposeMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in composeGenerateInput) (*mcpsdk.CallToolResult, composeGenerateOutput, error) {
-	svc, release, err := h.openToolsService(ctx, in.ComposeProject)
-	if err != nil {
-		return nil, composeGenerateOutput{}, err
-	}
-	defer release()
-
-	generated, err := svc.GenerateCompose(ctx, model.GenerateComposeRequest{AbsolutePaths: in.AbsolutePaths})
-	if err != nil {
-		return nil, composeGenerateOutput{}, composeProjectAbsentError(err, "the compose_project argument")
-	}
-	return nil, composeGenerateOutput{ComposeProject: generated.ComposeProject, Services: generated.Services, Spec: string(generated.Spec)}, nil
 }
 
 // gcInput is gc's input schema; dry_run left out is true, kinds every one.
@@ -795,15 +752,6 @@ func (h *MCPHandler) openSessionService(ctx context.Context) (MCPSessionService,
 	return svc, release, nil
 }
 
-// openToolsService builds the tools commands for composeProject, for one tool call.
-func (h *MCPHandler) openToolsService(ctx context.Context, composeProject string) (MCPToolsService, func(), error) {
-	svc, release, err := h.factories.Tools(ctx, composeProject)
-	if err != nil {
-		return nil, nil, h.mcpError(err)
-	}
-	return svc, release, nil
-}
-
 // mcpError names what holds the project or session lock, so an agent waits instead of retrying blind,
 // and adds the fix to a current-session error as this server can take it.
 func (h *MCPHandler) mcpError(err error) error {
@@ -869,7 +817,6 @@ func (h *MCPHandler) Server() *mcpsdk.Server {
 		OutputSchema: newOutputSchema[model.Session]()}, h.setSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_unset", Description: descSessionUnset,
 		OutputSchema: newOutputSchema[model.Session]()}, h.unsetSessionMCP)
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "compose_generate", Description: descComposeGenerate}, h.generateComposeMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:         "status",
 		Description:  descStatus,

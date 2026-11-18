@@ -26,7 +26,7 @@ type CreateSavepointRequest struct {
 	Name        string            // savepoint name
 	Description string            // savepoint description
 	Labels      map[string]string // marks carried into the record and on to every backend
-	WaitTimeout time.Duration     // bounds the health check on restart; <= 0 lets the compose runner apply its default
+	WaitTimeout time.Duration     // bounds the health check on restart; <= 0 is the provider's default
 }
 
 // Validate refuses a name carrying "/", which a <session>/<savepoint> address splits on,

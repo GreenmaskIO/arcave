@@ -17,8 +17,6 @@ package test
 import (
 	"bytes"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -176,7 +174,7 @@ func TestRollback_PostgresStoppedAroundHooks(t *testing.T) {
 func newHookedPostgres(t *testing.T, mode string) *hookedPostgres {
 	t.Helper()
 
-	env := newImageRollbackEnv(t)
+	env := newComposeProject(t, "pghooks")
 	env.upDocument(t, fmt.Sprintf(postgresHooksSpec, env.project, mode))
 	binary := newBinaryEnv(t, env)
 	db := env.container(t, "db")
@@ -268,12 +266,9 @@ func TestSavepoint_DocumentedPostgresHook(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
-	env := newImageRollbackEnv(t)
-	path := filepath.Join(t.TempDir(), "compose.yaml")
-	require.NoError(t, os.WriteFile(path, fmt.Appendf(nil, documentedHookSpec, env.project), 0o600))
-	project := loadComposeFile(t, path)
-	require.NoError(t, env.compose.Create(env.ctx, project, nil))
-	require.NoError(t, env.compose.Start(env.ctx, project, 90*time.Second))
+	env := newComposeProject(t, "pghooks")
+	// `docker compose` interpolates the file as it does the user's.
+	env.upDocument(t, fmt.Sprintf(documentedHookSpec, env.project))
 	binary := newBinaryEnv(t, env)
 	env.waitPostgres(t)
 	db := env.container(t, "db")
@@ -292,7 +287,7 @@ func TestSavepoint_DocumentedPostgresHook(t *testing.T) {
 }
 
 // psql runs sql in db's first replica and returns its unaligned output.
-func (e *imageRollbackEnv) psql(t *testing.T, sql string) string {
+func (e *composeProject) psql(t *testing.T, sql string) string {
 	t.Helper()
 
 	return strings.TrimSpace(e.exec(t, e.container(t, "db"), "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-tAc", sql))
@@ -300,7 +295,7 @@ func (e *imageRollbackEnv) psql(t *testing.T, sql string) string {
 
 // psqlOrEmpty runs sql in the container, empty when it fails; it never fails the test, so it is
 // safe inside Eventually.
-func (e *imageRollbackEnv) psqlOrEmpty(containerID, sql string) string {
+func (e *composeProject) psqlOrEmpty(containerID, sql string) string {
 	outcome := e.tryExec(containerID, "psql", "-U", "postgres", "-tAc", sql)
 	if outcome.err != nil || outcome.exitCode != 0 {
 		return ""
@@ -309,7 +304,7 @@ func (e *imageRollbackEnv) psqlOrEmpty(containerID, sql string) string {
 }
 
 // waitPostgres waits for db's postgres to take queries.
-func (e *imageRollbackEnv) waitPostgres(t *testing.T) {
+func (e *composeProject) waitPostgres(t *testing.T) {
 	t.Helper()
 
 	db := e.container(t, "db")
@@ -327,7 +322,7 @@ type execOutcome struct {
 }
 
 // tryExec runs one command inside a container and reports how it ended, failing nothing.
-func (e *imageRollbackEnv) tryExec(containerID string, cmd ...string) execOutcome {
+func (e *composeProject) tryExec(containerID string, cmd ...string) execOutcome {
 	created, err := e.daemon.ExecCreate(e.ctx, containerID, client.ExecCreateOptions{
 		Cmd:          cmd,
 		AttachStdout: true,
@@ -357,7 +352,7 @@ func (e *imageRollbackEnv) tryExec(containerID string, cmd ...string) execOutcom
 }
 
 // containerLogs is everything the container wrote to stdout and stderr.
-func (e *imageRollbackEnv) containerLogs(t *testing.T, containerID string) string {
+func (e *composeProject) containerLogs(t *testing.T, containerID string) string {
 	t.Helper()
 
 	logs, err := e.daemon.ContainerLogs(e.ctx, containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})

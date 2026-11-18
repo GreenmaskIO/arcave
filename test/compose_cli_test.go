@@ -31,8 +31,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
-	"github.com/greenmaskio/arcave/internal/config"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -58,7 +58,7 @@ const volumeDriftSpec = `
 name: %[1]s
 services:
   app:
-    image: ` + busyboxImage + `
+    image: ` + daemontest.BusyboxImage + `
     command: ["sleep", "infinity"]
     stop_signal: SIGKILL
     volumes: ["data:/data", "kept:/kept"]
@@ -75,12 +75,12 @@ func TestRollback_KeepsComposeImageLabel(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
-	daemon := newDaemonClient(t)
+	daemon := daemontest.NewClient(t)
 	requireComposeCLI(t, minComposeCLIVersion)
 	requireContainerdStore(t, daemon)
-	project := "arcave-compose-cli-it-" + randomSuffix(t)
+	project := "arcave-compose-cli-it-" + daemontest.RandomSuffix(t)
 	dir := t.TempDir()
-	t.Cleanup(func() { removeComposeProject(t, daemon, project) })
+	t.Cleanup(func() { daemontest.RemoveComposeProject(t, daemon, project) })
 	writeComposeFile(t, dir, fmt.Sprintf(imageLabelSpec, project))
 	runComposeCLI(t, dir, project, "up", "-d", "--wait")
 	container := project + "-app-1"
@@ -88,7 +88,7 @@ func TestRollback_KeepsComposeImageLabel(t *testing.T) {
 	require.NotEmpty(t, want, "compose labels the container with its image")
 	projectRoot := t.TempDir()
 	runArcave(t, projectRoot, nil, "init", "--name", project)
-	writeStorageConfig(t, projectRoot, startDirectoryStorage(t).file, config.SnapshotBackendFullCopy)
+	writeStorageConfig(t, projectRoot, startDirectoryStorage(t).file, composeconfig.SnapshotBackendFullCopy)
 	noLayers := []string{"ARCAVE_CAPTURE_WRITABLE_LAYERS=false"}
 	runArcave(t, projectRoot, noLayers, "-p", project, "savepoint", "create", "sp1")
 
@@ -105,26 +105,25 @@ func TestRollback_RecreatesOnlyARestoredVolume(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
-	daemon := newDaemonClient(t)
+	daemon := daemontest.NewClient(t)
 	requireComposeCLI(t, minComposeCLIVersion)
-	engine := dockerclient.NewEngine(daemon)
-	project := "arcave-volume-drift-it-" + randomSuffix(t)
+	project := "arcave-volume-drift-it-" + daemontest.RandomSuffix(t)
 	data, kept := project+"_data", project+"_kept"
 	dir := t.TempDir()
-	t.Cleanup(func() { removeComposeProject(t, daemon, project) })
+	t.Cleanup(func() { daemontest.RemoveComposeProject(t, daemon, project) })
 	writeComposeFile(t, dir, fmt.Sprintf(volumeDriftSpec, project, "a"))
 	runComposeCLI(t, dir, project, "up", "-d", "--wait")
-	busybox(t, engine, data, "printf a > /data/marker")
-	busybox(t, engine, kept, "printf a > /data/marker")
+	busybox(t, daemon, data, "printf a > /data/marker")
+	busybox(t, daemon, kept, "printf a > /data/marker")
 	projectRoot := t.TempDir()
 	runArcave(t, projectRoot, nil, "init", "--name", project)
-	writeStorageConfig(t, projectRoot, startDirectoryStorage(t).file, config.SnapshotBackendFullCopy)
+	writeStorageConfig(t, projectRoot, startDirectoryStorage(t).file, composeconfig.SnapshotBackendFullCopy)
 	runArcave(t, projectRoot, nil, "-p", project, "savepoint", "create", "sp1")
 	runComposeCLI(t, dir, project, "down")
 	writeComposeFile(t, dir, fmt.Sprintf(volumeDriftSpec, project, "b"))
 	runComposeCLI(t, dir, project, "up", "-d", "--wait", "--yes")
-	busybox(t, engine, data, "printf b > /data/marker")
-	busybox(t, engine, kept, "printf b > /data/marker")
+	busybox(t, daemon, data, "printf b > /data/marker")
+	busybox(t, daemon, kept, "printf b > /data/marker")
 
 	// Act
 	out := runArcave(t, projectRoot, nil, "-p", project, "--progress", "json", "rollback", "sp1")
@@ -135,9 +134,9 @@ func TestRollback_RecreatesOnlyARestoredVolume(t *testing.T) {
 	assert.Equal(t, map[string]progress.Kind{kept: "compose.create"}, events.warned,
 		"the volume left with its config is warned of by name, on compose's create")
 	assert.Equal(t, "a", readVolumeLabel(t, daemon, data, "test.variant"), "the restored volume is the savepoint's")
-	assert.Equal(t, "a", busybox(t, engine, data, "cat /data/marker"))
+	assert.Equal(t, "a", busybox(t, daemon, data, "cat /data/marker"))
 	assert.Equal(t, "b", readVolumeLabel(t, daemon, kept, "test.variant"), "the volume not restored is kept")
-	assert.Equal(t, "b", busybox(t, engine, kept, "cat /data/marker"))
+	assert.Equal(t, "b", busybox(t, daemon, kept, "cat /data/marker"))
 }
 
 // progressEvents are the resources a --progress json stream warned of, by the kind of the step
@@ -181,12 +180,16 @@ func readProgressEvents(t *testing.T, out []byte) progressEvents {
 	}
 }
 
-// requireComposeCLI skips unless the docker CLI's compose plugin is at least minVersion.
+// requireComposeCLI skips unless the docker CLI's compose plugin is at least minVersion. No plugin
+// at all fails the test under CI, so a run without it cannot pass by skipping.
 func requireComposeCLI(t *testing.T, minVersion string) {
 	t.Helper()
 
 	out, err := exec.Command("docker", "compose", "version", "--short").Output()
-	if err != nil {
+	switch {
+	case err != nil && os.Getenv("CI") != "":
+		t.Fatalf("no docker compose CLI: %v", err)
+	case err != nil:
 		t.Skipf("skipping: no docker compose CLI: %v", err)
 	}
 	version := strings.TrimPrefix(strings.TrimSpace(string(out)), "v")

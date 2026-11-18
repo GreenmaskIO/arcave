@@ -31,9 +31,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // statusSpec is a compose project with a healthchecked service publishing a port, a scaled one, and
@@ -42,7 +43,7 @@ const statusSpec = `
 name: %[1]s
 services:
   db:
-    image: ` + busyboxImage + `
+    image: ` + daemontest.BusyboxImage + `
     command: ["sleep", "3600"]
     stop_signal: SIGKILL
     ports: ["127.0.0.1::5432"]
@@ -52,16 +53,16 @@ services:
       retries: 3
     volumes: ["data:/data"]
   web:
-    image: ` + busyboxImage + `
+    image: ` + daemontest.BusyboxImage + `
     command: ["sleep", "3600"]
     stop_signal: SIGKILL
     deploy:
       replicas: 2
   migrate:
-    image: ` + busyboxImage + `
+    image: ` + daemontest.BusyboxImage + `
     command: ["true"]
   app:
-    image: ` + busyboxImage + `
+    image: ` + daemontest.BusyboxImage + `
     command: ["sleep", "3600"]
     stop_signal: SIGKILL
     depends_on:
@@ -75,7 +76,7 @@ const statusArcaveProject = "arcave-status-it"
 
 // statusEnv is a compose project run from statusSpec and an arcave project over it.
 type statusEnv struct {
-	*imageRollbackEnv
+	*composeProject
 	projectRoot string
 	storeDir    string
 	document    string
@@ -85,18 +86,18 @@ type statusEnv struct {
 func newStatusEnv(t *testing.T, env ...string) *statusEnv {
 	t.Helper()
 
-	compose := newImageRollbackEnv(t)
+	compose := newComposeProject(t, "status-it")
 	storage := startDirectoryStorage(t).file
 	statusEnv := &statusEnv{
-		imageRollbackEnv: compose,
-		projectRoot:      t.TempDir(),
-		storeDir:         storage.Directory.Path,
-		document:         fmt.Sprintf(statusSpec, compose.project),
-		env:              env,
+		composeProject: compose,
+		projectRoot:    t.TempDir(),
+		storeDir:       storage.Directory.Path,
+		document:       fmt.Sprintf(statusSpec, compose.project),
+		env:            env,
 	}
 	runArcave(t, statusEnv.projectRoot, env, "init", "--name", statusArcaveProject)
 	writeStorageConfigWith(t, statusEnv.projectRoot, storage,
-		storageE2EBackend{name: config.SnapshotBackendFullCopy, backend: config.SnapshotBackendFullCopy}, len(env) > 0)
+		storageE2EBackend{name: composeconfig.SnapshotBackendFullCopy, backend: composeconfig.SnapshotBackendFullCopy}, len(env) > 0)
 	compose.upDocument(t, statusEnv.document)
 	return statusEnv
 }

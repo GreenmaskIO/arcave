@@ -14,52 +14,6 @@
 
 package model
 
-// LayerOrigin is the arcave project and compose project a writable layer was committed under.
-type LayerOrigin struct {
-	ArcaveProject  ArcaveProjectName
-	ComposeProject DockerComposeProjectName
-}
-
-// Labels spells the origin out as the labels a commit stamps.
-func (m LayerOrigin) Labels() map[string]string {
-	return map[string]string{
-		string(SystemLabelArcaveProject):  m.ArcaveProject.String(),
-		string(SystemLabelComposeProject): m.ComposeProject.String(),
-	}
-}
-
-// ParseLayerOrigin reads the origin an image's labels name; ok is false unless both are set.
-func ParseLayerOrigin(labels map[string]string) (LayerOrigin, bool) {
-	origin := LayerOrigin{
-		ArcaveProject:  ArcaveProjectName(labels[string(SystemLabelArcaveProject)]),
-		ComposeProject: DockerComposeProjectName(labels[string(SystemLabelComposeProject)]),
-	}
-	if origin.ArcaveProject == "" || origin.ComposeProject == "" {
-		return LayerOrigin{}, false
-	}
-	return origin, true
-}
-
-// ContainerRef names one replica of one service. Replica is
-// com.docker.compose.container-number, counted from 1.
-type ContainerRef struct {
-	Service string // compose service name
-	Replica int    // replica number, from 1
-	ID      string // container id
-	Name    string // container name, without the leading slash
-	// The upstream: the image the compose file named; empty when it can no longer
-	// be traced.
-	UpstreamImageID  ImageDigestID // sha256 digest of the upstream's config
-	UpstreamImageRef string        // the upstream's name, e.g. postgres:16; never a digest
-}
-
-// WritableLayerCaptureRequest is one commit-and-store, addressed by savepoint and container.
-type WritableLayerCaptureRequest struct {
-	SnapshotID SavepointID
-	Container  ContainerRef
-	Backend    ImageBackendKind
-}
-
 // WritableLayer is one container's writable layer, committed and stored. It
 // travels in the savepoint record, so its json tags are the wire contract.
 type WritableLayer struct {
@@ -85,16 +39,7 @@ type WritableLayer struct {
 	StoredBytes int64 `json:"stored_bytes,omitempty"`
 }
 
-// WritableLayerRestoreRequest is one load-and-tag, addressed by the savepoint that holds
-// the layer. Tag is the docker reference the committed image is to answer to in the
-// local daemon.
-type WritableLayerRestoreRequest struct {
-	SnapshotID SavepointID
-	Layer      WritableLayer
-	Tag        string
-}
-
-// WritableLayerRestoreResult is what a WritableLayerRestoreRequest put back into the daemon:
+// WritableLayerRestoreResult is what a writable-layer restore put back into the daemon:
 // ImageID is the committed image, Tag the docker reference the rebuilt compose project names
 // it by. It travels in the rollback response, so its json tags are the wire contract.
 type WritableLayerRestoreResult struct {
@@ -103,11 +48,4 @@ type WritableLayerRestoreResult struct {
 	ContainerName string        `json:"container_name"`
 	ImageID       ImageDigestID `json:"image_id"`
 	Tag           string        `json:"tag"`
-}
-
-// ReplicaIdentity is who a rebuilt container is to be: the name and the
-// com.docker.compose.container-number a savepoint recorded for it.
-type ReplicaIdentity struct {
-	Name   string
-	Number int
 }

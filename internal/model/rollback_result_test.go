@@ -47,13 +47,13 @@ func TestRollbackResult_Notices(t *testing.T) {
 				{
 					Message: "volume shop_pgdata outlived the compose project's containers and was overwritten: " +
 						"no safety snapshot holds what it held",
-					Hint:   "rollback.leftover_volumes: refuse refuses such a rollback before anything is written",
+					Hint:   "compose.leftover_volumes: refuse refuses such a rollback before anything is written",
 					Severe: true,
 				},
 				{
 					Message: "volume shop_cache outlived the compose project's containers and was overwritten: " +
 						"no safety snapshot holds what it held",
-					Hint:   "rollback.leftover_volumes: refuse refuses such a rollback before anything is written",
+					Hint:   "compose.leftover_volumes: refuse refuses such a rollback before anything is written",
 					Severe: true,
 				},
 				layers,
