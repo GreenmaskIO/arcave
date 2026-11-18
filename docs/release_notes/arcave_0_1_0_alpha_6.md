@@ -33,6 +33,7 @@ arcave 0.1.0-alpha.6 was released on 2026-11-18. Take a savepoint without restar
 
 - **gc deletes retired safety snapshots last.** It picks the ones past `gc.safety_snapshots.retain_recent` in a new `gc.retain` step, after every collector has looked, and deletes them after every compose project's other kinds. Shared data only a retired one used is collected by the next run. See [arcave gc](../reference/cli/gc.md).
 - **Under the hood, arcave now runs its workflows over a provider contract**, with docker compose as the one provider behind it. Savepoint records and command results are unchanged.
+- **`github.com/greenmaskio/storages` 0.5.1**, with the AWS SDK of the `s3` storage at `aws-sdk-go-v2` 1.48.0 and `service/s3` 1.114.10.
 
 ## Fixes
 
