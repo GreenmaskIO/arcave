@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package projectinit writes a project's arcave config, the one workflow of `arcave init`.
+// Package projectinit writes an arcave project's config, the one workflow of `arcave init`.
 package projectinit
 
 import (
@@ -22,7 +22,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 )
 
-// configWriter persists the project config. Only Init uses it: every other
+// configWriter persists the arcave project's config. Only Init uses it: every other
 // command takes a resolved config.Config by value.
 type configWriter interface {
 	Exists() (bool, error)
@@ -30,14 +30,14 @@ type configWriter interface {
 	Path() string
 }
 
-// Service creates a project's arcave metadata. It writes one file and holds
+// Service creates an arcave project's metadata. It writes one file and holds
 // nothing else: no storage, no snapshot backend, no daemon and no compose project.
 type Service struct {
 	projectRoot  string
 	configWriter configWriter
 }
 
-// New wires a Service for the project rooted at projectRoot.
+// New wires a Service for the arcave project rooted at projectRoot.
 func New(projectRoot string, writer configWriter) *Service {
 	return &Service{
 		projectRoot:  projectRoot,

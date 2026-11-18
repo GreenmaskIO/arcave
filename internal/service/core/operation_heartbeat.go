@@ -68,13 +68,17 @@ func (b operationHeartbeat) finish(ctx context.Context) {
 	b.cancel(nil)
 }
 
-// fail marks the stopped heartbeat failed and leaves the tree to a gc. A lost heartbeat is
-// returned in place of cause, the symptom it caused.
-func (b operationHeartbeat) fail(ctx, beatCtx context.Context, cause error) error {
-	if lost := context.Cause(beatCtx); errors.Is(lost, model.ErrHeartbeatLost) {
-		cause = lost
-	}
+// fail marks the stopped heartbeat failed with cause and leaves the tree to a gc.
+func (b operationHeartbeat) fail(ctx context.Context, cause error) {
 	b.worker.Fail(ctx, cause)
 	b.cancel(nil)
-	return cause
+}
+
+// preferHeartbeatLost returns the lost heartbeat that cancelled beatCtx in place of err, the
+// symptom it caused; err otherwise.
+func preferHeartbeatLost(beatCtx context.Context, err error) error {
+	if lost := context.Cause(beatCtx); errors.Is(lost, model.ErrHeartbeatLost) {
+		return lost
+	}
+	return err
 }

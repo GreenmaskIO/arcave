@@ -696,19 +696,27 @@ func (s *SessionService) forkSession(ctx context.Context, grantedLock model.Gran
 	copied, err := s.sessions.CopySession(copyCtx, source, session.ID, heartbeat.FileName)
 	beat.stop()
 	if err != nil {
-		return abandonFork(ctx, copyCtx, beat, session.ID, fmt.Errorf("cloning session %s: %w", source, err))
+		err = fmt.Errorf("cloning session %s: %w", source, preferHeartbeatLost(copyCtx, err))
+		abandonFork(ctx, beat, session.ID, err)
+		return err
 	}
 	zerolog.Ctx(ctx).Info().Str("session", session.ID.String()).Str("from", source.String()).
 		Int64("copied_bytes", copied).Msg("session cloned")
 
 	if err := beat.alive(); err != nil {
-		return abandonFork(ctx, copyCtx, beat, session.ID, fmt.Errorf("committing session %s: %w", session.ID, err))
+		err = fmt.Errorf("committing session %s: %w", session.ID, err)
+		abandonFork(ctx, beat, session.ID, err)
+		return err
 	}
 	if err := grantedLock.Verify(ctx); err != nil {
-		return abandonFork(ctx, copyCtx, beat, session.ID, fmt.Errorf("committing session %s: %w", session.ID, err))
+		err = fmt.Errorf("committing session %s: %w", session.ID, err)
+		abandonFork(ctx, beat, session.ID, err)
+		return err
 	}
 	if err := s.sessions.SaveSession(ctx, session); err != nil {
-		return abandonFork(ctx, copyCtx, beat, session.ID, fmt.Errorf("committing session %s: %w", session.ID, err))
+		err = fmt.Errorf("committing session %s: %w", session.ID, err)
+		abandonFork(ctx, beat, session.ID, err)
+		return err
 	}
 	beat.finish(ctx)
 	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Msg("fork committed")
@@ -728,11 +736,10 @@ func (s *SessionService) requireEmptyForkTree(ctx context.Context, id model.Sess
 }
 
 // abandonFork marks an uncommitted fork's heartbeat failed and logs its tree, the only pointer
-// left to it. A lost heartbeat is returned in place of cause, the symptom it caused.
-func abandonFork(ctx, copyCtx context.Context, beat operationHeartbeat, id model.SessionID, cause error) error {
-	cause = beat.fail(ctx, copyCtx, cause)
+// left to it.
+func abandonFork(ctx context.Context, beat operationHeartbeat, id model.SessionID, cause error) {
+	beat.fail(ctx, cause)
 	logForkAbandoned(ctx, id)
-	return cause
 }
 
 // logForkAbandoned logs an uncommitted fork's tree, the only pointer left to it.

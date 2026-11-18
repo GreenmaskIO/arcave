@@ -35,9 +35,8 @@ import (
 )
 
 // Observe reads the compose project's replicas as the daemon runs them, the deployment each
-// carries and the services another waits on to complete, nothing they mount or run on; it refuses
-// no daemon. None means never started or taken down. A container gone between the listing and its
-// inspect is left out, its service too.
+// carries and the services another waits on to complete; it refuses no daemon. None means never
+// started or taken down.
 func (s *Reader) Observe(ctx context.Context) (provider.ObservedWorkload, error) {
 	listed, err := s.listContainers(ctx)
 	if err != nil {
@@ -55,6 +54,7 @@ func (s *Reader) Observe(ctx context.Context) (provider.ObservedWorkload, error)
 				name, s.composeProject, err)
 		}
 		if len(containers) == 0 {
+			// Every container of the service went between the listing and its inspect.
 			continue
 		}
 		services = append(services, provider.ObservedService{

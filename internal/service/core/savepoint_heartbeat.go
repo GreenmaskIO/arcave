@@ -87,7 +87,8 @@ func (b savepointHeartbeat) abandon(ctx, beatCtx context.Context, cause error) e
 // fail marks the stopped heartbeat failed and leaves the tree to a gc. A lost heartbeat is
 // returned in place of cause, the symptom it caused.
 func (b savepointHeartbeat) fail(ctx, beatCtx context.Context, cause error) error {
-	cause = b.operationHeartbeat.fail(ctx, beatCtx, cause)
+	cause = preferHeartbeatLost(beatCtx, cause)
+	b.operationHeartbeat.fail(ctx, cause)
 	logCaptureRetained(ctx, b.id)
 	return cause
 }

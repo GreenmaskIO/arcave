@@ -25,13 +25,13 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
-// OneShotRunner runs one helper container to completion.
-type OneShotRunner interface {
+// oneShotRunner runs one helper container to completion.
+type oneShotRunner interface {
 	RunOneShot(ctx context.Context, spec composemodel.OneShotSpec) error
 }
 
 // Busybox runs script in a busybox container with volume mounted at /data and returns its stdout.
-func Busybox(t *testing.T, runner OneShotRunner, volume, script string) string {
+func Busybox(t *testing.T, runner oneShotRunner, volume, script string) string {
 	t.Helper()
 
 	var stdout, stderr bytes.Buffer
