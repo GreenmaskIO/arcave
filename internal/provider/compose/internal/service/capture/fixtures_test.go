@@ -15,24 +15,14 @@
 package capture
 
 import (
-	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
-
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
-// The compose project every capture test runs against: one service with one replica.
-const (
-	demoProject     = "demo"
-	demoService     = "db"
-	demoVolumeName  = "demo_db"
-	demoContainerID = "c0ffee"
-	demoBaseImage   = "postgres:16"
-	demoUpstreamID  = model.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
-)
+// demoVolumeName is the named volume of composetest.DemoService every capture test takes.
+const demoVolumeName = "demo_db"
 
 // demoSpecBytes is the artifact every capture test writes.
 var demoSpecBytes = []byte("name: demo\n")
@@ -46,32 +36,9 @@ func demoVolume() model.Volume {
 	}
 }
 
-// demoContainerRef is demoService's one replica, as a capture request addresses it.
-func demoContainerRef() composemodel.ContainerRef {
-	return composemodel.ContainerRef{
-		Service: demoService, Replica: 1, ID: demoContainerID, Name: demoContainerName(1),
-		UpstreamImageID: demoUpstreamID, UpstreamImageRef: demoBaseImage,
-	}
-}
-
-// demoContainerName is the name compose gives replica n of demoService.
-func demoContainerName(n int) string {
-	return fmt.Sprintf("%s-%s-%d", demoProject, demoService, n)
-}
-
-// demoImageCaptureRequest is the one upstream demoContainerRef runs on.
-func demoImageCaptureRequest() composemodel.ImageCaptureRequest {
-	return composemodel.ImageCaptureRequest{
-		Image: model.Image{
-			ID: demoUpstreamID, Refs: []string{demoBaseImage}, RepoDigests: []string{"postgres@sha256:dd"}, SizeBytes: 1 << 20,
-		},
-		ExistsInDaemon: true,
-	}
-}
-
 // demoImage is what the backend reports for demoImageCaptureRequest.
 func demoImage() model.Image {
-	image := demoImageCaptureRequest().Image
+	image := composetest.DemoImageCaptureRequest().Image
 	image.Stored = true
 	image.StoredBytes = 512
 	return image

@@ -35,14 +35,14 @@ import (
 // demoWritableLayer is what the backend reports for demoContainerRef's layer.
 func demoWritableLayer() model.WritableLayer {
 	return model.WritableLayer{
-		Service:          demoService,
+		Service:          composetest.DemoService,
 		Replica:          1,
-		ContainerID:      demoContainerID,
-		ContainerName:    demoContainerName(1),
+		ContainerID:      composetest.DemoContainerID,
+		ContainerName:    composetest.DemoContainerName(1),
 		CommittedImageID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		ImageBackend:     model.ImageBackendDedupCopy,
-		UpstreamImageID:  demoUpstreamID,
-		UpstreamImageRef: demoBaseImage,
+		UpstreamImageID:  composetest.DemoUpstreamID,
+		UpstreamImageRef: composetest.DemoBaseImage,
 		SizeBytes:        4096,
 	}
 }
@@ -52,9 +52,9 @@ func demoImagePlan(backend model.VolumeSnapshotBackend) composemodel.Plan {
 	return composemodel.Plan{
 		Spec:           demoSpecBytes,
 		Volumes:        []model.VolumeSnapshotBackend{backend},
-		Images:         []composemodel.ImageCaptureRequest{demoImageCaptureRequest()},
-		WritableLayers: []composemodel.WritableLayerCaptureRequest{{Container: demoContainerRef()}},
-		Containers:     []composemodel.ContainerRef{demoContainerRef()},
+		Images:         []composemodel.ImageCaptureRequest{composetest.DemoImageCaptureRequest()},
+		WritableLayers: []composemodel.WritableLayerCaptureRequest{{Container: composetest.DemoContainerRef()}},
+		Containers:     []composemodel.ContainerRef{composetest.DemoContainerRef()},
 	}
 }
 
@@ -74,13 +74,13 @@ func TestCapturer_Capture_CommitsTheImagesAndWritableLayers(t *testing.T) {
 		},
 		{
 			name:   "a savepoint taken before another is restored, a container killed",
-			killed: []string{demoContainerID},
+			killed: []string{composetest.DemoContainerID},
 			req: provider.CaptureRequest{
 				Labels:      map[string]string{"team": "core"},
 				TakenBefore: target,
 			},
 			wantNotCovered: &model.NotCovered{KilledContainers: []model.KilledContainer{
-				{Service: demoService, Replica: 1, Container: "demo-db-1"},
+				{Service: composetest.DemoService, Replica: 1, Container: "demo-db-1"},
 			}},
 		},
 	}
@@ -94,12 +94,12 @@ func TestCapturer_Capture_CommitsTheImagesAndWritableLayers(t *testing.T) {
 				Run(func(args mock.Arguments) { id = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
 				Return(stat, nil).Once()
 			images := &composetest.MockImageBackend{}
-			image := images.On("CaptureImage", mock.Anything, demoImageCaptureRequest()).
+			image := images.On("CaptureImage", mock.Anything, composetest.DemoImageCaptureRequest()).
 				Return(demoImage(), nil).Once()
 			// The id is read at match time, set by the volume's capture that runs first.
 			layer := images.On("CaptureWritableLayer", mock.Anything,
 				mock.MatchedBy(func(req composemodel.WritableLayerCaptureRequest) bool {
-					return req.SnapshotID == id && req.Container == demoContainerRef()
+					return req.SnapshotID == id && req.Container == composetest.DemoContainerRef()
 				})).
 				Return(demoWritableLayer(), nil).Once()
 			repo := &composetest.MockSavepointRepo{}
@@ -155,7 +155,7 @@ func TestCapturer_Capture_FailedImageCaptureCommitsNothing(t *testing.T) {
 		{
 			name:     "an image",
 			imageErr: errBoom,
-			wantErr:  "capture image " + string(demoUpstreamID) + ": daemon refused",
+			wantErr:  "capture image " + string(composetest.DemoUpstreamID) + ": daemon refused",
 		},
 		{
 			name:     "a writable layer",
@@ -172,7 +172,7 @@ func TestCapturer_Capture_FailedImageCaptureCommitsNothing(t *testing.T) {
 				Run(func(args mock.Arguments) { id = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
 				Return(model.SnapshotStat{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy}, nil).Once()
 			images := &composetest.MockImageBackend{}
-			image := images.On("CaptureImage", mock.Anything, demoImageCaptureRequest()).
+			image := images.On("CaptureImage", mock.Anything, composetest.DemoImageCaptureRequest()).
 				Return(demoImage(), tt.imageErr).Once()
 			if tt.imageErr == nil {
 				layer := images.On("CaptureWritableLayer", mock.Anything,
@@ -203,9 +203,9 @@ func TestCapturer_Capture_FailedImageCaptureCommitsNothing(t *testing.T) {
 // An image the backend could not store is a warning the result repeats, never a failure.
 func TestCapturer_Capture_ImageNotStoredWarns(t *testing.T) {
 	// Arrange
-	notStored := demoImageCaptureRequest().Image
+	notStored := composetest.DemoImageCaptureRequest().Image
 	images := &composetest.MockImageBackend{}
-	images.On("CaptureImage", mock.Anything, demoImageCaptureRequest()).Return(notStored, nil).Once()
+	images.On("CaptureImage", mock.Anything, composetest.DemoImageCaptureRequest()).Return(notStored, nil).Once()
 	repo := &composetest.MockSavepointRepo{}
 	repo.On("SaveSpec", mock.Anything, mock.MatchedBy(func(id model.SavepointID) bool { return id.Validate() == nil }), demoSpecBytes).
 		Return(nil).Once()
@@ -218,7 +218,7 @@ func TestCapturer_Capture_ImageNotStoredWarns(t *testing.T) {
 	})
 	plan := composemodel.Plan{
 		Spec:   demoSpecBytes,
-		Images: []composemodel.ImageCaptureRequest{demoImageCaptureRequest()},
+		Images: []composemodel.ImageCaptureRequest{composetest.DemoImageCaptureRequest()},
 	}
 	recorder := &composetest.WarnedRecorder{}
 	now := func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }
