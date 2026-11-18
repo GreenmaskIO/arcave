@@ -21,6 +21,8 @@ Global flags are declared on the root command, so `arcave savepoint create --wai
 | [`savepoint list`](savepoint_list.md) | Prints the project's committed savepoints. |
 | [`savepoint remove`](savepoint_remove.md) | Deletes savepoints by id or name, or by retention rules. |
 | [`rollback`](rollback.md) | Returns the environment to a savepoint, selected by id, by name, or by `latest`. |
+| [`up`](up.md) | Brings the environment up from a savepoint where nothing of it runs; `--force` drops what is there first. |
+| [`down`](down.md) | Ends the environment arcave deployed: containers, networks, its volumes and its restored layer tags. |
 | [`session`](session.md) | Creates, lists, removes and switches sessions — the independent lines of savepoints inside a project: `create`, `list`, `show`, `remove`, `set`, `unset`, `current`. |
 | [`gc`](gc.md) | Finds and deletes the garbage arcave left in a session's store and in the Docker daemon. |
 | [`mcp`](mcp.md) | Serves the workflows above as MCP tools for an agent. |
@@ -77,11 +79,11 @@ no compose project named: pass -p/--project-name, or set ARCAVE_COMPOSE_PROJECT_
 
 ## What a command needs
 
-`savepoint create`, `savepoint list`, `savepoint remove` and `rollback` need:
+`savepoint create`, `savepoint list`, `savepoint remove`, `rollback`, `up` and `down` need:
 
 * **An initialised project.** Without `.arcave/config.yaml`: `config is not found: run 'arcave init' if not yet initialized`.
 * **A named compose project**, as above.
-* **A reachable daemon**, for `savepoint create` and `rollback` only. They contact it while they wire themselves up, before any workflow starts, and ask which engine it is. `savepoint list` and `savepoint remove` read and delete in the store alone and reach no daemon.
+* **A reachable daemon**, for `savepoint create`, `rollback`, `up` and `down` only. The first three contact it while they wire themselves up, before any workflow starts, and ask which engine it is; `down` reads and removes alike on every engine and asks nothing. `savepoint list` and `savepoint remove` read and delete in the store alone and reach no daemon.
 
 The `session` commands need only the initialised project: they name no compose project and reach no daemon, `session create --from` included — a fork copies a session's savepoints and deploys nothing. `mcp` needs the initialised project; each tool call names its compose project. `gc` needs the initialised project and works on a session: it refuses `-p`. It reaches the daemon only for the `restored-layers` and `deduplicated-volumes` kinds. `status` needs the initialised project, a named compose project and a reachable daemon; it reads the store only to add the deployed savepoint's record, and a store it cannot read does not fail it.
 
@@ -91,9 +93,9 @@ The `session` commands need only the initialised project: they name no compose p
 compose project "myapp": no containers found: bring the compose project up once, or name another project with -p
 ```
 
-`rollback` does not: a compose project with no containers — never started, or taken down — is built from the savepoint's own spec. See [Rolling back a project that is not running](rollback.md#rolling-back-a-project-that-is-not-running).
+`rollback` does not: a compose project with no containers — never started, or taken down — is built from the savepoint's own spec. See [Rolling back a project that is not running](rollback.md#rolling-back-a-project-that-is-not-running). [`up`](up.md) needs the opposite: nothing of the compose project on the daemon, which [`down`](down.md) makes sure of.
 
-Every command that changes something — `savepoint create`, `rollback`, `savepoint remove`, `gc` (`--dry-run` included), `session create`, `session remove`, `session set`, `session unset` — claims a non-blocking lock on `.arcave/lock`. A second one against the same project fails at once rather than queuing:
+Every command that changes something — `savepoint create`, `rollback`, `up`, `down`, `savepoint remove`, `gc` (`--dry-run` included), `session create`, `session remove`, `session set`, `session unset` — claims a non-blocking lock on `.arcave/lock`. A second one against the same project fails at once rather than queuing:
 
 ```text
 another arcave command is already running in this project

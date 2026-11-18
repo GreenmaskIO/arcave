@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **`arcave up` and `arcave down`.** `down` ends the environment on the daemon — containers, networks, the volumes it owns, its containers' anonymous volumes and its restored layer tags — once every replica's deployment labels name this session; bind mounts and external volumes stay, and it takes no savepoint. `up [savepoint]` builds the compose project from a savepoint, the newest by default, and is refused while the daemon holds anything of it. `--force` takes down an environment someone else deployed and clears this compose project's interrupted-rollback marker on `down`, and drops everything of the compose project first, with no backup, on `up`. See [arcave up](https://www.greenmask.io/docs/arcave/reference/cli/up/) and [arcave down](https://www.greenmask.io/docs/arcave/reference/cli/down/).
+- **The `up` and `down` MCP tools**, with the arguments of the commands and the same refusals, their hints in the tools' own terms. Both are marked destructive.
+
 ## v0.1.0-alpha.5 — 2026-11-11
 
 See what a compose project runs and which savepoint a rollback put there, look into one session, and name a safety snapshot by the rollback it was taken before.

@@ -118,7 +118,7 @@ func TestHeld_Teardown(t *testing.T) {
 		runner.On("Stop", mock.Anything, composetest.DemoSpec).Return([]string(nil), nil).Once(),
 		runner.On("Down", mock.Anything, composetest.DemoSpec).Return(nil).Once(),
 		runner.On("Down", mock.Anything, composetest.DemoSpec).Return(nil).Once(),
-		inspector.On("Introspect", mock.Anything).Return(now, nil).Once(),
+		inspector.On("ReadResources", mock.Anything).Return(composetest.ResourcesOfVolumes(now), nil).Once(),
 		remover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once(),
 	)
 	svc := newComposeWorkload(Deps{ComposeRunner: runner, ComposeReader: inspector, VolumeRemover: remover})

@@ -237,3 +237,51 @@ func builtReplica() container.InspectResponse {
 		},
 	}
 }
+
+// A container a drop removes goes running or not, its anonymous volumes with it.
+func TestEngine_RemoveContainer(t *testing.T) {
+	// Arrange
+	api := &mockAPI{}
+	api.On("ContainerRemove", mock.Anything, "demo-app-run", client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}).
+		Return(nil).Once()
+	e := &Engine{api: api}
+
+	// Act
+	err := e.RemoveContainer(context.Background(), "demo-app-run")
+
+	// Assert
+	require.NoError(t, err)
+	api.AssertExpectations(t)
+}
+
+// A network goes unforced: the daemon's refusal of one still in use is the error, as it said it.
+func TestEngine_RemoveNetwork(t *testing.T) {
+	inUse := errors.New("error while removing network: network demo_default has active endpoints")
+	tests := []struct {
+		name    string
+		apiErr  error
+		wantErr error
+	}{
+		{name: "a free network"},
+		{name: "one in use", apiErr: inUse, wantErr: inUse},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			api := &mockAPI{}
+			api.On("NetworkRemove", mock.Anything, "demo_default", client.NetworkRemoveOptions{}).Return(tt.apiErr).Once()
+			e := &Engine{api: api}
+
+			// Act
+			err := e.RemoveNetwork(context.Background(), "demo_default")
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			api.AssertExpectations(t)
+		})
+	}
+}

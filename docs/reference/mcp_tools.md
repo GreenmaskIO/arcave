@@ -1,18 +1,18 @@
 ---
 title: MCP tools
-description: The thirteen tools arcave's MCP server exposes — savepoint_create, savepoint_list, savepoint_remove, rollback, the seven session tools, gc and status — their arguments, their output shapes, and where they differ from the CLI.
-keywords: [arcave MCP tools, savepoint_create, rollback, session_create, AI agent, model context protocol]
+description: The fifteen tools arcave's MCP server exposes — savepoint_create, savepoint_list, savepoint_remove, rollback, up, down, the seven session tools, gc and status — their arguments, their output shapes, and where they differ from the CLI.
+keywords: [arcave MCP tools, savepoint_create, rollback, up, down, session_create, AI agent, model context protocol]
 ---
 
 # MCP tools
 
-[`arcave mcp`](cli/mcp.md) exposes thirteen tools: four for savepoints, seven for sessions, [`gc`](#gc) and [`status`](#status). Each savepoint tool takes the compose project it acts on as an argument, so one server addresses every project on the machine.
+[`arcave mcp`](cli/mcp.md) exposes fifteen tools: four for savepoints, [`up`](#up) and [`down`](#down) for the environment, seven for sessions, [`gc`](#gc) and [`status`](#status). Each savepoint and environment tool takes the compose project it acts on as an argument, so one server addresses every project on the machine.
 
 Every tool runs the workflow the CLI runs, under the same rules: the project is stopped and started again, the project lock is claimed, and a rollback of a running project that fails replays its safety snapshot. What an agent takes, you list; what you take, an agent rolls back to.
 
 ## Which session a call works in
 
-Each savepoint tool takes an optional `session`, by name or id, for that call only. Without it, the call works in the session the server was pinned to with `--session` or `ARCAVE_SESSION`, else in the current session (`.arcave/current_session`, shared with your own shell), else in `baseline`. See [`arcave mcp`](cli/mcp.md#sessions).
+Each savepoint and environment tool takes an optional `session`, by name or id, for that call only. Without it, the call works in the session the server was pinned to with `--session` or `ARCAVE_SESSION`, else in the current session (`.arcave/current_session`, shared with your own shell), else in `baseline`. See [`arcave mcp`](cli/mcp.md#sessions).
 
 ## `savepoint_create`
 
@@ -123,6 +123,67 @@ Returns what the CLI prints — see [Output](output.md#rollback):
 ```
 
 `writable_layers` is omitted when the savepoint held no layer. `leftover_volumes` appears only when a project with no containers was rebuilt over named volumes that outlived its `down`: it lists their docker names, each overwritten with no safety snapshot holding what it held. The tool's description tells an agent to report it.
+
+## `up`
+
+Brings the environment up from a savepoint where nothing of it runs, as [`arcave up`](cli/up.md) does: the compose project is built from the savepoint's spec, its volumes and writable layers written in, and started. No safety snapshot is taken — there is nothing to keep. While the Docker daemon holds any container or volume of the compose project, the call is refused before anything is written; to replace a running environment, call [`rollback`](#rollback), which keeps a safety snapshot.
+
+| Argument | Required | Description |
+|---|---|---|
+| `compose_project` | yes | The compose project to bring up. |
+| `session` | no | The session to work in for this call only. |
+| `ref` | no | The savepoint to bring up: its id, its name, or the literal `latest`. Omit for the newest. |
+| `wait_timeout` | no | How long to wait for services to become healthy. Omit for the project's own bound. |
+| `force` | no | Drop every container, volume and network of the compose project first, with **no backup** — volumes no savepoint holds included. |
+
+Returns what the CLI prints — see [`arcave up`](cli/up.md#output):
+
+```json title="structured content"
+{
+  "rolled_back_to": { "id": "019e843e-1650-7000-8000-000000000000", … },
+  "restored": [
+    { "object_id": "volume-named-myapp_pgdata", "type": "named", … }
+  ],
+  "writable_layers": [ … ],
+  "discarded": { "containers": ["myapp-app-1"], "volumes": ["myapp_pgdata"], "networks": ["myapp_default"] }
+}
+```
+
+`discarded` is what `force` dropped, and is omitted when the daemon held nothing of the compose project. A refusal says how to get past it, in the tool's own terms:
+
+```text
+the daemon holds the compose project already: volumes myapp_pgdata; pass force to drop all of it first, with no backup; the rollback tool replaces a running environment and keeps a safety snapshot
+```
+
+An interrupted rollback's marker refuses the call, `force` or not: recovering is `rollback`'s. With no savepoint to bring up, the error tells the agent to start the compose project and call `savepoint_create`. The tool is marked destructive.
+
+## `down`
+
+Ends the environment on the Docker daemon, as [`arcave down`](cli/down.md) does: the compose project's containers, networks, the volumes it owns, its containers' anonymous volumes and its restored layer tags go. External volumes and bind mounts stay. Whatever changed since the last savepoint, and every volume a savepoint leaves out, is lost — call `savepoint_create` first to keep it.
+
+| Argument | Required | Description |
+|---|---|---|
+| `compose_project` | yes | The compose project to take down. |
+| `session` | no | The session to work in for this call only. |
+| `force` | no | Take the environment down whoever deployed it, and clear this compose project's interrupted-rollback marker. |
+
+The call is refused when a replica's deployment labels name another session — `call it with session feat/add-new-table, or pass force to take it down anyway` — or no rollback built it, and while an interrupted rollback's marker stands. A volume something outside the compose project still holds refuses it too, naming the holder; a network another container uses stays, with a notice.
+
+Returns what the CLI prints — see [`arcave down`](cli/down.md#output):
+
+```json title="structured content"
+{
+  "compose_project": "myapp",
+  "session": { "id": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "name": "agent-work" },
+  "deployment": { "deployed_at": "2026-06-02T09:12:40Z", "arcave_project": "myapp",
+                  "session": { … }, "savepoint": { "id": "019e843e-1650-7000-8000-000000000000", … } },
+  "forced": false,
+  "discarded": { "containers": ["myapp-app-1", "myapp-db-1"], "volumes": ["myapp_pgdata"], "networks": ["myapp_default"] },
+  "removed_tags": ["arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000"]
+}
+```
+
+When `force` clears a marker, `cleared_inflight` names it, and a severe notice names its safety snapshot: the last copy of the state before that rollback, which nothing now keeps a `gc` from retiring. The tool is marked destructive.
 
 ## `session_list`
 
@@ -246,7 +307,7 @@ Returns the object [`arcave status`](cli/status.md) prints: which savepoint a ro
 * **A lock error says what to wait for.** A call refused because another run holds the project lock reads `another arcave command is already running in this project: a session fork holds the lock for its whole copy, as does a savepoint or rollback for its run; retry when it finishes`.
 * **Errors keep the CLI's flag names.** An unparseable `before_date` is reported as `invalid --before-date "2026-06-01": …`, and `retain_for` as `invalid --retain-for …`.
 
-`wait_timeout` takes a unit-bearing duration in both tools that accept it. A bare number is refused:
+`wait_timeout` takes a unit-bearing duration in every tool that accepts it. A bare number is refused:
 
 ```text
 wait_timeout "120": want a unit-bearing value like 2m, 90s or 1h30m

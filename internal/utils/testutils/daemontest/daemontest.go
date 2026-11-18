@@ -208,6 +208,52 @@ func RemoveComposeProject(t *testing.T, daemon *client.Client, project string) {
 	}
 }
 
+// ComposeProjectResources are the names of what the daemon holds of a compose project by its label.
+type ComposeProjectResources struct {
+	Containers []string
+	Volumes    []string
+	Networks   []string
+}
+
+// ReadComposeProjectResources lists what the daemon holds of project by its label, each kind sorted.
+func ReadComposeProjectResources(t *testing.T, daemon *client.Client, project string) ComposeProjectResources {
+	t.Helper()
+
+	ctx := context.Background()
+	byProject := make(client.Filters).Add("label", api.ProjectLabel+"="+project)
+	containers, err := daemon.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: byProject})
+	require.NoError(t, err)
+	volumes, err := daemon.VolumeList(ctx, client.VolumeListOptions{Filters: byProject})
+	require.NoError(t, err)
+	networks, err := daemon.NetworkList(ctx, client.NetworkListOptions{Filters: byProject})
+	require.NoError(t, err)
+	var resources ComposeProjectResources
+	for _, c := range containers.Items {
+		resources.Containers = append(resources.Containers, strings.TrimPrefix(c.Names[0], "/"))
+	}
+	for _, v := range volumes.Items {
+		resources.Volumes = append(resources.Volumes, v.Name)
+	}
+	for _, n := range networks.Items {
+		resources.Networks = append(resources.Networks, n.Name)
+	}
+	slices.Sort(resources.Containers)
+	slices.Sort(resources.Volumes)
+	slices.Sort(resources.Networks)
+	return resources
+}
+
+// RequireComposeProjectGone checks the daemon holds nothing of project by its label: no container,
+// network or volume.
+func RequireComposeProjectGone(t *testing.T, daemon *client.Client, project string) {
+	t.Helper()
+
+	resources := ReadComposeProjectResources(t, daemon, project)
+	assert.Empty(t, resources.Containers, "containers")
+	assert.Empty(t, resources.Networks, "networks")
+	assert.Empty(t, resources.Volumes, "volumes")
+}
+
 // RemoveProjectNetworks drops the networks compose created for project. A down called by
 // name alone removes the containers but not these, and every leaked one holds an address
 // pool until the daemon has none left.

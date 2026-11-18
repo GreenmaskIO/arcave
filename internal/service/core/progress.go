@@ -33,6 +33,10 @@ const (
 	kindRollbackApply          progress.Kind = "rollback.apply"
 	kindRollbackRevert         progress.Kind = "rollback.revert"
 	kindRollbackCleanup        progress.Kind = "rollback.cleanup"
+
+	kindUp progress.Kind = "up"
+
+	kindDown progress.Kind = "down"
 )
 
 // runStep runs fn under a workflow step of kind, ended with fn's error.

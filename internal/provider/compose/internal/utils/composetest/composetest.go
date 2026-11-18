@@ -91,6 +91,10 @@ func (m *MockComposeRunner) Down(ctx context.Context, project *types.Project) er
 	return m.Called(ctx, project).Error(0)
 }
 
+func (m *MockComposeRunner) DownWithVolumes(ctx context.Context, composeProject string) error {
+	return m.Called(ctx, composeProject).Error(0)
+}
+
 func (m *MockComposeRunner) Create(ctx context.Context, project *types.Project, restoredVolumes []string) error {
 	return m.Called(ctx, project, restoredVolumes).Error(0)
 }

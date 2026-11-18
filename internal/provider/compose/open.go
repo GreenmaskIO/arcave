@@ -28,6 +28,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composeclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	sprepo "github.com/greenmaskio/arcave/internal/provider/compose/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/introspect"
@@ -68,6 +69,15 @@ type Observer struct {
 // Close releases the connection OpenObserver opened.
 func (o Observer) Close(ctx context.Context) { o.opened.Release(ctx) }
 
+// Surveyor reads and drops one compose project for a down, with what it holds open.
+type Surveyor struct {
+	provider.Surveyor
+	opened utils.Closers
+}
+
+// Close releases what OpenSurveyor opened.
+func (s Surveyor) Close(ctx context.Context) { s.opened.Release(ctx) }
+
 // Open connects the daemon and opens the workload of composeProject over its store; on error it
 // releases whatever it had opened.
 func Open(
@@ -98,6 +108,57 @@ func OpenObserver(cfg Config, composeProject model.DockerComposeProjectName) (Ob
 		Observer: introspect.NewReader(daemon.api, composeProject),
 		opened:   opened,
 	}, nil
+}
+
+// OpenSurveyor connects the daemon to survey and drop composeProject on it, with none of what a
+// capture or a restore needs: no store, no backend, no cdc transport. No runtime profile either:
+// the listings, compose's down, a volume's removal and an untag read alike on every engine.
+func OpenSurveyor(ctx context.Context, cfg Config, composeProject model.DockerComposeProjectName) (Surveyor, error) {
+	var opened utils.Closers
+	surveyor, err := openSurveyor(ctx, cfg, composeProject, &opened)
+	if err != nil {
+		opened.Release(ctx)
+		return Surveyor{}, err
+	}
+	return Surveyor{
+		Surveyor: surveyor,
+		opened:   opened,
+	}, nil
+}
+
+// openSurveyor wires the workload of composeProject with what a drop needs alone, the daemon
+// connected; what it opens goes on opened.
+func openSurveyor(
+	ctx context.Context, cfg Config, composeProject model.DockerComposeProjectName, opened *utils.Closers,
+) (provider.Surveyor, error) {
+	composeOutput := newComposeProgress(cfg.ComposeProgress, *log.Ctx(ctx))
+	daemon, err := connectDaemon(cfg.Settings.Docker, composeOutput.stream, opened)
+	if err != nil {
+		return nil, err
+	}
+	composeAPI, err := dockercompose.NewComposeService(daemon.cli,
+		dockercompose.WithEventProcessor(composeOutput.processor),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialise compose: %w", err)
+	}
+	engine := docker.NewEngine(daemon.api)
+	return workload.New(workload.Deps{
+		ComposeReader: introspect.NewReader(daemon.api, composeProject),
+		ComposeRunner: composeclient.NewClient(composeAPI, composeclient.Options{
+			WaitTimeout:     cfg.Settings.Compose.WaitTimeout,
+			StopTimeout:     cfg.Settings.Compose.StopTimeout,
+			Events:          composeOutput.events,
+			SinkFromContext: newComposeEventSink,
+		}),
+		VolumeRemover:  engine,
+		ProjectRemover: engine,
+		LayerTags:      engine,
+		LayerOrigin: composemodel.LayerOrigin{
+			ArcaveProject:  cfg.ArcaveProject,
+			ComposeProject: composeProject,
+		},
+	}), nil
 }
 
 // openWorkload wires the workload of composeProject over its store, the daemon connected; what it
@@ -171,6 +232,7 @@ func openWorkload(
 		ComposeRunner:    composeRunner,
 		ContainerControl: profile.Engine,
 		VolumeRemover:    profile.Engine,
+		ProjectRemover:   profile.Engine,
 		// The per-replica half of a layer restore: what compose's one image per
 		// service cannot express, the engine rebuilds container by container.
 		ContainerRebuilder: profile.Engine,
@@ -183,6 +245,8 @@ func openWorkload(
 		DaemonVersion:      profile.Version,
 		MinDaemonMajor:     profile.MinDaemonMajor,
 		Store:              store,
+		LayerTags:          profile.Engine,
+		LayerOrigin:        origin,
 		Concurrency:        cfg.Concurrency,
 	}), nil
 }

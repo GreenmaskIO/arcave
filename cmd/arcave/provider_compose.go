@@ -46,6 +46,22 @@ func openComposeWorkload(
 	return workload, nil
 }
 
+// openComposeSurveyor opens the compose provider's survey and drop of composeProject, the daemon
+// connected; what it opens goes on opened.
+func openComposeSurveyor(
+	ctx context.Context, cfg config.Config, composeProject model.DockerComposeProjectName, opened *utils.Closers,
+) (provider.Surveyor, error) {
+	composeProgress := composeProgressMode(
+		ctx, cfg.ComposeProvider.Compose.Progress, runProgressMode == progressModeTTY,
+	)
+	surveyor, err := compose.OpenSurveyor(ctx, newComposeConfig(cfg, composeProgress), composeProject)
+	if err != nil {
+		return nil, err
+	}
+	opened.AddFunc(surveyor.Close)
+	return surveyor, nil
+}
+
 // newComposeSavepoints is the compose provider's savepoint records in a compose project's store.
 func newComposeSavepoints(store storages.Storager) provider.Savepoints {
 	return compose.NewStoreSavepoints(store)

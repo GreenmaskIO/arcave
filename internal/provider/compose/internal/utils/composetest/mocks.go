@@ -16,13 +16,14 @@ package composetest
 
 import (
 	"context"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"slices"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/storages"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // Every mock forwards all of its seam's arguments to Called, ctx included;
@@ -53,11 +54,53 @@ func (m *MockInspector) Introspect(ctx context.Context) (composemodel.Introspect
 	return introspection, args.Error(1)
 }
 
+func (m *MockInspector) ReadResources(ctx context.Context) (composemodel.ComposeProjectResources, error) {
+	args := m.Called(ctx)
+	resources, _ := args.Get(0).(composemodel.ComposeProjectResources)
+	return resources, args.Error(1)
+}
+
+// ResourcesOfVolumes is what the narrow read reports of introspection's owned volumes, sorted.
+func ResourcesOfVolumes(introspection composemodel.IntrospectionResult) composemodel.ComposeProjectResources {
+	var names []string
+	for _, v := range introspection.Project.Volumes {
+		if !v.External {
+			names = append(names, v.Name)
+		}
+	}
+	slices.Sort(names)
+	return composemodel.ComposeProjectResources{Volumes: names}
+}
+
 // MockVolumeRemover doubles volumeRemover.
 type MockVolumeRemover struct{ mock.Mock }
 
 func (m *MockVolumeRemover) RemoveVolume(ctx context.Context, name string) error {
 	return m.Called(ctx, name).Error(0)
+}
+
+// MockProjectRemover doubles projectRemover.
+type MockProjectRemover struct{ mock.Mock }
+
+func (m *MockProjectRemover) RemoveContainer(ctx context.Context, name string) error {
+	return m.Called(ctx, name).Error(0)
+}
+
+func (m *MockProjectRemover) RemoveNetwork(ctx context.Context, name string) error {
+	return m.Called(ctx, name).Error(0)
+}
+
+// MockLayerTags doubles layerTags.
+type MockLayerTags struct{ mock.Mock }
+
+func (m *MockLayerTags) ListLayerImages(ctx context.Context) ([]composemodel.TaggedImage, error) {
+	args := m.Called(ctx)
+	images, _ := args.Get(0).([]composemodel.TaggedImage)
+	return images, args.Error(1)
+}
+
+func (m *MockLayerTags) RemoveImageRef(ctx context.Context, ref model.ImageRef) error {
+	return m.Called(ctx, ref).Error(0)
 }
 
 // MockContainerRebuilder doubles containerRebuilder.

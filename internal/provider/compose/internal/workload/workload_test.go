@@ -218,7 +218,8 @@ func TestProvider_Inspect_DiscardsAFailedColdStart(t *testing.T) {
 		runner.On("Create", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, composetest.DemoDeployment(record)), demoRestoredVolumes).
 			Return(errors.New("create boom")).Once(),
 		runner.On("Down", mock.Anything, composetest.DemoTargetSpec).Return(nil).Once(),
-		inspector.On("Introspect", mock.Anything).Return(now, nil).Once(),
+		// The narrow read: a container left half-built must not hide the volumes.
+		inspector.On("ReadResources", mock.Anything).Return(composetest.ResourcesOfVolumes(now), nil).Once(),
 		remover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once(),
 	)
 	svc := newComposeWorkload(Deps{

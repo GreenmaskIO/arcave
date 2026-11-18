@@ -43,9 +43,11 @@ type savepointRepository interface {
 	LoadSpec(ctx context.Context, id model.SavepointID) ([]byte, error)
 }
 
-// composeIntrospector reads the live compose project as the daemon holds it.
+// composeIntrospector reads the live compose project as the daemon holds it, in full or by its
+// label alone.
 type composeIntrospector interface {
 	Introspect(ctx context.Context) (composemodel.IntrospectionResult, error)
+	ReadResources(ctx context.Context) (composemodel.ComposeProjectResources, error)
 }
 
 // projectAssembler builds a compose project's spec out of its introspection.
@@ -80,6 +82,9 @@ type composeRunner interface {
 	// health checks; a running container is left as it is.
 	Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error
 	Down(ctx context.Context, project *types.Project) error
+	// DownWithVolumes removes everything the daemon holds of the compose project, its volumes too,
+	// by the project's name alone.
+	DownWithVolumes(ctx context.Context, composeProject string) error
 	// Create lets compose recreate a volume whose config drifted only when restoredVolumes, the
 	// docker names of the volumes the rollback restores, holds it.
 	Create(ctx context.Context, project *types.Project, restoredVolumes []string) error
@@ -88,6 +93,20 @@ type composeRunner interface {
 // volumeRemover reaps the volumes a teardown orphans, or a failed build created.
 type volumeRemover interface {
 	RemoveVolume(ctx context.Context, name string) error
+}
+
+// projectRemover removes by docker name the containers and networks compose's down leaves of a
+// dropped compose project.
+type projectRemover interface {
+	RemoveContainer(ctx context.Context, name string) error
+	RemoveNetwork(ctx context.Context, name string) error
+}
+
+// layerTags lists the arcave/…:sp-<savepoint> tags the daemon holds and takes one off, never
+// forced.
+type layerTags interface {
+	ListLayerImages(ctx context.Context) ([]composemodel.TaggedImage, error)
+	RemoveImageRef(ctx context.Context, ref model.ImageRef) error
 }
 
 // containerRebuilder recreates one built container from another image as the replica a
@@ -120,8 +139,11 @@ type Deps struct {
 	ComposeRunner composeRunner
 	// ContainerControl pauses the services captured with model.CaptureModePause, and resumes a
 	// replica found frozen.
-	ContainerControl   containerControl
-	VolumeRemover      volumeRemover
+	ContainerControl containerControl
+	VolumeRemover    volumeRemover
+	// ProjectRemover removes by docker name what compose's down leaves of a dropped compose
+	// project.
+	ProjectRemover     projectRemover
 	ContainerRebuilder containerRebuilder
 	ImageLookup        imageLookup
 	ProjectAssembler   projectAssembler
@@ -138,6 +160,10 @@ type Deps struct {
 	MinDaemonMajor int
 	// Store is the compose project's store.
 	Store storages.Storager
+	// LayerTags are the restored layer tags a drop removes; LayerOrigin names the compose project
+	// it takes down by name and whose tags those are.
+	LayerTags   layerTags
+	LayerOrigin composemodel.LayerOrigin
 	// Concurrency caps how many units one fan-out works at once; 0 leaves it unbounded.
 	Concurrency int
 }
@@ -195,6 +221,9 @@ func newComposeWorkload(deps Deps) *composeWorkload {
 			Inspector:          inspector,
 			ComposeReader:      deps.ComposeReader,
 			VolumeRemover:      deps.VolumeRemover,
+			ProjectRemover:     deps.ProjectRemover,
+			LayerTags:          deps.LayerTags,
+			LayerOrigin:        deps.LayerOrigin,
 			Concurrency:        deps.Concurrency,
 		}),
 		capturer: capture.New(capture.Deps{
@@ -217,5 +246,17 @@ func (s *composeWorkload) Inspect(ctx context.Context) (provider.LiveWorkload, e
 	return liveWorkload{
 		service:       s,
 		introspection: introspection,
+	}, nil
+}
+
+// Survey reads what the daemon holds of the compose project by its label.
+func (s *composeWorkload) Survey(ctx context.Context) (provider.SurveyedWorkload, error) {
+	resources, err := s.inspector.ReadResources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return surveyedWorkload{
+		service:   s,
+		resources: resources,
 	}, nil
 }

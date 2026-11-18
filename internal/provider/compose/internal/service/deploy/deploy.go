@@ -42,11 +42,17 @@ const (
 	kindVolume         progress.Kind = "volume"
 	kindReplicaRebuild progress.Kind = "replica.rebuild"
 	kindReplica        progress.Kind = "replica"
+
+	kindDownUntag progress.Kind = "down.untag"
+	kindTag       progress.Kind = "tag"
 )
 
 // composeRunner takes a compose project down, creates it without starting it, and starts it.
 type composeRunner interface {
 	Down(ctx context.Context, project *types.Project) error
+	// DownWithVolumes removes everything the daemon holds of the compose project, its volumes too,
+	// by the project's name alone.
+	DownWithVolumes(ctx context.Context, composeProject string) error
 	// Create lets compose recreate a volume whose config drifted only when restoredVolumes, the
 	// docker names of the volumes the rollback restores, holds it.
 	Create(ctx context.Context, project *types.Project, restoredVolumes []string) error
@@ -70,9 +76,28 @@ type composeIntrospector interface {
 	Introspect(ctx context.Context) (composemodel.IntrospectionResult, error)
 }
 
+// resourceReader reads what the daemon holds of the compose project by its label alone.
+type resourceReader interface {
+	ReadResources(ctx context.Context) (composemodel.ComposeProjectResources, error)
+}
+
 // volumeRemover reaps the volumes a teardown orphans, or a failed build created.
 type volumeRemover interface {
 	RemoveVolume(ctx context.Context, name string) error
+}
+
+// projectRemover removes by docker name the containers and networks compose's down leaves of a
+// dropped compose project.
+type projectRemover interface {
+	RemoveContainer(ctx context.Context, name string) error
+	RemoveNetwork(ctx context.Context, name string) error
+}
+
+// layerTags lists the arcave/…:sp-<savepoint> tags the daemon holds and takes one off, never
+// forced.
+type layerTags interface {
+	ListLayerImages(ctx context.Context) ([]composemodel.TaggedImage, error)
+	RemoveImageRef(ctx context.Context, ref model.ImageRef) error
 }
 
 // Deps are Deployer's collaborators.
@@ -80,11 +105,17 @@ type Deps struct {
 	ComposeRunner      composeRunner
 	ContainerControl   containerResumer
 	ContainerRebuilder containerRebuilder
-	// Inspector reads the project under its own step, to find the volumes a failed build created;
-	// ComposeReader reads it with none, to find the containers a create built.
-	Inspector     composeIntrospector
-	ComposeReader composeIntrospector
-	VolumeRemover volumeRemover
+	// Inspector reads the project by its label under its own step: the volumes a failed build
+	// created, what a drop takes and leaves; ComposeReader reads it whole with none, to find the
+	// containers a create built.
+	Inspector      resourceReader
+	ComposeReader  composeIntrospector
+	VolumeRemover  volumeRemover
+	ProjectRemover projectRemover
+	// LayerTags are the restored layer tags a drop removes; LayerOrigin names the compose project
+	// it takes down by name and whose tags those are.
+	LayerTags   layerTags
+	LayerOrigin composemodel.LayerOrigin
 	// Concurrency caps the volumes restored at once; 0 leaves it unbounded.
 	Concurrency int
 }
@@ -94,9 +125,12 @@ type Deployer struct {
 	composeRunner           composeRunner
 	containerControl        containerResumer
 	containerRebuilder      containerRebuilder
-	inspector               composeIntrospector
+	inspector               resourceReader
 	composeReader           composeIntrospector
 	volumeRemover           volumeRemover
+	projectRemover          projectRemover
+	layerTags               layerTags
+	layerOrigin             composemodel.LayerOrigin
 	maxConcurrentOperations int
 }
 
@@ -109,6 +143,9 @@ func New(deps Deps) *Deployer {
 		inspector:               deps.Inspector,
 		composeReader:           deps.ComposeReader,
 		volumeRemover:           deps.VolumeRemover,
+		projectRemover:          deps.ProjectRemover,
+		layerTags:               deps.LayerTags,
+		layerOrigin:             deps.LayerOrigin,
 		maxConcurrentOperations: fanout.Limit(deps.Concurrency),
 	}
 }
@@ -205,15 +242,16 @@ func (s *Deployer) Down(ctx context.Context, project *types.Project) error {
 }
 
 // removeCreatedVolumes drops the volumes the compose project owns now and did not own
-// before: what the failed rollback created, holding nothing the savepoint does not.
+// before: what the failed rollback created, holding nothing the savepoint does not. The narrow
+// read: a container left half-built must not keep the volumes from being found.
 func (s *Deployer) removeCreatedVolumes(ctx context.Context, ownedBefore map[string]bool) {
 	log := zerolog.Ctx(ctx)
-	introspection, err := s.inspector.Introspect(ctx)
+	resources, err := s.inspector.ReadResources(ctx)
 	if err != nil {
 		log.Warn().Err(err).Msg("cannot tell which volumes the failed rollback created; they are left behind")
 		return
 	}
-	for name := range composemodel.OwnedVolumes(introspection) {
+	for _, name := range resources.Volumes {
 		if ownedBefore[name] {
 			continue
 		}

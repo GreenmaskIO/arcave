@@ -194,7 +194,7 @@ func findSavepoint(savepoints []model.Savepoint, req model.RollbackRequest) (mod
 
 	savepoints = visibleSavepoints(savepoints)
 	if len(savepoints) == 0 {
-		return model.Savepoint{}, errors.New("no savepoints exist")
+		return model.Savepoint{}, model.ErrNoSavepoints
 	}
 
 	if req.Name == nil {

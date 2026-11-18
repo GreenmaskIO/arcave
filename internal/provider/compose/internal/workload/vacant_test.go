@@ -200,7 +200,7 @@ func TestVacant_Discard(t *testing.T) {
 			remover := &composetest.MockVolumeRemover{}
 			mock.InOrder(
 				runner.On("Down", mock.Anything, composetest.DemoTargetSpec).Return(tt.downErr).Once(),
-				inspector.On("Introspect", mock.Anything).Return(now, nil).Once(),
+				inspector.On("ReadResources", mock.Anything).Return(composetest.ResourcesOfVolumes(now), nil).Once(),
 				remover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once(),
 			)
 			svc := newComposeWorkload(Deps{ComposeRunner: runner, ComposeReader: inspector, VolumeRemover: remover})

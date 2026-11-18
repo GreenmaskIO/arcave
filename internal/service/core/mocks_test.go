@@ -203,6 +203,8 @@ func (m *mockSavepoints) Remove(ctx context.Context, id model.SavepointID) error
 type mockStages struct {
 	workload mockWorkload
 	live     mockLiveWorkload
+	surveyed mockSurveyedWorkload
+	dropped  mockDroppedWorkload
 	plan     mockCapturePlan
 	held     mockHeldWorkload
 	captured mockCapturedSavepoint
@@ -223,6 +225,8 @@ func (m *mockStages) AssertExpectations(t mock.TestingT) bool {
 	results := []bool{
 		m.workload.AssertExpectations(t),
 		m.live.AssertExpectations(t),
+		m.surveyed.AssertExpectations(t),
+		m.dropped.AssertExpectations(t),
 		m.plan.AssertExpectations(t),
 		m.held.AssertExpectations(t),
 		m.captured.AssertExpectations(t),
@@ -238,6 +242,48 @@ func (m *mockStages) expectInspect(err error) *mock.Call {
 		return m.workload.On("Inspect", mock.Anything).Return(nil, err).Once()
 	}
 	return m.workload.On("Inspect", mock.Anything).Return(&m.live, nil).Once()
+}
+
+// expectSurvey declares the workload's survey of resources, failing with err, else answering the
+// surveyed one.
+func (m *mockStages) expectSurvey(resources model.DiscardedResources, present bool, err error) *mock.Call {
+	if err != nil {
+		return m.workload.On("Survey", mock.Anything).Return(nil, err).Once()
+	}
+	m.surveyed.resources, m.surveyed.present = resources, present
+	return m.workload.On("Survey", mock.Anything).Return(&m.surveyed, nil).Once()
+}
+
+// expectSurveyedPrepare declares the surveyed workload's preparing of id, failing with err, else
+// answering the target's prepared savepoint.
+func (m *mockStages) expectSurveyedPrepare(id model.SavepointID, opts provider.PrepareOptions, err error) *mock.Call {
+	if err != nil {
+		return m.surveyed.On("PrepareSavepoint", mock.Anything, id, opts).Return(nil, err).Once()
+	}
+	return m.surveyed.On("PrepareSavepoint", mock.Anything, id, opts).Return(&m.target.prepared, nil).Once()
+}
+
+// expectOwner declares the surveyed workload's judging of its owner, answering deployment and err.
+func (m *mockStages) expectOwner(deployment *model.SavepointDeployment, err error) *mock.Call {
+	return m.surveyed.On("Owner", demoArcaveProject, model.DefaultSession).Return(deployment, err).Once()
+}
+
+// expectDrop declares the surveyed workload's drop, failing with err, else answering the dropped one.
+func (m *mockStages) expectDrop(err error) *mock.Call {
+	if err != nil {
+		return m.surveyed.On("Drop", mock.Anything).Return(nil, err).Once()
+	}
+	return m.surveyed.On("Drop", mock.Anything).Return(&m.dropped, nil).Once()
+}
+
+// expectVacant declares the dropped workload's vacant one for the target, the target's.
+func (m *mockStages) expectVacant() *mock.Call {
+	return m.dropped.On("Vacant", &m.target.prepared).Return(&m.target.vacant, nil).Once()
+}
+
+// expectRemoveRestoredLayers declares the dropped workload's untag, answering removed and notices.
+func (m *mockStages) expectRemoveRestoredLayers(removed []model.ImageRef, notices []model.Notice) *mock.Call {
+	return m.dropped.On("RemoveRestoredLayers", mock.Anything).Return(removed, notices).Once()
 }
 
 // expectPlanCapture declares the capture's plan as opts says, failing with err, else answering the
@@ -376,6 +422,67 @@ func (m *mockWorkload) Inspect(ctx context.Context) (provider.LiveWorkload, erro
 	args := m.Called(ctx)
 	live, _ := args.Get(0).(provider.LiveWorkload)
 	return live, args.Error(1)
+}
+
+func (m *mockWorkload) Survey(ctx context.Context) (provider.SurveyedWorkload, error) {
+	args := m.Called(ctx)
+	surveyed, _ := args.Get(0).(provider.SurveyedWorkload)
+	return surveyed, args.Error(1)
+}
+
+// mockSurveyedWorkload doubles provider.SurveyedWorkload; Resources and Present answer resources
+// and present unmocked.
+type mockSurveyedWorkload struct {
+	mock.Mock
+	resources model.DiscardedResources
+	present   bool
+}
+
+func (m *mockSurveyedWorkload) Resources() model.DiscardedResources { return m.resources }
+
+func (m *mockSurveyedWorkload) Present() bool { return m.present }
+
+func (m *mockSurveyedWorkload) Owner(
+	arcaveProject model.ArcaveProjectName, session model.SessionID,
+) (*model.SavepointDeployment, error) {
+	args := m.Called(arcaveProject, session)
+	deployment, _ := args.Get(0).(*model.SavepointDeployment)
+	return deployment, args.Error(1)
+}
+
+func (m *mockSurveyedWorkload) PrepareSavepoint(
+	ctx context.Context, id model.SavepointID, opts provider.PrepareOptions,
+) (provider.PreparedSavepoint, error) {
+	args := m.Called(ctx, id, opts)
+	prepared, _ := args.Get(0).(provider.PreparedSavepoint)
+	return prepared, args.Error(1)
+}
+
+func (m *mockSurveyedWorkload) Drop(ctx context.Context) (provider.DroppedWorkload, error) {
+	args := m.Called(ctx)
+	dropped, _ := args.Get(0).(provider.DroppedWorkload)
+	return dropped, args.Error(1)
+}
+
+// mockDroppedWorkload doubles provider.DroppedWorkload; Notices answers notices unmocked.
+type mockDroppedWorkload struct {
+	mock.Mock
+	notices []model.Notice
+}
+
+func (m *mockDroppedWorkload) Notices() []model.Notice { return m.notices }
+
+func (m *mockDroppedWorkload) Vacant(prepared provider.PreparedSavepoint) (provider.VacantWorkload, error) {
+	args := m.Called(prepared)
+	vacant, _ := args.Get(0).(provider.VacantWorkload)
+	return vacant, args.Error(1)
+}
+
+func (m *mockDroppedWorkload) RemoveRestoredLayers(ctx context.Context) ([]model.ImageRef, []model.Notice) {
+	args := m.Called(ctx)
+	removed, _ := args.Get(0).([]model.ImageRef)
+	notices, _ := args.Get(1).([]model.Notice)
+	return removed, notices
 }
 
 // mockLiveWorkload doubles provider.LiveWorkload; Absent answers absent unmocked.

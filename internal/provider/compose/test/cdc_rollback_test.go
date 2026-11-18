@@ -560,6 +560,8 @@ func (s *stubComposeRunner) StopServices(context.Context, *types.Project, []stri
 
 func (s *stubComposeRunner) Down(context.Context, *types.Project) error { return nil }
 
+func (s *stubComposeRunner) DownWithVolumes(context.Context, string) error { return nil }
+
 func (s *stubComposeRunner) Create(context.Context, *types.Project, []string) error { return nil }
 
 func (s *stubComposeRunner) Start(context.Context, *types.Project, time.Duration) error {
@@ -599,6 +601,10 @@ type stubInspector struct {
 
 func (s stubInspector) Introspect(context.Context) (composemodel.IntrospectionResult, error) {
 	return s.result, nil
+}
+
+func (s stubInspector) ReadResources(context.Context) (composemodel.ComposeProjectResources, error) {
+	return composemodel.ComposeProjectResources{}, nil
 }
 
 // cdcTransport resolves how this daemon's containers reach the test's restic

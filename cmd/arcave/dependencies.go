@@ -146,6 +146,36 @@ func openSavepointService(
 	}), nil
 }
 
+// openDownService wires down for composeProject in the session sessionRef resolves to: the daemon,
+// the marker and the flock, and of the store the session's record alone. Nothing a capture or a
+// restore needs is built, and no session lock or write admission: a down writes nothing to the
+// store.
+func openDownService(
+	ctx context.Context, projectPath string, cfg config.Config, sessionRef string,
+	composeProject model.DockerComposeProjectName, opened *utils.Closers,
+) (*core.DownService, error) {
+	if err := storefactory.ValidateComposeProjectName(composeProject); err != nil {
+		return nil, err
+	}
+	scope, err := openSessionScope(ctx, cfg, projectPath, sessionRef, opened)
+	if err != nil {
+		return nil, err
+	}
+	surveyor, err := openComposeSurveyor(ctx, cfg, composeProject, opened)
+	if err != nil {
+		return nil, err
+	}
+	return core.NewDownService(core.DownDeps{
+		ProjectLocker:  lock.New(projectPath),
+		Inflight:       inflightrepo.New(projectPath),
+		Sessions:       scope.sessions,
+		Session:        scope.sessionID,
+		ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
+		ComposeProject: composeProject,
+		Workload:       surveyor,
+	}), nil
+}
+
 // openSavepointStoreService wires the savepoint workflows that read and delete in the store alone:
 // nothing that reaches the daemon is built.
 func openSavepointStoreService(

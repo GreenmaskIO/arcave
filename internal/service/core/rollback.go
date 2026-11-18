@@ -284,7 +284,7 @@ func (s *Service) planSafetySnapshot(
 // onInterrupt says what an interrupt there leaves.
 func (s *Service) runPrepare(
 	ctx context.Context,
-	live provider.LiveWorkload,
+	live savepointPreparer,
 	session model.SessionRef,
 	savepoint model.Savepoint,
 	recovering bool,
@@ -301,6 +301,12 @@ func (s *Service) runPrepare(
 		return nil, preferInterrupt(ctx, err)
 	}
 	return prepared, nil
+}
+
+// savepointPreparer is a workload handle a savepoint is prepared over: a live workload, or a
+// surveyed one an up drops.
+type savepointPreparer interface {
+	PrepareSavepoint(ctx context.Context, id model.SavepointID, opts provider.PrepareOptions) (provider.PreparedSavepoint, error)
 }
 
 // takeSafetySnapshot stops the services and captures the live state, the safety snapshot's phase;

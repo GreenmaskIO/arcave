@@ -171,7 +171,7 @@ All three keep compose off stdout, which carries the result and nothing else.
 unsupported compose.progress "loud" (supported: log, tty, quiet)
 ```
 
-**`leftover_volumes` matters only for a compose project that is not running** — never started, or taken down with `docker compose down`, which leaves named volumes behind. A running project is always overwritten; that is what a rollback is for. `refuse` fails before anything is created:
+**`leftover_volumes` matters only for a compose project that is not running** — never started, or taken down with `docker compose down`, which leaves named volumes behind. A running project is always overwritten; that is what a rollback is for. [`arcave up`](cli/up.md) ignores the key: a leftover volume always refuses an `up`, unless `--force` drops it. `refuse` fails before anything is created:
 
 ```text
 compose project is not running but its volumes survive: myapp_pgdata

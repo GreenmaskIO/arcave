@@ -27,9 +27,11 @@ import (
 // kindProjectIntrospect is the step an introspection runs under.
 const kindProjectIntrospect progress.Kind = "project.introspect"
 
-// composeIntrospector reads the live compose project as the daemon holds it.
+// composeIntrospector reads the live compose project as the daemon holds it, in full or by its
+// label alone.
 type composeIntrospector interface {
 	Introspect(ctx context.Context) (composemodel.IntrospectionResult, error)
+	ReadResources(ctx context.Context) (composemodel.ComposeProjectResources, error)
 }
 
 // Deps are Inspector's collaborators.
@@ -64,10 +66,15 @@ func (s *Inspector) Inspect(ctx context.Context) (composemodel.IntrospectionResu
 	if err != nil {
 		return composemodel.IntrospectionResult{}, err
 	}
-	if err := requireDaemon(ctx, s.daemonVersion, s.minDaemonMajor); err != nil {
+	if err := s.RequireDaemon(ctx); err != nil {
 		return composemodel.IntrospectionResult{}, err
 	}
 	return introspection, nil
+}
+
+// RequireDaemon refuses a daemon older than the provider runs on.
+func (s *Inspector) RequireDaemon(ctx context.Context) error {
+	return requireDaemon(ctx, s.daemonVersion, s.minDaemonMajor)
 }
 
 // Introspect reads the compose project as the daemon holds it now, under its own step.
@@ -79,4 +86,16 @@ func (s *Inspector) Introspect(ctx context.Context) (composemodel.IntrospectionR
 		return composemodel.IntrospectionResult{}, fmt.Errorf("introspect compose project: %w", err)
 	}
 	return introspection, nil
+}
+
+// ReadResources reads what the daemon holds of the compose project by its label, under the
+// introspection's step; it refuses no daemon.
+func (s *Inspector) ReadResources(ctx context.Context) (composemodel.ComposeProjectResources, error) {
+	ctx, step := progress.Run(ctx, progress.Step{Kind: kindProjectIntrospect})
+	resources, err := s.composeReader.ReadResources(ctx)
+	step.End(err)
+	if err != nil {
+		return composemodel.ComposeProjectResources{}, fmt.Errorf("read the compose project's resources: %w", err)
+	}
+	return resources, nil
 }
