@@ -82,6 +82,14 @@ project, arcave takes a safety snapshot first, unless `rollback.safety_snapshot`
 reverts to it if the rollback fails. The snapshot stays in the store with what it captured
 until `arcave gc` retires it or `arcave savepoint remove` drops it.
 
+### Capture hooks
+
+A savepoint runs the commands its `arcave.hook.pre-capture` and `arcave.hook.post-capture`
+labels name inside the service's containers, through the Docker API, as the container's
+user or the one `.user` names. Whoever can write the compose file's labels can run commands
+in those containers whenever a savepoint is taken, by you or by an agent through
+`arcave mcp`. A hook that times out is not killed and runs on in the container.
+
 ### Local network services
 
 By default (`backends.cdc.transport: stdio`) the `cdc` backend opens no port: it serves
@@ -92,7 +100,8 @@ server for the duration of a command, bound to `127.0.0.1` on a random port. Don
 
 ### MCP server
 
-`arcave mcp` lets an AI agent create savepoints, roll back and delete sessions. It
+`arcave mcp` lets an AI agent create savepoints, roll back, take an environment down
+with its volumes, and delete sessions. It
 communicates over stdio only and opens no network port. Give it to an agent only on a
 project whose data you can afford to lose.
 

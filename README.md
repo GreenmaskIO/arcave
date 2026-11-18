@@ -15,7 +15,7 @@ It works on any Compose project, on the Docker you already have.
 
 ![arcave: savepoint, break, rollback](docs/assets/demo/base-cycle.gif)
 
-> **Alpha.** arcave is at `v0.1.0-alpha.5`. Commands, output and the storage format may change between alphas, with no migration path for savepoints taken by an earlier one. It is not ready for production use yet.
+> **Alpha.** arcave is at `v0.1.0-alpha.6`. Commands, output and the storage format may change between alphas, with no migration path for savepoints taken by an earlier one. It is not ready for production use yet.
 
 [![Discord](https://img.shields.io/discord/1179422525294399488?label=Discord&logo=discord)](https://discord.com/invite/rKBKvDECfd)
 
@@ -28,7 +28,8 @@ It works on any Compose project, on the Docker you already have.
 ## Key Features
 
 *   **Whole-project savepoints**: One savepoint holds every stateful volume, every container's writable layer, and the compose spec the project was running under.
-*   **[Consistent by construction](https://www.greenmask.io/docs/arcave/how_it_works?utm_source=github&utm_medium=repo&utm_campaign=oss)**: The services are stopped before a byte is read, so nothing is captured mid-write and a database comes back without a crash-recovery pass on start.
+*   **[Consistent by construction](https://www.greenmask.io/docs/arcave/how_it_works?utm_source=github&utm_medium=repo&utm_campaign=oss)**: By default the services are stopped before a byte is read, so nothing is captured mid-write and a database comes back without a crash-recovery pass on start.
+*   **[No restart when you don't want one](https://www.greenmask.io/docs/arcave/capture_modes?utm_source=github&utm_medium=repo&utm_campaign=oss)**: `arcave.capture.mode: pause` freezes a service for the capture instead of stopping it — clients keep their connections, the copy is crash-consistent — and `arcave.hook.pre-capture` / `post-capture` run a checkpoint, a maintenance switch or a lock in the container around it.
 *   **[Reversible rollback](https://www.greenmask.io/docs/arcave/reference/cli/rollback?utm_source=github&utm_medium=repo&utm_campaign=oss)**: A rollback takes a safety snapshot of what it is about to overwrite and replays it automatically if anything fails. A failed rollback leaves you where you started.
 *   **[End it, bring it back](https://www.greenmask.io/docs/arcave/reference/cli/up?utm_source=github&utm_medium=repo&utm_campaign=oss)**: `arcave down` takes the environment off the daemon, volumes and restored layers included, and `arcave up` builds it again from any savepoint — never over a running one unless you say `--force`.
 *   **[Sessions and branching](https://www.greenmask.io/docs/arcave/reference/cli/session?utm_source=github&utm_medium=repo&utm_campaign=oss)**: Independent lines of savepoints inside one project. A fork copies a whole session into a new one, and the two lines never mix.
