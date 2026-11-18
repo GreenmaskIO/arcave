@@ -33,9 +33,8 @@ var errCaptureDirectoryNotEmpty = errors.New("capture directory is not empty")
 // savepointHeartbeat is the heartbeat at the root of one savepoint's tree: in progress from before
 // the hold until the record is written, then done, or failed on any other end.
 type savepointHeartbeat struct {
-	id     model.SavepointID
-	worker *heartbeat.Worker
-	cancel context.CancelCauseFunc
+	operationHeartbeat
+	id model.SavepointID
 }
 
 // startSavepointHeartbeat refuses id's tree if it holds anything, then starts its heartbeat. What
@@ -55,62 +54,41 @@ func (s *Service) startSavepointHeartbeat(
 	if err = requireEmptyTree(ctx, tree, id); err != nil {
 		return nil, savepointHeartbeat{}, err
 	}
-	beatCtx, cancel := context.WithCancelCause(ctx)
-	worker := heartbeat.NewWorker(heartbeat.NewWriter(tree)).
-		SetInterval(s.heartbeatInterval).
-		SetStaleAfter(s.heartbeatStaleAfter)
 	initialBeat := heartbeat.Heartbeat{
 		Operation:  model.HeartbeatOperationSavepoint,
 		RunnerInfo: s.runnerInfo,
 	}
-	if err = worker.Start(ctx, initialBeat, cancel); err != nil {
-		// A write that timed out may still have landed: mark it failed rather than leave it in progress.
-		err = fmt.Errorf("savepoint %s: %w", id, err)
-		markCaptureFailed(ctx, worker, id, err)
-		cancel(nil)
-		return nil, savepointHeartbeat{}, err
+	beatCtx, beat, err := startOperationHeartbeat(ctx, heartbeat.NewWriter(tree),
+		s.heartbeatInterval, s.heartbeatStaleAfter, initialBeat)
+	if err != nil {
+		logCaptureRetained(ctx, id)
+		return nil, savepointHeartbeat{}, fmt.Errorf("savepoint %s: %w", id, err)
 	}
 	return beatCtx, savepointHeartbeat{
-		id:     id,
-		worker: worker,
-		cancel: cancel,
+		operationHeartbeat: beat,
+		id:                 id,
 	}, nil
-}
-
-// stop ends the beats once what the heartbeat frames has returned; call it exactly once.
-func (b savepointHeartbeat) stop() {
-	b.worker.Stop()
 }
 
 // alive refuses a commit once the stopped heartbeat's last good beat is too old.
 func (b savepointHeartbeat) alive() error {
-	if err := b.worker.Alive(); err != nil {
+	if err := b.operationHeartbeat.alive(); err != nil {
 		return fmt.Errorf("commit savepoint %s: %w", b.id, err)
 	}
 	return nil
 }
 
-// finish marks the stopped heartbeat done, its record written: past an interrupt too, which must
-// not leave it in progress.
-func (b savepointHeartbeat) finish(ctx context.Context) {
-	b.worker.Finish(context.WithoutCancel(ctx))
-	b.cancel(nil)
-}
-
 // abandon ends the heartbeat of a capture that never ran, its hold failed; see fail.
 func (b savepointHeartbeat) abandon(ctx, beatCtx context.Context, cause error) error {
-	b.worker.Stop()
+	b.stop()
 	return b.fail(ctx, beatCtx, cause)
 }
 
 // fail marks the stopped heartbeat failed and leaves the tree to a gc. A lost heartbeat is
 // returned in place of cause, the symptom it caused.
 func (b savepointHeartbeat) fail(ctx, beatCtx context.Context, cause error) error {
-	if lost := context.Cause(beatCtx); errors.Is(lost, model.ErrHeartbeatLost) {
-		cause = lost
-	}
-	markCaptureFailed(ctx, b.worker, b.id, cause)
-	b.cancel(nil)
+	cause = b.operationHeartbeat.fail(ctx, beatCtx, cause)
+	logCaptureRetained(ctx, b.id)
 	return cause
 }
 
@@ -128,9 +106,8 @@ func requireEmptyTree(ctx context.Context, tree storages.Inspector, id model.Sav
 	return nil
 }
 
-// markCaptureFailed marks an uncommitted capture's heartbeat failed and logs its tree for a gc.
-func markCaptureFailed(ctx context.Context, worker *heartbeat.Worker, id model.SavepointID, cause error) {
-	worker.Fail(ctx, cause)
+// logCaptureRetained logs an uncommitted capture's tree, left for a gc.
+func logCaptureRetained(ctx context.Context, id model.SavepointID) {
 	zerolog.Ctx(ctx).Warn().Str("snapshot_id", id.String()).
 		Msg("the partial capture is retained for a later gc")
 }

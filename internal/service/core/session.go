@@ -681,47 +681,36 @@ func (s *SessionService) forkSession(ctx context.Context, grantedLock model.Gran
 	if err != nil {
 		return fmt.Errorf("cloning session %s: open the heartbeat: %w", source, err)
 	}
-	copyCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	worker := heartbeat.NewWorker(writer).SetInterval(s.heartbeatInterval).SetStaleAfter(s.heartbeatStaleAfter)
-	initialBeat := heartbeat.Heartbeat{Operation: model.HeartbeatOperationFork, RunnerInfo: s.runnerInfo, Data: forkData}
-	if err := worker.Start(ctx, initialBeat, cancel); err != nil {
-		// A write that timed out may still have landed: mark it failed rather than leave it in progress.
-		err = fmt.Errorf("cloning session %s: %w", source, err)
-		abandonFork(ctx, worker, session.ID, err)
-		return err
+	initialBeat := heartbeat.Heartbeat{
+		Operation:  model.HeartbeatOperationFork,
+		RunnerInfo: s.runnerInfo,
+		Data:       forkData,
+	}
+	copyCtx, beat, err := startOperationHeartbeat(ctx, writer, s.heartbeatInterval, s.heartbeatStaleAfter, initialBeat)
+	if err != nil {
+		logForkAbandoned(ctx, session.ID)
+		return fmt.Errorf("cloning session %s: %w", source, err)
 	}
 	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Str("from", source.String()).
 		Msg("heartbeat started; copying the source tree")
 	copied, err := s.sessions.CopySession(copyCtx, source, session.ID, heartbeat.FileName)
-	worker.Stop()
+	beat.stop()
 	if err != nil {
-		if cause := context.Cause(copyCtx); errors.Is(cause, model.ErrHeartbeatLost) {
-			err = cause
-		}
-		err = fmt.Errorf("cloning session %s: %w", source, err)
-		abandonFork(ctx, worker, session.ID, err)
-		return err
+		return abandonFork(ctx, copyCtx, beat, session.ID, fmt.Errorf("cloning session %s: %w", source, err))
 	}
 	zerolog.Ctx(ctx).Info().Str("session", session.ID.String()).Str("from", source.String()).
 		Int64("copied_bytes", copied).Msg("session cloned")
 
-	if err := worker.Alive(); err != nil {
-		err = fmt.Errorf("committing session %s: %w", session.ID, err)
-		abandonFork(ctx, worker, session.ID, err)
-		return err
+	if err := beat.alive(); err != nil {
+		return abandonFork(ctx, copyCtx, beat, session.ID, fmt.Errorf("committing session %s: %w", session.ID, err))
 	}
 	if err := grantedLock.Verify(ctx); err != nil {
-		err = fmt.Errorf("committing session %s: %w", session.ID, err)
-		abandonFork(ctx, worker, session.ID, err)
-		return err
+		return abandonFork(ctx, copyCtx, beat, session.ID, fmt.Errorf("committing session %s: %w", session.ID, err))
 	}
 	if err := s.sessions.SaveSession(ctx, session); err != nil {
-		err = fmt.Errorf("committing session %s: %w", session.ID, err)
-		abandonFork(ctx, worker, session.ID, err)
-		return err
+		return abandonFork(ctx, copyCtx, beat, session.ID, fmt.Errorf("committing session %s: %w", session.ID, err))
 	}
-	worker.Finish(ctx)
+	beat.finish(ctx)
 	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Msg("fork committed")
 	return nil
 }
@@ -738,10 +727,17 @@ func (s *SessionService) requireEmptyForkTree(ctx context.Context, id model.Sess
 	return nil
 }
 
-// abandonFork marks an uncommitted fork failed and logs its tree, the only pointer left to it.
-func abandonFork(ctx context.Context, worker *heartbeat.Worker, id model.SessionID, cause error) {
+// abandonFork marks an uncommitted fork's heartbeat failed and logs its tree, the only pointer
+// left to it. A lost heartbeat is returned in place of cause, the symptom it caused.
+func abandonFork(ctx, copyCtx context.Context, beat operationHeartbeat, id model.SessionID, cause error) error {
+	cause = beat.fail(ctx, copyCtx, cause)
+	logForkAbandoned(ctx, id)
+	return cause
+}
+
+// logForkAbandoned logs an uncommitted fork's tree, the only pointer left to it.
+func logForkAbandoned(ctx context.Context, id model.SessionID) {
 	logInterrupt(ctx, "fork interrupted: the partial session is not committed")
-	worker.Fail(ctx, cause)
 	zerolog.Ctx(ctx).Error().Str("session", id.String()).Str("tree", "sessions/"+id.String()).
 		Msg("the fork did not commit; its tree is left in the store")
 }
