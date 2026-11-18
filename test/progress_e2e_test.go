@@ -144,13 +144,13 @@ func TestProgressE2E_JSONStream(t *testing.T) {
 		assert.Empty(t, stream.last.Error, name)
 	}
 	for _, kind := range []progress.Kind{
-		"savepoint.create", "project.introspect", "savepoint.hold",
-		"savepoint.capture", "volume.capture", "volume", "layer.capture", "layer", "savepoint.release",
+		"savepoint.create", "project.introspect", "savepoint.hold", "compose.stop",
+		"savepoint.capture", "volume.capture", "volume", "layer.capture", "layer", "savepoint.release", "compose.start",
 	} {
 		assert.True(t, created.kinds[kind], "savepoint create reports %s", kind)
 	}
 	assert.False(t, created.kinds["session.lock"], "a free session lock is not reported")
-	assert.True(t, created.settled["savepoint.hold"], "compose's containers settle under savepoint.hold")
+	assert.True(t, created.settled["compose.stop"], "compose's containers settle under compose.stop")
 	assert.True(t, rolledBack.settled["compose.create"], "and under compose.create")
 	for _, kind := range []progress.Kind{
 		"rollback", "rollback.prepare", "layer.restore", "rollback.safety-snapshot", "savepoint.hold", "savepoint.capture",

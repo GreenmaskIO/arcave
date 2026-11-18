@@ -45,8 +45,9 @@ func TestNewNotCoveredWarning(t *testing.T) {
 			notCovered: &model.NotCovered{
 				Mounts:           []model.SkippedVolume{{}, {}},
 				KilledContainers: []model.KilledContainer{{}},
+				FailedHooks:      []model.FailedHook{{}},
 			},
-			want: "not covered: 2 mount(s), 1 killed container(s)",
+			want: "not covered: 2 mount(s), 1 killed container(s), 1 failed hook(s)",
 		},
 	}
 	for _, tt := range tests {

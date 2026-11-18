@@ -93,10 +93,9 @@ func TestPlanner_newReplacementPolicy(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			policy, labelsIgnored, err := svc.newReplacementPolicy(ctx, introspection, composetest.DemoRecord())
+			policy, labelsIgnored := svc.newReplacementPolicy(ctx, introspection, composetest.DemoRecord())
 
 			// Assert
-			require.NoError(t, err)
 			assert.True(t, policy.DecideNamedVolume("demo_db").Capture)
 			if tt.wantIgnored {
 				assert.ErrorIs(t, labelsIgnored, composemodel.ErrInvalidCapturePolicy)
@@ -201,10 +200,9 @@ func TestPlanner_newReplacementPolicy_FallbackKeepsTheConfig(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	policy, _, err := svc.newReplacementPolicy(ctx, introspection, composetest.DemoRecord())
+	policy, _ := svc.newReplacementPolicy(ctx, introspection, composetest.DemoRecord())
 
 	// Assert
-	require.NoError(t, err)
 	assert.False(t, policy.DecideService(composetest.DemoService).WritableLayer.Capture)
 }
 
@@ -654,4 +652,92 @@ func TestStampServices(t *testing.T) {
 	// Assert
 	assert.Equal(t, types.Labels{"tier": "data", string(model.SystemLabelWritableLayerStamp): "true; origin=config"}, project.Services["db"].Labels)
 	assert.NotContains(t, project.Services, "gone")
+}
+
+// A bind or anonymous volume the restore overwrites is taken, whatever its decision said; one the
+// restore leaves alone, and a named volume's mount, keep theirs.
+func TestNewKeptMounts(t *testing.T) {
+	var (
+		excluded = composemodel.VolumeDecision{
+			CaptureDecision: composemodel.CaptureDecision{Origin: composemodel.OriginLabel, Source: "arcave.mounts.exclude=/data on service app"},
+			Backend:         model.SnapshotBackendCDC,
+		}
+		bind  = composemodel.ServiceVolume{Type: model.VolumeTypeBind, Source: "/srv/data", Target: "/data"}
+		anon  = composemodel.ServiceVolume{Type: model.VolumeTypeAnon, Target: "/cache", Replica: 1, VolumeName: "anon-1"}
+		named = composemodel.ServiceVolume{Type: model.VolumeTypeNamed, Target: "/db", VolumeName: "demo_db"}
+		kept  = composemodel.VolumeDecision{
+			CaptureDecision: composemodel.NewConfigDecision(true, "the rollback restores into it"),
+			Backend:         model.SnapshotBackendCDC,
+		}
+	)
+	refOf := func(mount composemodel.ServiceVolume) composemodel.MountRef {
+		return composemodel.MountRef{Service: "app", Replica: mount.Replica, Target: mount.Target}
+	}
+
+	tests := []struct {
+		name     string
+		mount    composemodel.ServiceVolume
+		restored bool
+		want     map[composemodel.MountRef]composemodel.VolumeDecision
+	}{
+		{
+			name:     "a bind left out and restored into is taken, on its backend",
+			mount:    bind,
+			restored: true,
+			want:     map[composemodel.MountRef]composemodel.VolumeDecision{refOf(bind): kept},
+		},
+		{
+			name:     "an anonymous volume left out and restored into is taken",
+			mount:    anon,
+			restored: true,
+			want:     map[composemodel.MountRef]composemodel.VolumeDecision{refOf(anon): kept},
+		},
+		{
+			name:  "one the restore leaves alone keeps its decision",
+			mount: bind,
+			want:  map[composemodel.MountRef]composemodel.VolumeDecision{refOf(bind): excluded},
+		},
+		{
+			name:     "a named volume's mount is the named volume's to decide",
+			mount:    named,
+			restored: true,
+			want:     map[composemodel.MountRef]composemodel.VolumeDecision{refOf(named): excluded},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			capturePolicy := composemodel.CapturePolicy{Mounts: map[composemodel.MountRef]composemodel.VolumeDecision{refOf(tt.mount): excluded}}
+			introspection := composemodel.IntrospectionResult{Project: composemodel.Project{Services: []composemodel.Service{
+				{Name: "app", Volumes: []composemodel.ServiceVolume{tt.mount}},
+			}}}
+			restored := map[string]bool{tt.mount.ObjectID("app"): tt.restored}
+
+			// Act
+			got := newKeptMounts(capturePolicy, introspection, restored)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, excluded, capturePolicy.Mounts[refOf(tt.mount)], "the policy it was read from is left as it was")
+		})
+	}
+}
+
+// Every service is held by stop and runs no hook; its capture decisions stay as they were.
+func TestNewStoppedServices(t *testing.T) {
+	// Arrange
+	image := composemodel.CaptureDecision{Origin: composemodel.OriginLabel, Source: "arcave.image.capture=false on service db"}
+	decisions := map[string]composemodel.ServiceDecision{"db": {
+		Image:       image,
+		Mode:        model.CaptureModePause,
+		PreCapture:  &composemodel.Hook{Command: []string{"pre"}},
+		PostCapture: &composemodel.Hook{Command: []string{"post"}},
+	}}
+
+	// Act
+	got := newStoppedServices(decisions)
+
+	// Assert
+	assert.Equal(t, map[string]composemodel.ServiceDecision{"db": {Image: image, Mode: model.CaptureModeStop}}, got)
+	assert.Equal(t, model.CaptureModePause, decisions["db"].Mode, "the decisions it was read from are left as they were")
 }

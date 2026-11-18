@@ -18,6 +18,14 @@ A service with [`arcave.capture.mode: pause`](../capture_modes.md) is frozen ins
 
 `savepoint create` and `rollback` resume every replica they find frozen, yours included, with a warning: a savepoint leaves the compose project running, and a rollback replaces it. A pause that the engine cannot do — Podman rootless on cgroup v1 — fails the savepoint before anything is captured, and the project is started back.
 
+## Hooks are arcave's own, and run only around a savepoint
+
+* Compose's own `pre_stop` and `post_start` lifecycle hooks are not run by arcave: a savepoint stops and starts the services through the Docker API.
+* A [hook](../capture_modes.md#hooks-preparing-the-application) that times out, or whose savepoint is interrupted with Ctrl-C, is not killed: the Docker API cannot stop an exec, so the process runs on in the container. The `post-capture` hooks do not wait for it: a `pre-capture` hook that outlives its timeout may finish after the `post-capture` one that undoes it — a `maintenance on` landing after its `maintenance off`.
+* The `post-capture` hooks run within the ten minutes a savepoint has to bring the project back.
+* A rollback runs no hook, its safety snapshot included.
+* All the hooks of a phase run at once; there is no order between services.
+
 ## A slow shutdown can be captured mid-crash
 
 A container that doesn't shut down within [`compose.stop_timeout`](configuration.md#compose), or within its own `stop_grace_period` if that is longer, is killed. Its volume is then captured as it was at the moment it was killed, and a database will have to recover from that state on its next start. The savepoint still reports success. The killed container is named in a warning and in the savepoint's `not_covered.killed_containers`. Give slow services a long enough `stop_grace_period`.

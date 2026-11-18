@@ -23,6 +23,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/hold"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -48,14 +49,13 @@ func (c capturedSavepoint) Commit(ctx context.Context) (model.Savepoint, error) 
 }
 
 // Capture stores a savepoint of a project already held still under req.ID, short of its record;
-// killed are the containers the stop killed. On error the handle is nil and what was stored is
-// left to a gc.
+// outcome is what holding it did. On error the handle is nil and what was stored is left to a gc.
 func (s *Capturer) Capture(
-	ctx context.Context, plan composemodel.Plan, killed []string, req provider.CaptureRequest,
+	ctx context.Context, plan composemodel.Plan, outcome hold.Outcome, req provider.CaptureRequest,
 ) (_ provider.CapturedSavepoint, err error) {
 	var (
 		createdAt  = time.Now()
-		notCovered = plan.NewNotCovered(killed)
+		notCovered = plan.NewNotCovered(outcome.Killed, outcome.FailedHooks)
 		stored     storedSavepoint
 	)
 	ctx, step := progress.Begin(ctx, progress.Step{

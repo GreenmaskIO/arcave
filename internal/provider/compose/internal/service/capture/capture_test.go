@@ -29,6 +29,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/hold"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
@@ -38,7 +39,7 @@ func captureAndCommit(
 	ctx context.Context, svc *Capturer, plan composemodel.Plan, killed []string, req provider.CaptureRequest,
 ) (model.Savepoint, error) {
 	req.ID = cmp.Or(req.ID, model.NewSavepointID())
-	captured, err := svc.Capture(ctx, plan, killed, req)
+	captured, err := svc.Capture(ctx, plan, hold.Outcome{Killed: killed}, req)
 	if err != nil {
 		return model.Savepoint{}, err
 	}
@@ -77,7 +78,7 @@ func TestCaptured_Commit(t *testing.T) {
 			svc := New(Deps{SavepointRepo: repo})
 			plan := composemodel.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
 			ctx := composetest.NewTestContext()
-			captured, err := svc.Capture(ctx, plan, nil, provider.CaptureRequest{ID: id, Name: "sp"})
+			captured, err := svc.Capture(ctx, plan, hold.Outcome{}, provider.CaptureRequest{ID: id, Name: "sp"})
 			require.NoError(t, err)
 
 			// Act
@@ -240,7 +241,7 @@ func TestCapturer_Capture_RefusesAnInvalidID(t *testing.T) {
 	plan := composemodel.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
 
 	// Act
-	captured, err := svc.Capture(composetest.NewTestContext(), plan, nil, provider.CaptureRequest{ID: "..", Name: "sp"})
+	captured, err := svc.Capture(composetest.NewTestContext(), plan, hold.Outcome{}, provider.CaptureRequest{ID: "..", Name: "sp"})
 
 	// Assert
 	require.ErrorIs(t, err, model.ErrInvalidSavepointID)

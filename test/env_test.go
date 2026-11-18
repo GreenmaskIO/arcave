@@ -190,6 +190,24 @@ func (e *composeProject) externalVolume(t *testing.T, name, script string) {
 	})
 }
 
+// container is the first replica of service.
+func (e *composeProject) container(t *testing.T, service string) string {
+	t.Helper()
+
+	replicas := e.listByService(t)[service]
+	require.NotEmpty(t, replicas, "no replica of service %s", service)
+	return replicas[0].ID
+}
+
+// inspect is what the daemon reports of one container.
+func (e *composeProject) inspect(t *testing.T, containerID string) container.InspectResponse {
+	t.Helper()
+
+	res, err := e.daemon.ContainerInspect(e.ctx, containerID, client.ContainerInspectOptions{})
+	require.NoError(t, err)
+	return res.Container
+}
+
 // replicaNumber is the replica compose numbered c.
 func replicaNumber(t *testing.T, c container.Summary) int {
 	t.Helper()

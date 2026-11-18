@@ -158,6 +158,9 @@ const (
 	ProgressQuiet = "quiet"
 )
 
+// DefaultHookTimeout bounds one hook in one replica when neither its label nor the config does.
+const DefaultHookTimeout = 60 * time.Second
+
 // The tokens compose.leftover_volumes accepts.
 const (
 	// LeftoverVolumesOverwrite restores over a volume that outlived its compose project's
@@ -219,6 +222,12 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Capture.Volumes.Anonymous == nil {
 		c.Capture.Volumes.Anonymous = utils.New(true)
+	}
+	if c.Capture.Hooks.Timeout == 0 {
+		c.Capture.Hooks.Timeout = DefaultHookTimeout
+	}
+	if c.Capture.Hooks.OnError == "" {
+		c.Capture.Hooks.OnError = string(model.HookOnErrorFail)
 	}
 	// Whatever snapshot.backend says: a label may route a volume through fullcopy.
 	if c.Backends.FullCopy.Compression == "" {
@@ -438,15 +447,42 @@ type Capture struct {
 	WritableLayers *bool          `yaml:"writable_layers" mapstructure:"writable_layers"`
 	Images         *bool          `yaml:"images" mapstructure:"images"`
 	Volumes        CaptureVolumes `yaml:"volumes" mapstructure:"volumes"`
+	Hooks          CaptureHooks   `yaml:"hooks" mapstructure:"hooks"`
 }
 
-// Validate rejects a capture mode arcave does not know.
+// Validate rejects a capture mode arcave does not know and hook defaults it cannot act on.
 func (c Capture) Validate() error {
 	if _, ok := model.ParseCaptureMode(c.Mode); !ok {
 		return fmt.Errorf("unsupported capture.mode %q (supported: %s, %s, %s)",
 			c.Mode, model.CaptureModeStop, model.CaptureModePause, model.CaptureModeLive)
 	}
+	return c.Hooks.Validate()
+}
+
+// CaptureHooks are the defaults of a hook whose labels leave a setting unset.
+type CaptureHooks struct {
+	// Timeout bounds one hook in one replica.
+	Timeout time.Duration `yaml:"timeout" mapstructure:"timeout"`
+	// OnError is what a failed hook does: fail the workflow, or continue with a warning.
+	OnError string `yaml:"on_error" mapstructure:"on_error"`
+}
+
+// Validate rejects a timeout that is not positive and an on-error arcave does not know.
+func (h CaptureHooks) Validate() error {
+	if h.Timeout <= 0 {
+		return fmt.Errorf("capture.hooks.timeout must be a positive duration, got %s", h.Timeout)
+	}
+	if _, ok := model.ParseHookOnError(h.OnError); !ok {
+		return fmt.Errorf("unsupported capture.hooks.on_error %q (supported: %s, %s)",
+			h.OnError, model.HookOnErrorFail, model.HookOnErrorContinue)
+	}
 	return nil
+}
+
+// OnErrorKind is the configured on-error as the kind a hook carries.
+func (h CaptureHooks) OnErrorKind() model.HookOnError {
+	onError, _ := model.ParseHookOnError(h.OnError)
+	return onError
 }
 
 // CaptureVolumes says which kinds of volume a savepoint takes.

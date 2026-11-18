@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -486,4 +487,29 @@ type mcpGCReports struct {
 		Error    string                 `json:"error"`
 		Deletion *model.GarbageDeletion `json:"deletion"`
 	} `json:"reports"`
+}
+
+// A failed post-capture hook is the tool's error, in the CLI's words: the savepoint it kept is named.
+func TestMCP_SavepointCreateHookFailure(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	env := newHooksEnv(t, 1, map[string]string{
+		"arcave.hook.post-capture": "sh -c 'echo lock held >&2; exit 1'",
+	})
+	transport := &mcpsdk.CommandTransport{Command: arcaveCommandIn(t, env.root, "mcp")}
+	cs, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "arcave-it", Version: "0"}, nil).
+		Connect(env.ctx, transport, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cs.Close() })
+
+	// Act
+	msg := callToolErr(t, cs, "savepoint_create", map[string]any{"compose_project": env.project, "name": "sp1"})
+	listed := env.savepoints(t)
+
+	// Assert
+	require.Len(t, listed, 1)
+	assert.Contains(t, msg, fmt.Sprintf(
+		"savepoint %s committed; bringing the project back: post-capture hook of app-1 failed: exit 1: lock held",
+		listed[0].ID))
 }

@@ -244,7 +244,7 @@ func TestCaptureHeld(t *testing.T) {
 		{
 			name:             "a failed release past the commit names the savepoint",
 			releaseErr:       errBoom,
-			wantErr:          "savepoint " + committed.ID.String() + " committed; services failed to resume: boom",
+			wantErr:          "savepoint " + committed.ID.String() + " committed; bringing the project back: boom",
 			wantNoRestartLog: true,
 			wantBeat:         heartbeat.StatusDone,
 		},
@@ -253,7 +253,7 @@ func TestCaptureHeld(t *testing.T) {
 			captureErr:   errors.New("capture boom"),
 			releaseErr:   errBoom,
 			wantErr:      "capturing the savepoint: capture boom",
-			wantLogOrder: []string{"services failed to resume after capture failure"},
+			wantLogOrder: []string{"bringing the project back failed after the capture failure"},
 			wantBeat:     heartbeat.StatusFailed,
 		},
 		{
@@ -261,7 +261,7 @@ func TestCaptureHeld(t *testing.T) {
 			holdErr:      errors.New("stop boom"),
 			releaseErr:   errBoom,
 			wantErr:      "stop boom",
-			wantLogOrder: []string{"services failed to resume after hold failure"},
+			wantLogOrder: []string{"bringing the project back failed after the hold failure"},
 			wantBeat:     heartbeat.StatusFailed,
 		},
 	}
@@ -322,7 +322,7 @@ func TestCaptureHeld(t *testing.T) {
 			}
 			assertLogOrder(t, logs.String(), tt.wantLogOrder)
 			if tt.wantNoRestartLog {
-				assert.NotContains(t, logs.String(), "services failed to resume")
+				assert.NotContains(t, logs.String(), "bringing the project back failed")
 			}
 			assert.Equal(t, tt.wantBeat, readSavepointHeartbeat(t, store, committed.ID).Status)
 			capturer.AssertExpectations(t)

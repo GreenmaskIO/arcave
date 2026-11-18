@@ -434,6 +434,8 @@ func newCaptureDefaults(volumeBackend model.SnapshotBackendKind) capturepolicy.C
 	return capturepolicy.CaptureDefaults{
 		VolumeBackend:        volumeBackend,
 		WritableLayerBackend: model.ImageBackendDedupCopy,
+		HookTimeout:          composeconfig.DefaultHookTimeout,
+		HookOnError:          model.HookOnErrorFail,
 		Mode:                 model.CaptureModeStop,
 		SavepointCapture: capturepolicy.SavepointCaptureSettings{
 			WritableLayers:   true,

@@ -120,7 +120,8 @@ type imageLookup interface {
 	ImageRefExists(ctx context.Context, ref string) (bool, error)
 }
 
-// containerControl freezes containers for a capture and resumes them after.
+// containerControl freezes containers for a capture and resumes them after, and runs the hooks in
+// them.
 type containerControl interface {
 	PauseContainers(ctx context.Context, ids []string) error
 	// UnpauseContainers resumes whichever of the containers is paused; one that is not, or is
@@ -129,6 +130,9 @@ type containerControl interface {
 	// AwaitHealthProbes waits out the unhealthy a pause leaves on the containers until their next
 	// probe, bounded by their healthchecks.
 	AwaitHealthProbes(ctx context.Context, ids []string) error
+	// ExecInContainer runs spec in the container and waits for it to exit; a container not
+	// running is composemodel.ErrContainerNotRunning.
+	ExecInContainer(ctx context.Context, id string, spec composemodel.ExecSpec) (composemodel.ExecResult, error)
 }
 
 // Deps are the collaborators of a compose project's workload.
@@ -137,8 +141,8 @@ type Deps struct {
 	ComposeReader composeIntrospector
 	ImageBackend  imageBackend
 	ComposeRunner composeRunner
-	// ContainerControl pauses the services captured with model.CaptureModePause, and resumes a
-	// replica found frozen.
+	// ContainerControl pauses the services captured with model.CaptureModePause, resumes a
+	// replica found frozen, and runs the hooks.
 	ContainerControl containerControl
 	VolumeRemover    volumeRemover
 	// ProjectRemover removes by docker name what compose's down leaves of a dropped compose

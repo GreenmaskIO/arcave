@@ -75,6 +75,15 @@ func TestResolveConfig(t *testing.T) {
 			},
 		},
 		{
+			name:      "the hook variables win over the file, a Go duration included",
+			file:      "capture:\n  hooks:\n    timeout: 10s\n    on_error: fail\n",
+			env:       map[string]string{"ARCAVE_CAPTURE_HOOKS_TIMEOUT": "2m", "ARCAVE_CAPTURE_HOOKS_ON_ERROR": "continue"},
+			wantFound: true,
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				assert.Equal(t, composeconfig.CaptureHooks{Timeout: 2 * time.Minute, OnError: "continue"}, cfg.ComposeProvider.Capture.Hooks)
+			},
+		},
+		{
 			name: "reads the nested sections",
 			file: "project:\n  name: proj\n" +
 				"docker:\n  host: unix:///tmp/d.sock\n" +

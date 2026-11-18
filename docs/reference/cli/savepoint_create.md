@@ -188,7 +188,8 @@ Full shapes for every command are in [Output](../output.md).
 | An interrupted rollback is marked | `rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring); recover by rolling back to 019e8491-04c8-7000-8000-000000000000` — see [Troubleshooting](../troubleshooting.md#an-interrupted-rollback). |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
 | The capture can't write its `heartbeat.json` for 25 minutes | `heartbeat lost` — the capture cancels itself and commits nothing; its directory is left for [`arcave gc`](gc.md). Check that the store is reachable and writable. |
-| The services do not become healthy in `--wait-timeout` | `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to resume: …` — **the savepoint exists and is complete.** Only the restart failed: note the id, and look at the project. |
+| A `pre-capture` [hook](../../capture_modes.md#hooks-preparing-the-application) fails | `pre-capture hook of db-1 failed: exit 3: …` — nothing was held or captured. See [Troubleshooting](../troubleshooting.md#a-hook-failed). |
+| The services do not become healthy in `--wait-timeout`, or a `post-capture` hook fails | `savepoint 019e843e-1650-7000-8000-000000000000 committed; bringing the project back: …` — **the savepoint exists and is complete.** Only what came after the commit failed: note the id, and look at the project. |
 
 An error raised during the capture itself — after the services are stopped — is prefixed `capturing the savepoint: `, and the services are started again.
 

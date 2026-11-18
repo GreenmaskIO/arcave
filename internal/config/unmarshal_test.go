@@ -487,6 +487,32 @@ func TestUnmarshal(t *testing.T) {
 			wantErrMsg: `unsupported capture.mode "freeze" (supported: stop, pause, live)`,
 		},
 		{
+			name: "the hook defaults: a minute, and a failure fails",
+			yaml: "",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, composeconfig.CaptureHooks{Timeout: time.Minute, OnError: "fail"}, cfg.ComposeProvider.Capture.Hooks)
+				assert.Equal(t, model.HookOnErrorFail, cfg.ComposeProvider.Capture.Hooks.OnErrorKind())
+			},
+		},
+		{
+			name: "the hook defaults are read, a Go duration included",
+			yaml: "capture:\n  hooks:\n    timeout: 2m\n    on_error: continue\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, composeconfig.CaptureHooks{Timeout: 2 * time.Minute, OnError: "continue"}, cfg.ComposeProvider.Capture.Hooks)
+				assert.Equal(t, model.HookOnErrorContinue, cfg.ComposeProvider.Capture.Hooks.OnErrorKind())
+			},
+		},
+		{
+			name:       "a negative hook timeout is rejected",
+			yaml:       "capture:\n  hooks:\n    timeout: -1s\n",
+			wantErrMsg: "capture.hooks.timeout must be a positive duration, got -1s",
+		},
+		{
+			name:       "a hook on-error arcave does not know is rejected",
+			yaml:       "capture:\n  hooks:\n    on_error: ignore\n",
+			wantErrMsg: `unsupported capture.hooks.on_error "ignore" (supported: fail, continue)`,
+		},
+		{
 			name:       "an unknown kind is rejected",
 			yaml:       "capture:\n  volumes:\n    tmpfs: true\n",
 			wantErrMsg: "tmpfs",

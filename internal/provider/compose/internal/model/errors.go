@@ -32,4 +32,6 @@ var (
 	ErrUnsupportedImageArchive = errors.New("unsupported image archive format")
 	// ErrInvalidCapturePolicy reports an arcave.* label arcave cannot act on.
 	ErrInvalidCapturePolicy = errors.New("invalid capture policy label")
+	// ErrContainerNotRunning reports an exec into a container stopped, frozen or gone.
+	ErrContainerNotRunning = errors.New("container is not running")
 )

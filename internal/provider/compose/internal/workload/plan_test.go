@@ -26,6 +26,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/hold"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -63,15 +64,50 @@ func TestCapturePlan_Hold(t *testing.T) {
 			if tt.wantErr == "" {
 				require.NoError(t, err)
 				require.IsType(t, heldWorkload{}, holding)
-				assert.Equal(t, tt.wantKilled, holding.(heldWorkload).killed)
+				assert.Equal(t, hold.Outcome{Killed: tt.wantKilled}, holding.(heldWorkload).outcome)
 			} else {
 				assert.EqualError(t, err, tt.wantErr)
 				assert.Nil(t, holding)
 			}
-			assert.Equal(t, []progress.Kind{"test", kindSavepointHold}, recorder.Kinds)
+			assert.Equal(t, []progress.Kind{"test", kindSavepointHold, "compose.stop"}, recorder.Kinds)
 			runner.AssertExpectations(t)
 		})
 	}
+}
+
+// A pre-capture hook's failure let through rides on the held workload, beside the killed containers.
+func TestCapturePlan_Hold_CarriesFailedHooks(t *testing.T) {
+	// Arrange
+	runner := &composetest.MockComposeRunner{}
+	control := &composetest.MockContainerControl{}
+	pre := control.On("ExecInContainer", mock.Anything, composetest.DemoContainerID, composemodel.ExecSpec{Cmd: []string{"pre"}}).
+		Return(composemodel.ExecResult{ExitCode: 3}, nil).Once()
+	stop := runner.On("Stop", mock.Anything, composetest.DemoSpec).Return([]string{"c1"}, nil).Once()
+	mock.InOrder(pre, stop)
+	svc := newComposeWorkload(Deps{ComposeRunner: runner, ContainerControl: control})
+	plan := composemodel.Plan{Project: composetest.DemoSpec, Services: []composemodel.ServiceHold{{
+		Service: composetest.DemoService,
+		Mode:    model.CaptureModeStop,
+		Running: []composemodel.ContainerRef{composetest.DemoContainerRef()},
+		PreCapture: &composemodel.Hook{
+			Command: []string{"pre"},
+			Timeout: time.Minute,
+			OnError: model.HookOnErrorContinue,
+		},
+	}}}
+
+	// Act
+	holding, err := svc.newCapturePlan(plan, composemodel.IntrospectionResult{}).Hold(composetest.NewTestContext())
+
+	// Assert
+	require.NoError(t, err)
+	require.IsType(t, heldWorkload{}, holding)
+	outcome := holding.(heldWorkload).outcome
+	assert.Equal(t, []string{"c1"}, outcome.Killed)
+	require.Len(t, outcome.FailedHooks, 1)
+	assert.Equal(t, "exit 3", outcome.FailedHooks[0].Error)
+	runner.AssertExpectations(t)
+	control.AssertExpectations(t)
 }
 
 // Release starts the whole project under a savepoint.release step.
@@ -109,7 +145,7 @@ func TestCapturePlan_Release(t *testing.T) {
 			} else {
 				assert.EqualError(t, err, tt.wantErr)
 			}
-			assert.Equal(t, []progress.Kind{"test", kindSavepointRelease}, recorder.Kinds)
+			assert.Equal(t, []progress.Kind{"test", kindSavepointRelease, "compose.start"}, recorder.Kinds)
 			runner.AssertExpectations(t)
 		})
 	}

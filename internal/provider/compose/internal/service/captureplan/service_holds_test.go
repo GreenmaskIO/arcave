@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/rs/zerolog"
@@ -81,6 +82,24 @@ func TestNewServiceHolds(t *testing.T) {
 			},
 		},
 		{
+			name: "a service's hooks are carried",
+			services: []composemodel.Service{
+				{Name: "db", Containers: []composemodel.Container{newStateReplica("db", 1, running)}},
+			},
+			policy: composemodel.CapturePolicy{Services: map[string]composemodel.ServiceDecision{
+				"db": {PreCapture: &composemodel.Hook{Command: []string{"pre"}}, PostCapture: &composemodel.Hook{Command: []string{"post"}}},
+			}},
+			want: func(services []composemodel.Service) []composemodel.ServiceHold {
+				return []composemodel.ServiceHold{{
+					Service:     "db",
+					Mode:        model.CaptureModeStop,
+					Running:     []composemodel.ContainerRef{refOf(services[0].Containers[0], "db")},
+					PreCapture:  &composemodel.Hook{Command: []string{"pre"}},
+					PostCapture: &composemodel.Hook{Command: []string{"post"}},
+				}}
+			},
+		},
+		{
 			name: "a paused, exited, created or restarting replica is idle; no state is running",
 			services: []composemodel.Service{{Name: "db", Containers: []composemodel.Container{
 				newStateReplica("db", 1, paused),
@@ -141,15 +160,36 @@ func TestPlanner_newReplacementPolicy_StopsEveryService(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			policy, _, err := svc.newReplacementPolicy(ctx, composetest.LabelledIntrospection(tt.labels), composetest.DemoRecord())
+			policy, _ := svc.newReplacementPolicy(ctx, composetest.LabelledIntrospection(tt.labels), composetest.DemoRecord())
 
 			// Assert
-			require.NoError(t, err)
 			assert.Equal(t, model.CaptureModeStop, policy.Mode)
 			assert.Equal(t, model.CaptureModeStop, policy.DecideService(composetest.DemoService).Mode)
 			assert.Equal(t, model.CaptureModeStop, policy.DecideService("unlabelled").Mode)
 		})
 	}
+}
+
+// A capture before a restore runs no hook, whatever the labels say.
+func TestPlanner_newReplacementPolicy_RunsNoHook(t *testing.T) {
+	// Arrange
+	defaults := composetest.DemoCaptureDefaults
+	defaults.HookTimeout = time.Minute
+	defaults.HookOnError = model.HookOnErrorFail
+	svc := New(Deps{CaptureDefaults: defaults})
+	ctx := zerolog.Nop().WithContext(context.Background())
+	labels := map[string]string{
+		string(model.CaptureLabelHookPreCapture):  "pre",
+		string(model.CaptureLabelHookPostCapture): "post",
+	}
+
+	// Act
+	policy, labelsIgnored := svc.newReplacementPolicy(ctx, composetest.LabelledIntrospection(labels), composetest.DemoRecord())
+
+	// Assert
+	assert.NoError(t, labelsIgnored)
+	assert.Nil(t, policy.DecideService(composetest.DemoService).PreCapture)
+	assert.Nil(t, policy.DecideService(composetest.DemoService).PostCapture)
 }
 
 // A savepoint's plan holds each service by its label, or by the config's mode.

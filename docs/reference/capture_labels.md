@@ -1,7 +1,7 @@
 ---
 title: Capture labels
 description: The arcave.* compose labels that decide what a savepoint captures — per service, per mount and per volume — which backend captures it, how the labels and the config's capture defaults combine, and what a label arcave cannot read does.
-keywords: [arcave labels, capture policy, arcave.capture, arcave.mounts.exclude, writable layer, docker compose labels, cdc]
+keywords: [arcave labels, capture policy, arcave.capture, arcave.mounts.exclude, arcave.hook.pre-capture, writable layer, docker compose labels, cdc]
 ---
 
 # Capture labels
@@ -24,6 +24,11 @@ On a **service** (`services.<name>.labels`):
 | `arcave.writable-layer.backend` | `dedupcopy` / `fullcopy` | How those layers are stored; see [`writable_layers`](configuration.md#writable_layers). |
 | `arcave.image.capture` | `true` / `false` | The bytes of the image the service's `image:` names. |
 | `arcave.capture.mode` | `stop` / `pause` / `live` | How the service is held still while a savepoint captures it; see [Capture modes](../capture_modes.md). |
+| `arcave.hook.pre-capture` | a command | Run in each running replica before the service is held still; see [Hooks](../capture_modes.md#hooks-preparing-the-application). |
+| `arcave.hook.post-capture` | a command | Run in each replica once the project is back. |
+| `arcave.hook.<phase>.user` | a user, `uid` or `uid:gid` | The user the hook runs as; the container's by default. |
+| `arcave.hook.<phase>.timeout` | a Go duration (`30s`, `2m`) | How long the hook may run in one replica; [`capture.hooks.timeout`](configuration.md#capture) by default. |
+| `arcave.hook.<phase>.on-error` | `fail` / `continue` | What a failed hook does; [`capture.hooks.on_error`](configuration.md#capture) by default. |
 
 On a **named volume** (`volumes.<name>.labels`):
 
@@ -43,7 +48,7 @@ The most specific label wins:
 3. The service's defaults — `arcave.capture`, `arcave.volume.backend`.
 4. The config: [`capture.*`](configuration.md#capture), [`snapshot.backend`](configuration.md#snapshot) and [`writable_layers.backend`](configuration.md#writable_layers).
 
-`arcave.capture.mode` stands alone: the service's own label, else [`capture.mode`](configuration.md#capture). A rollback's safety snapshot ignores both and stops every service.
+`arcave.capture.mode` stands alone: the service's own label, else [`capture.mode`](configuration.md#capture). A rollback's safety snapshot ignores both and stops every service. So do the hooks: a setting their labels leave out is [`capture.hooks.*`](configuration.md#capture)'s, and a rollback runs none.
 
 `arcave.writable-layer.capture` and `arcave.image.capture` sit at step 2 for their own unit: they override the service's `arcave.capture`.
 
@@ -107,10 +112,14 @@ Quote `"true"` and `"false"`: compose labels are strings.
 
 ## What a bad label does
 
-A label arcave cannot act on — an unknown `arcave.*` key, a value it does not accept, a target the service does not mount, a target both included and excluded — fails `savepoint create` before anything is stopped:
+A label arcave cannot act on — an unknown `arcave.*` key, a value it does not accept, a target the service does not mount, a target both included and excluded, a hook command that does not parse or a hook setting with no hook beside it — fails `savepoint create` before anything is stopped:
 
 ```text
 invalid capture policy label: arcave.capture="no" on service app: want true or false
+invalid capture policy label: arcave.hook.pre-capture.timeout="5" on service app: want a positive Go duration, e.g. 30s: time: missing unit in duration "5"
+invalid capture policy label: arcave.hook.post-capture.user="root" on service app: no arcave.hook.post-capture beside it
+invalid capture policy label: arcave.hook.pre-capture="sh -c 'oops" on service app: unparsable command: invalid command line string
+invalid capture policy label: arcave.hook.post-capture="sync && echo ok" on service app: a shell operator outside quotes: "&" at character 6; run the command through sh -c
 ```
 
 A rollback does not fail on one: its safety snapshot logs a warning and follows the config, and captures everything the rollback is about to overwrite whatever its labels say.

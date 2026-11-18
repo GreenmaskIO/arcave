@@ -384,7 +384,7 @@ unsupported writable_layers.backend "zstd" (supported: dedupcopy, fullcopy)
 
 ## `capture`
 
-How a savepoint holds the services still, and which kinds of unit it captures, when no [capture label](capture_labels.md) says otherwise. Everything is on by default.
+How a savepoint holds the services still, which kinds of unit it captures, and how its hooks behave, when no [capture label](capture_labels.md) says otherwise. Everything is on by default.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -394,9 +394,12 @@ How a savepoint holds the services still, and which kinds of unit it captures, w
 | `capture.volumes.named` | bool | `true` | Named volumes. |
 | `capture.volumes.bind` | bool | `true` | Bind mounts. |
 | `capture.volumes.anonymous` | bool | `true` | Anonymous volumes. |
+| `capture.hooks.timeout` | duration | `60s` | How long one [hook](../capture_modes.md#hooks-preparing-the-application) may run in one replica, when its `.timeout` label does not say. Zero means "unset"; a negative value is refused. |
+| `capture.hooks.on_error` | string | `fail` | What a failed hook does when its `.on-error` label does not say: `fail` fails the command, `continue` warns and goes on. |
 
 ```text
 unsupported capture.mode "freeze" (supported: stop, pause, live)
+unsupported capture.hooks.on_error "ignore" (supported: fail, continue)
 ```
 
 These are the defaults a label overrides: `capture.volumes.bind: false` with `arcave.mounts.include: /app/data` on one service captures that one bind and no other. They steer a running compose project without recreating it, which a label cannot. What a savepoint left out is listed in its `not_covered`.

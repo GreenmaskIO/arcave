@@ -48,16 +48,16 @@ func (p capturePlan) LabelsIgnored() error {
 	return p.plan.LabelsIgnored
 }
 
-// Hold holds the project still as the plan says; the killed containers ride on what it returns.
+// Hold holds the project still as the plan says; what holding it did rides on what it returns.
 func (p capturePlan) Hold(ctx context.Context) (provider.HeldWorkload, error) {
-	killed, err := p.service.hold(ctx, p.plan)
+	outcome, err := p.service.hold(ctx, p.plan)
 	if err != nil {
 		return nil, err
 	}
 	return heldWorkload{
 		service:              p.service,
 		plan:                 p.plan,
-		killed:               killed,
+		outcome:              outcome,
 		anonymousVolumeNames: p.anonymousVolumeNames,
 		ownedBefore:          p.ownedBefore,
 	}, nil
@@ -69,17 +69,18 @@ func (p capturePlan) Release(ctx context.Context, waitTimeout time.Duration) err
 	return p.service.release(ctx, p.plan, waitTimeout)
 }
 
-// hold holds the project still as plan says and returns the containers the stop killed.
-func (s *composeWorkload) hold(ctx context.Context, plan composemodel.Plan) (_ []string, err error) {
-	ctx, step := progress.Run(ctx, progress.Step{Kind: kindSavepointHold}, progress.MeasureResources)
+// hold runs the pre-capture hooks, holds the project still as plan says and returns what that did.
+func (s *composeWorkload) hold(ctx context.Context, plan composemodel.Plan) (_ hold.Outcome, err error) {
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindSavepointHold})
 	defer func() { step.End(err) }()
 
 	return hold.NewTriggersByMode(s.composeRunner, s.containerControl, plan, 0).BeforeCapture(ctx)
 }
 
-// release brings back the project plan holds, waiting waitTimeout on its health checks.
+// release brings back the project plan holds, waiting waitTimeout on its health checks, and runs
+// the post-capture hooks.
 func (s *composeWorkload) release(revertCtx context.Context, plan composemodel.Plan, waitTimeout time.Duration) (err error) {
-	revertCtx, step := progress.Run(revertCtx, progress.Step{Kind: kindSavepointRelease}, progress.MeasureResources)
+	revertCtx, step := progress.Begin(revertCtx, progress.Step{Kind: kindSavepointRelease})
 	defer func() { step.End(err) }()
 
 	return hold.NewTriggersByMode(s.composeRunner, s.containerControl, plan, waitTimeout).AfterCapture(revertCtx)

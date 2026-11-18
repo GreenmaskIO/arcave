@@ -16,6 +16,7 @@ package compose
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -36,6 +37,7 @@ func TestNewCaptureDefaults(t *testing.T) {
 			Mode:           "pause",
 			WritableLayers: utils.New(false),
 			Volumes:        composeconfig.CaptureVolumes{Bind: utils.New(false), Named: utils.New(true)},
+			Hooks:          composeconfig.CaptureHooks{Timeout: 2 * time.Minute, OnError: "continue"},
 		},
 	}
 	cfg.ApplyDefaults()
@@ -48,6 +50,8 @@ func TestNewCaptureDefaults(t *testing.T) {
 		VolumeBackend:        model.SnapshotBackendCDC,
 		WritableLayerBackend: model.ImageBackendFullCopy,
 		Mode:                 model.CaptureModePause,
+		HookTimeout:          2 * time.Minute,
+		HookOnError:          model.HookOnErrorContinue,
 		SavepointCapture: capturepolicy.SavepointCaptureSettings{
 			WritableLayers:   false,
 			Images:           true,

@@ -20,22 +20,23 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/hold"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/sessionstore"
 )
 
-// heldWorkload is the project heldWorkload still, the containers its stop killed, the anonymous volumes its
-// teardown orphans and the volumes it owned when it was inspected.
+// heldWorkload is the project held still, what holding it did, the anonymous volumes its teardown
+// orphans and the volumes it owned when it was inspected.
 type heldWorkload struct {
 	service              *composeWorkload
 	plan                 composemodel.Plan
-	killed               []string
+	outcome              hold.Outcome
 	anonymousVolumeNames map[string]string
 	ownedBefore          map[string]bool
 }
 
 // Capture stores what is held under a new savepoint, not yet committed.
 func (h heldWorkload) Capture(ctx context.Context, req provider.CaptureRequest) (provider.CapturedSavepoint, error) {
-	return h.service.capturer.Capture(ctx, h.plan, h.killed, req)
+	return h.service.capturer.Capture(ctx, h.plan, h.outcome, req)
 }
 
 // PrepareSavepoint loads the layers of the savepoint id names back into the daemon and points the

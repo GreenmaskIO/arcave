@@ -48,14 +48,17 @@ func TestTriggers_BeforeCapture(t *testing.T) {
 	tests := []struct {
 		name string
 		// errs fail each trigger's beforeCapture; a trigger past the first failure is not called.
-		errs       []error
-		wantKilled []string
-		wantErr    string
+		errs        []error
+		wantOutcome Outcome
+		wantErr     string
 	}{
 		{
-			name:       "every trigger in order, killed joined",
-			errs:       []error{nil, nil, nil},
-			wantKilled: []string{"c0", "c1", "c2"},
+			name: "every trigger in order, their outcomes joined",
+			errs: []error{nil, nil, nil},
+			wantOutcome: Outcome{
+				Killed:      []string{"c0", "c1", "c2"},
+				FailedHooks: []model.FailedHook{{Service: "s0"}, {Service: "s1"}, {Service: "s2"}},
+			},
 		},
 		{
 			name:    "a failure in the middle stops the rest",
@@ -75,8 +78,11 @@ func TestTriggers_BeforeCapture(t *testing.T) {
 			mocks, triggers := newMockTriggers(len(tt.errs))
 			var calls []*mock.Call
 			for i, err := range tt.errs {
-				calls = append(calls, mocks[i].On("beforeCapture", mock.Anything).
-					Return([]string{"c" + strconv.Itoa(i)}, err).Once())
+				outcome := Outcome{
+					Killed:      []string{"c" + strconv.Itoa(i)},
+					FailedHooks: []model.FailedHook{{Service: "s" + strconv.Itoa(i)}},
+				}
+				calls = append(calls, mocks[i].On("beforeCapture", mock.Anything).Return(outcome, err).Once())
 				if err != nil {
 					break
 				}
@@ -84,7 +90,7 @@ func TestTriggers_BeforeCapture(t *testing.T) {
 			mock.InOrder(calls...)
 
 			// Act
-			killed, err := triggers.BeforeCapture(context.Background())
+			outcome, err := triggers.BeforeCapture(context.Background())
 
 			// Assert
 			if tt.wantErr == "" {
@@ -92,7 +98,7 @@ func TestTriggers_BeforeCapture(t *testing.T) {
 			} else {
 				assert.EqualError(t, err, tt.wantErr)
 			}
-			assert.Equal(t, tt.wantKilled, killed)
+			assert.Equal(t, tt.wantOutcome, outcome)
 			for _, trigger := range mocks {
 				trigger.AssertExpectations(t)
 			}
@@ -286,7 +292,7 @@ func TestStopTrigger_beforeCapture(t *testing.T) {
 			recorder := &composetest.StepRecorder{}
 
 			// Act
-			killed, err := trigger.beforeCapture(composetest.NewProgressContext(recorder))
+			outcome, err := trigger.beforeCapture(composetest.NewProgressContext(recorder))
 
 			// Assert
 			if tt.wantErr == "" {
@@ -294,7 +300,7 @@ func TestStopTrigger_beforeCapture(t *testing.T) {
 			} else {
 				assert.EqualError(t, err, tt.wantErr)
 			}
-			assert.Equal(t, tt.wantKilled, killed)
+			assert.Equal(t, tt.wantKilled, outcome.Killed)
 			assert.Equal(t, tt.wantWarnings, recorder.Warnings)
 			runner.AssertExpectations(t)
 			control.AssertExpectations(t)
@@ -405,7 +411,7 @@ func TestPauseTrigger_beforeCapture(t *testing.T) {
 			trigger := pauseTrigger{control: control, running: tt.running}
 
 			// Act
-			killed, err := trigger.beforeCapture(context.Background())
+			outcome, err := trigger.beforeCapture(context.Background())
 
 			// Assert
 			if tt.wantErr == "" {
@@ -413,7 +419,7 @@ func TestPauseTrigger_beforeCapture(t *testing.T) {
 			} else {
 				assert.EqualError(t, err, tt.wantErr)
 			}
-			assert.Empty(t, killed)
+			assert.Zero(t, outcome)
 			control.AssertExpectations(t)
 		})
 	}
@@ -513,6 +519,7 @@ func TestNewTriggersByMode(t *testing.T) {
 			},
 			want: func(runner ComposeRunner, control ContainerControl) Triggers {
 				return Triggers{
+					hookTrigger{control: control},
 					stopTrigger{composeRunner: runner, control: control, project: demoSpec, waitTimeout: time.Minute,
 						services: []string{"db"},
 						resumed:  []composemodel.ContainerRef{webReplica1, webReplica2, workerReplica1}},
@@ -530,6 +537,7 @@ func TestNewTriggersByMode(t *testing.T) {
 			},
 			want: func(runner ComposeRunner, control ContainerControl) Triggers {
 				return Triggers{
+					hookTrigger{control: control},
 					stopTrigger{composeRunner: runner, control: control, project: demoSpec, waitTimeout: time.Minute,
 						services: []string{"db", "web"}, allServices: true, pausedOnEntry: []composemodel.ContainerRef{webReplica2}},
 					pauseTrigger{control: control},
@@ -544,6 +552,7 @@ func TestNewTriggersByMode(t *testing.T) {
 			},
 			want: func(runner ComposeRunner, control ContainerControl) Triggers {
 				return Triggers{
+					hookTrigger{control: control},
 					stopTrigger{composeRunner: runner, control: control, project: demoSpec, waitTimeout: time.Minute},
 					pauseTrigger{control: control},
 					liveTrigger{control: control},
@@ -571,10 +580,10 @@ func TestNewTriggersByMode(t *testing.T) {
 // mockTrigger doubles trigger.
 type mockTrigger struct{ mock.Mock }
 
-func (m *mockTrigger) beforeCapture(ctx context.Context) ([]string, error) {
+func (m *mockTrigger) beforeCapture(ctx context.Context) (Outcome, error) {
 	args := m.Called(ctx)
-	killed, _ := args.Get(0).([]string)
-	return killed, args.Error(1)
+	outcome, _ := args.Get(0).(Outcome)
+	return outcome, args.Error(1)
 }
 
 func (m *mockTrigger) afterCapture(revertCtx context.Context) error {

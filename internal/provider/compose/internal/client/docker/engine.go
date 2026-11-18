@@ -66,6 +66,7 @@ type dockerAPI interface {
 	ContainerAttach(ctx context.Context, containerID string, options client.ContainerAttachOptions) (client.ContainerAttachResult, error)
 	ExecCreate(ctx context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error)
 	ExecAttach(ctx context.Context, execID string, options client.ExecAttachOptions) (client.ExecAttachResult, error)
+	ExecInspect(ctx context.Context, execID string, options client.ExecInspectOptions) (client.ExecInspectResult, error)
 	ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult
 	ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error)
 	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
@@ -101,6 +102,8 @@ type Engine struct {
 	api dockerAPI
 	// healthPoll is how often a resumed container's health is read; zero is staleHealthPoll.
 	healthPoll time.Duration
+	// execPoll is how often an exec is read until it reports its exit; zero is defaultExecPoll.
+	execPoll time.Duration
 }
 
 // NewEngine wraps an already-resolved daemon connection.

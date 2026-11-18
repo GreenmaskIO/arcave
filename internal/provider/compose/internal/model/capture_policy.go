@@ -118,6 +118,9 @@ type ServiceDecision struct {
 	Image         CaptureDecision
 	// Mode is empty for CaptureModeStop.
 	Mode model.CaptureMode
+	// PreCapture and PostCapture run in its replicas around the capture; nil is no hook.
+	PreCapture  *Hook
+	PostCapture *Hook
 }
 
 // MountRef addresses one bind or anonymous mount: a bind by service and target,
