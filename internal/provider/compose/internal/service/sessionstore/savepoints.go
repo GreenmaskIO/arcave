@@ -18,6 +18,7 @@ package sessionstore
 
 import (
 	"context"
+	"errors"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
@@ -49,11 +50,14 @@ func (s savepoints) List(ctx context.Context) ([]model.Savepoint, error) {
 
 // Load returns the committed savepoint id names, if any.
 func (s savepoints) Load(ctx context.Context, id model.SavepointID) (model.Savepoint, bool, error) {
-	loaded, err := s.records.LoadSavepoints(ctx, []model.SavepointID{id})
-	if err != nil || len(loaded) == 0 {
+	savepoint, err := LoadSavepoint(ctx, s.records, id)
+	switch {
+	case errors.Is(err, ErrRecordNotFound):
+		return model.Savepoint{}, false, nil
+	case err != nil:
 		return model.Savepoint{}, false, err
 	}
-	return loaded[0], true, nil
+	return savepoint, true, nil
 }
 
 // Remove uncommits the savepoint id names, then deletes its tree.
