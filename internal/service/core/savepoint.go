@@ -110,16 +110,16 @@ func captureHeld(
 	switch {
 	case beforeErr != nil:
 		if afterErr != nil {
-			log.Error().Err(afterErr).Msg("services failed to resume after hold failure")
+			log.Error().Err(afterErr).Msg("bringing the project back failed after the hold failure")
 		}
 		return model.Savepoint{}, preferInterrupt(ctx, beforeErr)
 	case captureErr != nil:
 		if afterErr != nil {
-			log.Error().Err(afterErr).Msg("services failed to resume after capture failure")
+			log.Error().Err(afterErr).Msg("bringing the project back failed after the capture failure")
 		}
 		return model.Savepoint{}, fmt.Errorf("capturing the savepoint: %w", captureErr)
 	case afterErr != nil:
-		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to resume: %w", savepoint.ID, afterErr)
+		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; bringing the project back: %w", savepoint.ID, afterErr)
 	}
 	return savepoint, nil
 }

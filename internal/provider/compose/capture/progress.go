@@ -52,6 +52,7 @@ func newNotCoveredWarning(notCovered *model.NotCovered) string {
 	add(len(notCovered.UnresolvedImages), "unresolved image(s)")
 	add(len(notCovered.WritableLayers), "writable layer(s)")
 	add(len(notCovered.Images), "image(s)")
+	add(len(notCovered.FailedHooks), "failed hook(s)")
 	if len(parts) == 0 {
 		return ""
 	}

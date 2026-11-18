@@ -171,6 +171,14 @@ func TestEngine_AwaitHealthProbes(t *testing.T) {
 			},
 		},
 		{
+			name: "podman's reset is read until the probe",
+			reads: []container.InspectResponse{
+				withHealth(healthcheck, healthReset, 0),
+				withHealth(healthcheck, healthReset, 0),
+				withHealth(healthcheck, container.Healthy, 0),
+			},
+		},
+		{
 			name:  "an unhealthy a probe failed is not waited on",
 			reads: []container.InspectResponse{withHealth(healthcheck, container.Unhealthy, 3)},
 		},

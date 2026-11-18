@@ -49,6 +49,35 @@ func TestNotCovered_Notices(t *testing.T) {
 			},
 		},
 		{
+			name: "a failed hook goes right after the killed, severe, naming the label that would refuse it",
+			notCovered: NotCovered{
+				ReplicaGaps: []ReplicaGap{{Service: "web", Replicas: []int{1, 3}, Missing: []int{2}}},
+				FailedHooks: []FailedHook{{
+					Service:   "db",
+					Replica:   1,
+					Container: "demo-db-1",
+					Hook:      HookPhasePreCapture,
+					ExitCode:  new(3),
+					Error:     "exit 3: psql: connection refused",
+				}},
+				KilledContainers: []KilledContainer{{Service: "app", Replica: 1, Container: "demo-app-1"}},
+			},
+			want: []Notice{
+				{
+					Message: "app-1 was killed at the stop deadline: its volumes may hold a crash state",
+					Hint:    "raise compose.stop_timeout or the service's stop_grace_period",
+					Severe:  true,
+				},
+				{
+					Message: "db-1: pre-capture hook failed (exit 3: psql: connection refused), captured anyway: " +
+						"the application may not have been prepared",
+					Hint:   "fix the hook, or set arcave.hook.pre-capture.on-error: fail to refuse such a capture",
+					Severe: true,
+				},
+				{Message: "web: replica 2 gone, only 1, 3 held", Severe: true},
+			},
+		},
+		{
 			name: "an excluded mount names what left it out, any other its reason",
 			notCovered: NotCovered{Mounts: []SkippedVolume{
 				{Service: "app", Target: "/cache", Reason: SkipReasonExcluded, Detail: "arcave.mounts.exclude=/cache on service app"},
@@ -183,6 +212,33 @@ func TestSavepoint_Notices(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
 			got := tt.savepoint.Notices()
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestNotCovered_IsEmpty(t *testing.T) {
+	tests := []struct {
+		name       string
+		notCovered NotCovered
+		want       bool
+	}{
+		{
+			name: "the zero value",
+			want: true,
+		},
+		{
+			name:       "a failed hook alone",
+			notCovered: NotCovered{FailedHooks: []FailedHook{{Service: "db"}}},
+			want:       false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := tt.notCovered.IsEmpty()
 
 			// Assert
 			assert.Equal(t, tt.want, got)

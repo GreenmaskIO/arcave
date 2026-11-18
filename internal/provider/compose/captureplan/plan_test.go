@@ -32,10 +32,11 @@ func TestPlan_NewNotCovered(t *testing.T) {
 	mounts := []model.SkippedVolume{{Service: "db", Target: "/tmp"}}
 
 	tests := []struct {
-		name       string
-		notCovered model.NotCovered
-		killed     []string
-		want       *model.NotCovered
+		name        string
+		notCovered  model.NotCovered
+		killed      []string
+		failedHooks []model.FailedHook
+		want        *model.NotCovered
 	}{
 		{
 			name: "nothing left out is nil",
@@ -59,6 +60,11 @@ func TestPlan_NewNotCovered(t *testing.T) {
 			killed: []string{"gone"},
 			want:   &model.NotCovered{KilledContainers: []model.KilledContainer{{Container: "gone"}}},
 		},
+		{
+			name:        "a failed hook alone leaves something out",
+			failedHooks: []model.FailedHook{{Service: "db", Replica: 1, Hook: model.HookPhasePreCapture}},
+			want:        &model.NotCovered{FailedHooks: []model.FailedHook{{Service: "db", Replica: 1, Hook: model.HookPhasePreCapture}}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -69,7 +75,7 @@ func TestPlan_NewNotCovered(t *testing.T) {
 			}
 
 			// Act
-			got := plan.NewNotCovered(tt.killed)
+			got := plan.NewNotCovered(tt.killed, tt.failedHooks)
 
 			// Assert
 			assert.Equal(t, tt.want, got)

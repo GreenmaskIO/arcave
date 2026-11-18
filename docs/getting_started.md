@@ -196,7 +196,8 @@ Progress goes to **stderr**, so it never contaminates the JSON. Off a terminal i
 
 ```text title="stderr"
 INF savepoint.create[before-migration]/project.introspect elapsed=96ms status=succeeded
-INF savepoint.create[before-migration]/savepoint.hold msg=Stopped resource=container:myapp-db-1 status=in_progress
+INF savepoint.create[before-migration]/savepoint.hold/compose.stop msg=Stopped resource=container:myapp-db-1 status=in_progress
+INF savepoint.create[before-migration]/savepoint.hold/compose.stop elapsed=310ms status=succeeded
 INF savepoint.create[before-migration]/savepoint.hold elapsed=312ms status=succeeded
 INF savepoint.create[before-migration]/savepoint.capture[before-migration]/volume.capture/volume[volume-named-myapp_pgdata] bytes=41MB/41MB elapsed=672ms status=succeeded stored=3.9MB
 INF savepoint.create[before-migration]/savepoint.capture[before-migration]/image.capture/image[postgres:16] bytes=658MB/658MB elapsed=1.341s status=succeeded stored=165MB

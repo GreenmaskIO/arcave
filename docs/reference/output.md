@@ -77,7 +77,7 @@ The first Ctrl-C lets the command unwind through its own cleanup and then exits 
 - **`json`** puts the whole run on stdout as JSON lines, one per event, and the result last:
 
   ```json
-  {"type":"progress","event":{"node":3,"status":"started","open":{"parent":1,"step":{"kind":"savepoint.hold","type":"activity"}},"sample":{"elapsed_ns":0},"at":"…"}}
+  {"type":"progress","event":{"node":3,"status":"started","open":{"parent":1,"step":{"kind":"savepoint.hold","type":"workflow"}},"sample":{"elapsed_ns":0},"at":"…"}}
   {"type":"progress","event":{"node":3,"status":"succeeded","sample":{"elapsed_ns":2100000000},"at":"…"}}
   {"type":"result","result":{ … }}
   ```
@@ -93,8 +93,9 @@ Every node's `open.step.kind` is one of these: an action is `<namespace>.<action
 | `savepoint.create`, `savepoint.remove`, `rollback`, `up`, `down`, `gc`, `session.fork`, `session.remove` | the root of the command that ran |
 | `session.lock` | the wait for another holder of the session's lock; reported only when there is one |
 | `project.introspect` | reading the live compose project |
-| `savepoint.hold`, `savepoint.release` | holding the compose project still for a capture and bringing it back after, whatever each service's [capture mode](../capture_modes.md); one `resource` per container compose stops or starts, and a warning per replica found paused |
-| `compose.down`, `compose.create`, `compose.start` | a rollback's compose operation, one `resource` per container |
+| `savepoint.hold`, `savepoint.release` | holding the compose project still for a capture and bringing it back after, whatever each service's [capture mode](../capture_modes.md); a warning per replica found paused |
+| `compose.stop`, `compose.down`, `compose.create`, `compose.start` | a compose operation — the stop under `savepoint.hold`, the start under `savepoint.release`, the rest a rollback's —, one `resource` per container |
+| `hook.pre-capture`, `hook.post-capture` → `hook` | a batch over the [hooks](../capture_modes.md#hooks-preparing-the-application) of one phase, one `hook` per replica: `step.id` the container, `step.name` `<service>-<replica>`. A failed one carries its `error` and the tail of its stderr, else of its stdout, in `msg`; one skipped or let through by `on-error: continue` is a warning |
 | `savepoint.capture` | one savepoint's capture, a safety snapshot's included |
 | `volume.capture`, `volume.restore` → `volume` | a batch over the volumes, one `volume` per volume |
 | `layer.capture`, `layer.restore` → `layer` | a batch over the writable layers, one `layer` per container |
@@ -112,7 +113,7 @@ Every node's `open.step.kind` is one of these: an action is `<namespace>.<action
 
 ## Compose's events
 
-Compose's own per-object events — a container `Stopping`, `Stopped`, `Healthy` — land on the step that caused them: `savepoint.hold`, `savepoint.release`, `compose.down`, `compose.create`, `compose.start`. The tree shows one line per container under that step. Under `--progress log` each is a record of the step, at debug level while the object is under way and at info once it has settled:
+Compose's own per-object events — a container `Stopping`, `Stopped`, `Healthy` — land on the step that caused them: `compose.stop`, `compose.down`, `compose.create`, `compose.start`. The tree shows one line per container under that step. Under `--progress log` each is a record of the step, at debug level while the object is under way and at info once it has settled:
 
 ```text
 DBG rollback[sp1]/rollback.apply/compose.start msg=Starting resource=container:myapp-db-1 status=in_progress
@@ -268,6 +269,7 @@ Every field is omitted when empty, and `not_covered` itself when all are.
 | `unresolved_images` | `{service, replica, container, image}` | Containers whose image cannot be named: only a held writable layer brings them back. |
 | `writable_layers` | `{service, replica, container, reason, detail}` | Replicas whose writable layer was left out; a rollback creates them fresh from their image. |
 | `images` | `{service, image, reason, detail}` | Services whose image bytes were left out. |
+| `failed_hooks` | `{service, replica, container, hook, exit_code, error}` | `pre-capture` [hooks](../capture_modes.md#hooks-preparing-the-application) that failed under `on-error: continue`: the savepoint was taken, and the application may not have been prepared. `exit_code` is absent for a hook that timed out or that the daemon did not run; `error` says how it failed (`exit 3: <its last line of stderr, else of stdout>`, `timed out after 2m0s`). A failed `post-capture` hook is not here: it runs after the record is committed. |
 
 ```json
 {

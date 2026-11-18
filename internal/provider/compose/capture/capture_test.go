@@ -32,6 +32,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/provider/compose/captureplan"
+	"github.com/greenmaskio/arcave/internal/provider/compose/hold"
 	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 )
@@ -40,7 +41,7 @@ import (
 func captureAndCommit(
 	ctx context.Context, svc *Capturer, plan captureplan.Plan, killed []string, req provider.CaptureRequest,
 ) (model.Savepoint, error) {
-	captured, err := svc.Capture(ctx, plan, killed, req)
+	captured, err := svc.Capture(ctx, plan, hold.Outcome{Killed: killed}, req)
 	if err != nil {
 		return model.Savepoint{}, err
 	}
@@ -208,7 +209,7 @@ func TestCaptured_Commit(t *testing.T) {
 			})
 			plan := captureplan.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
 			ctx := composetest.NewTestContext()
-			captured, err := svc.Capture(ctx, plan, nil, provider.CaptureRequest{Name: "sp"})
+			captured, err := svc.Capture(ctx, plan, hold.Outcome{}, provider.CaptureRequest{Name: "sp"})
 			require.NoError(t, err)
 
 			// Act
@@ -247,7 +248,7 @@ func TestCaptured_Abandon(t *testing.T) {
 	})
 	plan := captureplan.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
 	ctx := composetest.NewTestContext()
-	captured, err := svc.Capture(ctx, plan, nil, provider.CaptureRequest{Name: "sp"})
+	captured, err := svc.Capture(ctx, plan, hold.Outcome{}, provider.CaptureRequest{Name: "sp"})
 	require.NoError(t, err)
 
 	// Act

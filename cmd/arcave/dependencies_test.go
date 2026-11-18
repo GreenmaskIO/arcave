@@ -637,6 +637,7 @@ func TestNewCaptureDefaults(t *testing.T) {
 			Mode:           "pause",
 			WritableLayers: utils.New(false),
 			Volumes:        config.CaptureVolumes{Bind: utils.New(false), Named: utils.New(true)},
+			Hooks:          config.CaptureHooks{Timeout: 2 * time.Minute, OnError: "continue"},
 		},
 	}
 	cfg.ApplyDefaults(t.TempDir())
@@ -649,6 +650,8 @@ func TestNewCaptureDefaults(t *testing.T) {
 		VolumeBackend:        model.SnapshotBackendCDC,
 		WritableLayerBackend: model.ImageBackendFullCopy,
 		Mode:                 model.CaptureModePause,
+		HookTimeout:          2 * time.Minute,
+		HookOnError:          model.HookOnErrorContinue,
 		SavepointCapture: capturepolicy.SavepointCaptureSettings{
 			WritableLayers:   false,
 			Images:           true,

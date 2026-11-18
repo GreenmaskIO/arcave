@@ -26,6 +26,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/provider/compose/captureplan"
+	"github.com/greenmaskio/arcave/internal/provider/compose/hold"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -70,16 +71,15 @@ func (c capturedSavepoint) Abandon(ctx context.Context, cause error) {
 	abandonCapture(ctx, c.worker, c.savepoint.ID, cause)
 }
 
-// Capture stores a savepoint of a project already held still, short of its record; killed are the
-// containers the stop killed. On error the handle is nil, the capture abandoned once its heartbeat
-// started.
+// Capture stores a savepoint of a project already held still, short of its record; outcome is what
+// holding it did. On error the handle is nil, the capture abandoned once its heartbeat started.
 func (s *Capturer) Capture(
-	ctx context.Context, plan captureplan.Plan, killed []string, req provider.CaptureRequest,
+	ctx context.Context, plan captureplan.Plan, outcome hold.Outcome, req provider.CaptureRequest,
 ) (_ provider.CapturedSavepoint, err error) {
 	var (
 		id         = model.NewSavepointID()
 		createdAt  = time.Now()
-		notCovered = plan.NewNotCovered(killed)
+		notCovered = plan.NewNotCovered(outcome.Killed, outcome.FailedHooks)
 		writer     *heartbeat.Writer
 		stored     storedSavepoint
 	)

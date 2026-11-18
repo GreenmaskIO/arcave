@@ -16,9 +16,53 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestCaptureHooks_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		hooks   CaptureHooks
+		wantErr string
+	}{
+		{
+			name:  "a positive timeout, a known on-error",
+			hooks: CaptureHooks{Timeout: time.Second, OnError: "continue"},
+		},
+		{
+			name:    "a zero timeout",
+			hooks:   CaptureHooks{OnError: "fail"},
+			wantErr: "capture.hooks.timeout must be a positive duration, got 0s",
+		},
+		{
+			name:    "a negative timeout",
+			hooks:   CaptureHooks{Timeout: -time.Second, OnError: "fail"},
+			wantErr: "capture.hooks.timeout must be a positive duration, got -1s",
+		},
+		{
+			name:    "an unknown on-error",
+			hooks:   CaptureHooks{Timeout: time.Second, OnError: "ignore"},
+			wantErr: `unsupported capture.hooks.on_error "ignore" (supported: fail, continue)`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			err := tt.hooks.Validate()
+
+			// Assert
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrInvalid)
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
 
 func TestCDCBackend_IgnoredTCPKeys(t *testing.T) {
 	tests := []struct {

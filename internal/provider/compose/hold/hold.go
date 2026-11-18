@@ -48,7 +48,8 @@ type ComposeRunner interface {
 	Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error
 }
 
-// ContainerControl freezes the pause services' replicas for a capture and resumes them after.
+// ContainerControl freezes the pause services' replicas for a capture and resumes them after, and
+// runs the hooks in them.
 type ContainerControl interface {
 	PauseContainers(ctx context.Context, ids []string) error
 	// UnpauseContainers resumes whichever of the containers is paused; one that is not, or is
@@ -57,20 +58,32 @@ type ContainerControl interface {
 	// AwaitHealthProbes waits out the unhealthy a pause leaves on the containers until their
 	// next probe.
 	AwaitHealthProbes(ctx context.Context, ids []string) error
+	// ExecInContainer runs spec in the container and waits for it to exit; a container not
+	// running is model.ErrContainerNotRunning.
+	ExecInContainer(ctx context.Context, id string, spec model.ExecSpec) (model.ExecResult, error)
+}
+
+// Outcome is what holding a project still did beyond its plan: the containers the stop killed and
+// the pre-capture hooks that failed and were let through.
+type Outcome struct {
+	Killed      []string
+	FailedHooks []model.FailedHook
 }
 
 // trigger is what fires on a group of services before a capture, and back after it.
 // afterCapture must converge: it runs whether beforeCapture did or not.
 type trigger interface {
-	beforeCapture(ctx context.Context) (killed []string, err error)
+	beforeCapture(ctx context.Context) (Outcome, error)
 	afterCapture(revertCtx context.Context) error
 }
 
 // Triggers are the triggers of one capture, in the order beforeCapture fires them.
 type Triggers []trigger
 
-// NewTriggersByMode builds the triggers of plan: the stop, the pause and the live services,
-// each group its own trigger; the start after the capture waits waitTimeout on health checks.
+// NewTriggersByMode builds the triggers of plan: the hooks first, so that the pre-capture ones run
+// before anything is held and the post-capture ones once everything is back; then the stop, the
+// pause and the live services, each group its own trigger. The start after the capture waits
+// waitTimeout on health checks.
 func NewTriggersByMode(
 	composeRunner ComposeRunner, control ContainerControl, plan captureplan.Plan, waitTimeout time.Duration,
 ) Triggers {
@@ -78,6 +91,7 @@ func NewTriggersByMode(
 	paused := plan.ServicesHeldBy(model.CaptureModePause)
 	live := plan.ServicesHeldBy(model.CaptureModeLive)
 	return Triggers{
+		newHookTrigger(control, plan.Services),
 		stopTrigger{
 			composeRunner: composeRunner,
 			control:       control,
@@ -104,17 +118,25 @@ func NewTriggersByMode(
 	}
 }
 
-// BeforeCapture fires each trigger's, first to last, and stops at the first failure.
-func (t Triggers) BeforeCapture(ctx context.Context) ([]string, error) {
-	var killed []string
+// BeforeCapture fires each trigger's, first to last, and stops at the first failure; the outcome
+// is every trigger's joined.
+func (t Triggers) BeforeCapture(ctx context.Context) (Outcome, error) {
+	var (
+		killed      []string
+		failedHooks []model.FailedHook
+	)
 	for _, trigger := range t {
-		triggerKilled, err := trigger.beforeCapture(ctx)
+		outcome, err := trigger.beforeCapture(ctx)
 		if err != nil {
-			return nil, err
+			return Outcome{}, err
 		}
-		killed = append(killed, triggerKilled...)
+		killed = append(killed, outcome.Killed...)
+		failedHooks = append(failedHooks, outcome.FailedHooks...)
 	}
-	return killed, nil
+	return Outcome{
+		Killed:      killed,
+		FailedHooks: failedHooks,
+	}, nil
 }
 
 // AfterCapture fires every trigger's, last to first, whether its beforeCapture ran or not; the
@@ -152,27 +174,29 @@ type stopTrigger struct {
 
 // beforeCapture resumes the frozen replicas, puts the services down and returns the containers
 // the stop deadline killed.
-func (t stopTrigger) beforeCapture(ctx context.Context) ([]string, error) {
+func (t stopTrigger) beforeCapture(ctx context.Context) (Outcome, error) {
 	var (
 		killed []string
 		err    error
 	)
 	if err = unpauseReplicas(ctx, t.control, t.pausedOnEntry, t.pausedOnEntry, warnResumedToStop); err != nil {
-		return nil, err
+		return Outcome{}, err
 	}
 	if len(t.services) == 0 {
-		return nil, nil
+		return Outcome{}, nil
 	}
 
+	stopCtx, step := progress.Run(ctx, progress.Step{Kind: kindComposeStop}, progress.MeasureResources)
 	if t.allServices {
-		killed, err = t.composeRunner.Stop(ctx, t.project)
+		killed, err = t.composeRunner.Stop(stopCtx, t.project)
 	} else {
-		killed, err = t.composeRunner.StopServices(ctx, t.project, t.services)
+		killed, err = t.composeRunner.StopServices(stopCtx, t.project, t.services)
 	}
+	step.End(err)
 	if err != nil {
-		return nil, fmt.Errorf("stopping services: %w", err)
+		return Outcome{}, fmt.Errorf("stopping services: %w", err)
 	}
-	return killed, nil
+	return Outcome{Killed: killed}, nil
 }
 
 // afterCapture starts the whole project, not its own services alone: whatever was stopped — by
@@ -185,7 +209,10 @@ func (t stopTrigger) afterCapture(revertCtx context.Context) error {
 			zerolog.Ctx(revertCtx).Warn().Err(err).Msg("cannot await the resumed containers' health probes")
 		}
 	}
-	if err := t.composeRunner.Start(revertCtx, t.project, t.waitTimeout); err != nil {
+	startCtx, step := progress.Run(revertCtx, progress.Step{Kind: kindComposeStart}, progress.MeasureResources)
+	err := t.composeRunner.Start(startCtx, t.project, t.waitTimeout)
+	step.End(err)
+	if err != nil {
 		return fmt.Errorf("starting services: %w", err)
 	}
 	return nil
@@ -200,14 +227,14 @@ type pauseTrigger struct {
 }
 
 // beforeCapture freezes the running replicas.
-func (t pauseTrigger) beforeCapture(ctx context.Context) ([]string, error) {
+func (t pauseTrigger) beforeCapture(ctx context.Context) (Outcome, error) {
 	if len(t.running) == 0 {
-		return nil, nil
+		return Outcome{}, nil
 	}
 	if err := t.control.PauseContainers(ctx, newContainerIDs(t.running)); err != nil {
-		return nil, fmt.Errorf("pausing containers: %w", err)
+		return Outcome{}, fmt.Errorf("pausing containers: %w", err)
 	}
-	return nil, nil
+	return Outcome{}, nil
 }
 
 // afterCapture resumes whichever of the replicas is frozen, the ones frozen before the capture
@@ -224,8 +251,8 @@ type liveTrigger struct {
 }
 
 // beforeCapture leaves the services running.
-func (liveTrigger) beforeCapture(context.Context) ([]string, error) {
-	return nil, nil
+func (liveTrigger) beforeCapture(context.Context) (Outcome, error) {
+	return Outcome{}, nil
 }
 
 // afterCapture resumes the replicas found frozen.

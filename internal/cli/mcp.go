@@ -192,13 +192,14 @@ const (
 		"afterwards with the rollback tool. Services are stopped for the duration of the " +
 		"snapshot and started again when it completes. The result's not_covered lists what the " +
 		"savepoint does NOT hold — skipped mounts with a reason code, services with no volume, " +
-		"containers killed at the stop deadline (their data may be crash-consistent only), replica " +
-		"gaps and containers whose image is unknown — so tell the user before relying on " +
-		"it. If the call fails with a message of the " +
-		"form 'savepoint <id> committed; services failed to resume', the savepoint EXISTS and is " +
-		"safe to roll back to — only the restart failed, so report that id to the user and " +
-		"investigate the compose project (the services are stopped, paused or unhealthy), rather than taking " +
-		"another savepoint."
+		"containers killed at the stop deadline (their data may be crash-consistent only), " +
+		"pre-capture hooks that failed and were let through (the application may not have been " +
+		"prepared), replica gaps and containers whose image is unknown — so tell the user before " +
+		"relying on it. If the call fails with a message of the " +
+		"form 'savepoint <id> committed; bringing the project back: …', the savepoint EXISTS and is " +
+		"safe to roll back to — only the restart or a post-capture hook failed, so report that id to " +
+		"the user and investigate the compose project (the services are stopped, paused or unhealthy), " +
+		"rather than taking another savepoint."
 	descList = "List the project's savepoints, newest first unless sort is asc, with their id, name, " +
 		"description and creation time. Read-only. Call it to find the savepoint id or name to pass to " +
 		"rollback or savepoint_remove. Safety snapshots — the undo a rollback commits of the live " +

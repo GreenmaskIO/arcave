@@ -49,27 +49,29 @@ type imageSet struct {
 }
 
 // buildPlan decides, off introspection, what a capture of the live compose project takes and leaves
-// out; it changes nothing. A capture policy that cannot be resolved is a provider.CapturePolicyError;
-// a record of opts.Restoring that cannot be read is not.
+// out; it changes nothing. A project about to be replaced with opts.Restoring gets that replacement's
+// policy, which follows the config past a bad label; any other capture refuses one, a
+// provider.CapturePolicyError. A record of opts.Restoring that cannot be read is no policy's failure.
 func (s *Provider) buildPlan(
 	ctx context.Context, introspection model.IntrospectionResult, opts provider.CaptureOptions,
 ) (captureplan.Plan, error) {
 	var (
-		restoring     *model.Savepoint
 		capturePolicy model.CapturePolicy
 		labelsIgnored error
+		restoring     model.Savepoint
 		plan          captureplan.Plan
 		err           error
 	)
-	if opts.Restoring != "" {
-		savepoint, err := s.loadSavepoint(ctx, opts.Restoring)
-		if err != nil {
+	if opts.Restoring == "" {
+		// Before anything else: a bad label fails while the project is still running.
+		if capturePolicy, err = capturepolicy.Resolve(ctx, introspection, s.captureDefaults); err != nil {
+			return captureplan.Plan{}, &provider.CapturePolicyError{Err: err}
+		}
+	} else {
+		if restoring, err = s.loadSavepoint(ctx, opts.Restoring); err != nil {
 			return captureplan.Plan{}, err
 		}
-		restoring = &savepoint
-	}
-	if capturePolicy, labelsIgnored, err = s.resolveCapturePolicy(ctx, introspection, restoring); err != nil {
-		return captureplan.Plan{}, &provider.CapturePolicyError{Err: err}
+		capturePolicy, labelsIgnored = s.newReplacementPolicy(ctx, introspection, restoring)
 	}
 	plan, err = s.newPlan(ctx, introspection, capturePolicy, labelsIgnored)
 	if err != nil {
@@ -78,24 +80,6 @@ func (s *Provider) buildPlan(
 		return captureplan.Plan{}, err
 	}
 	return plan, nil
-}
-
-// resolveCapturePolicy reads the compose project's labels into a policy; a project about to be
-// replaced with restoring gets that replacement's policy, nil being none. The first error is why
-// the policy follows the config and not the labels, nil when it reads them; the second is the
-// failure.
-func (s *Provider) resolveCapturePolicy(
-	ctx context.Context, introspection model.IntrospectionResult, restoring *model.Savepoint,
-) (model.CapturePolicy, error, error) {
-	if restoring == nil {
-		// Before anything else: a bad label fails while the project is still running.
-		capturePolicy, err := capturepolicy.Resolve(ctx, introspection, s.captureDefaults)
-		if err != nil {
-			return model.CapturePolicy{}, nil, err
-		}
-		return capturePolicy, nil, nil
-	}
-	return s.newReplacementPolicy(ctx, introspection, *restoring)
 }
 
 // loadSavepoint reads the record of the savepoint id names.
@@ -110,28 +94,25 @@ func (s *Provider) loadSavepoint(ctx context.Context, id model.SavepointID) (mod
 	return savepoints[0], nil
 }
 
-// newReplacementPolicy is the live policy of a project about to be replaced with restoring, every
-// unit it overwrites kept and every service stopped; a bad label falls back to the config and is
-// returned as the first error, labelsIgnored, the failure being the second.
+// newReplacementPolicy is the live policy of a project about to be replaced with restoring: the
+// labels' decisions, every unit the restore overwrites kept, every service stopped and no hook run.
+// A label it cannot read leaves the decisions to the config and is returned, labelsIgnored.
 func (s *Provider) newReplacementPolicy(
 	ctx context.Context, introspection model.IntrospectionResult, restoring model.Savepoint,
-) (model.CapturePolicy, error, error) {
-	var (
-		capturePolicy model.CapturePolicy
-		labelsIgnored error
-		err           error
-	)
-	if capturePolicy, err = capturepolicy.Resolve(ctx, introspection, s.captureDefaults); err != nil {
-		if !errors.Is(err, model.ErrInvalidCapturePolicy) {
-			return model.CapturePolicy{}, nil, err
-		}
-		labelsIgnored = err
-		if capturePolicy, err = capturepolicy.ResolveWithoutLabels(ctx, introspection, s.captureDefaults); err != nil {
-			warnLabelsIgnored(ctx, labelsIgnored)
-			return model.CapturePolicy{}, nil, err
-		}
+) (model.CapturePolicy, error) {
+	labelled, labelsIgnored := capturepolicy.Resolve(ctx, introspection, s.captureDefaults)
+	if labelsIgnored != nil {
+		labelled = capturepolicy.ResolveWithoutLabels(introspection, s.captureDefaults)
 	}
-	return withStopMode(keepRestored(capturePolicy, introspection, restoring)), labelsIgnored, nil
+	restored := newRestoredObjectIDs(restoring)
+	return model.CapturePolicy{
+		VolumeBackend:        labelled.VolumeBackend,
+		WritableLayerBackend: labelled.WritableLayerBackend,
+		Mode:                 model.CaptureModeStop,
+		Services:             newStoppedServices(labelled.Services),
+		NamedVolumes:         newKeptNamedVolumes(labelled, introspection, restored),
+		Mounts:               newKeptMounts(labelled, introspection, restored),
+	}, labelsIgnored
 }
 
 // warnLabelsIgnored says a capture that then failed had passed over a bad label: no plan is left
@@ -143,39 +124,50 @@ func warnLabelsIgnored(ctx context.Context, labelsIgnored error) {
 	zerolog.Ctx(ctx).Warn().Err(labelsIgnored).Msg("the capture ignored the labels and followed the config")
 }
 
-// withStopMode stops every service, whatever its label or the config say: the project is about
-// to be replaced, so its capture is held by stop alone.
-func withStopMode(capturePolicy model.CapturePolicy) model.CapturePolicy {
-	services := make(map[string]model.ServiceDecision, len(capturePolicy.Services))
-	for name, decision := range capturePolicy.Services {
-		decision.Mode = model.CaptureModeStop
-		services[name] = decision
+// newRestoredObjectIDs are the volumes savepoint restores into, by object id.
+func newRestoredObjectIDs(savepoint model.Savepoint) map[string]bool {
+	restored := map[string]bool{}
+	for _, volume := range volumesOf(savepoint) {
+		restored[volume.ObjectID] = true
 	}
-	capturePolicy.Mode, capturePolicy.Services = model.CaptureModeStop, services
-	return capturePolicy
+	return restored
 }
 
-// keepRestored captures every live unit savepoint restores into, so the capture holds what the
-// restore overwrites.
-func keepRestored(capturePolicy model.CapturePolicy, introspection model.IntrospectionResult, savepoint model.Savepoint) model.CapturePolicy {
-	restored := map[string]bool{}
-	for _, v := range volumesOf(savepoint) {
-		restored[v.ObjectID] = true
+// newStoppedServices are the services' decisions held by stop and with no hook, whatever their
+// labels or the config say: the project is about to be replaced.
+func newStoppedServices(decisions map[string]model.ServiceDecision) map[string]model.ServiceDecision {
+	services := make(map[string]model.ServiceDecision, len(decisions))
+	for name, decision := range decisions {
+		decision.Mode = model.CaptureModeStop
+		decision.PreCapture = nil
+		decision.PostCapture = nil
+		services[name] = decision
 	}
-	keep := func(decision model.VolumeDecision) model.VolumeDecision {
-		decision.CaptureDecision = model.NewConfigDecision(true, "the rollback restores into it")
-		return decision
-	}
+	return services
+}
 
+// newKeptNamedVolumes are capturePolicy's named volume decisions, each one left out that the restore
+// overwrites taken, so the capture holds what the restore destroys.
+func newKeptNamedVolumes(
+	capturePolicy model.CapturePolicy, introspection model.IntrospectionResult, restored map[string]bool,
+) map[string]model.VolumeDecision {
 	named := maps.Clone(capturePolicy.NamedVolumes)
 	if named == nil {
 		named = map[string]model.VolumeDecision{}
 	}
 	for _, volume := range introspection.Project.Volumes {
 		if decision := capturePolicy.DecideNamedVolume(volume.Name); restored[volume.ObjectID()] && !decision.Capture {
-			named[volume.Name] = keep(decision)
+			named[volume.Name] = newKeptDecision(decision)
 		}
 	}
+	return named
+}
+
+// newKeptMounts are capturePolicy's bind and anonymous volume decisions, each one left out that the
+// restore overwrites taken.
+func newKeptMounts(
+	capturePolicy model.CapturePolicy, introspection model.IntrospectionResult, restored map[string]bool,
+) map[model.MountRef]model.VolumeDecision {
 	mounts := maps.Clone(capturePolicy.Mounts)
 	if mounts == nil {
 		mounts = map[model.MountRef]model.VolumeDecision{}
@@ -183,13 +175,21 @@ func keepRestored(capturePolicy model.CapturePolicy, introspection model.Introsp
 	for _, svc := range introspection.Project.Services {
 		for _, mount := range svc.Volumes {
 			ref := model.MountRef{Service: svc.Name, Replica: mount.Replica, Target: mount.Target}
-			if decision := capturePolicy.DecideMount(ref); mount.Type != model.VolumeTypeNamed && restored[mount.ObjectID(svc.Name)] && !decision.Capture {
-				mounts[ref] = keep(decision)
+			decision := capturePolicy.DecideMount(ref)
+			if mount.Type != model.VolumeTypeNamed && restored[mount.ObjectID(svc.Name)] && !decision.Capture {
+				mounts[ref] = newKeptDecision(decision)
 			}
 		}
 	}
-	capturePolicy.NamedVolumes, capturePolicy.Mounts = named, mounts
-	return capturePolicy
+	return mounts
+}
+
+// newKeptDecision is decision taken because the rollback restores into it, on its backend.
+func newKeptDecision(decision model.VolumeDecision) model.VolumeDecision {
+	return model.VolumeDecision{
+		CaptureDecision: model.NewConfigDecision(true, "the rollback restores into it"),
+		Backend:         decision.Backend,
+	}
 }
 
 // volumesOf projects a savepoint's stats back to volumes.
@@ -324,11 +324,14 @@ func newServiceHolds(introspection model.IntrospectionResult, capturePolicy mode
 				State: string(state.Status),
 			})
 		}
+		decision := capturePolicy.DecideService(svc.Name)
 		holds = append(holds, captureplan.ServiceHold{
-			Service: svc.Name,
-			Mode:    cmp.Or(capturePolicy.DecideService(svc.Name).Mode, model.CaptureModeStop),
-			Running: running,
-			Idle:    idle,
+			Service:     svc.Name,
+			Mode:        cmp.Or(decision.Mode, model.CaptureModeStop),
+			Running:     running,
+			Idle:        idle,
+			PreCapture:  decision.PreCapture,
+			PostCapture: decision.PostCapture,
 		})
 	}
 	return holds
