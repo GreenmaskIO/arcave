@@ -35,6 +35,8 @@ const (
 	labelDisable = "label=disable"
 	// podmanBridgeNetwork is the network Podman puts a network_mode: bridge container in.
 	podmanBridgeNetwork = "podman"
+	// podmanIPAMDriver is the IPAM driver Podman names in every network's IPAM options.
+	podmanIPAMDriver = "host-local"
 )
 
 // EngineStamps is what an engine stamps on a container its compose file did not ask
@@ -80,6 +82,8 @@ type EngineNetworking struct {
 	HostnameAliased bool
 	// StampedIPFamilies reports an engine stamping IPv4 on and IPv6 off on a network declaring neither.
 	StampedIPFamilies bool
+	// StampedIPAMOptions are the IPAM options an engine stamps on every network, by key.
+	StampedIPAMOptions map[string]string
 	// BridgeNetwork is the engine's own network a network_mode: bridge container joins, when
 	// it is not named bridge.
 	BridgeNetwork string
@@ -133,6 +137,7 @@ func NewPodmanStamps(info system.Info) EngineStamps {
 		Networking: EngineNetworking{
 			HostnameAliased:          true,
 			StampedIPFamilies:        true,
+			StampedIPAMOptions:       map[string]string{"driver": podmanIPAMDriver},
 			BridgeNetwork:            podmanBridgeNetwork,
 			BridgeModeBesideNetworks: true,
 		},

@@ -28,6 +28,7 @@ func TestNewIPAM(t *testing.T) {
 		name      string
 		from      network.IPAM
 		withPools bool
+		stamped   map[string]string
 		want      types.IPAMConfig
 	}{
 		{
@@ -39,6 +40,24 @@ func TestNewIPAM(t *testing.T) {
 			name: "empty options are none",
 			from: network.IPAM{Driver: "default", Options: map[string]string{}},
 			want: types.IPAMConfig{Driver: "default"},
+		},
+		{
+			name:    "an option the engine stamped is none",
+			from:    network.IPAM{Driver: "default", Options: map[string]string{"driver": "host-local"}},
+			stamped: map[string]string{"driver": "host-local"},
+			want:    types.IPAMConfig{Driver: "default"},
+		},
+		{
+			name:    "an option beside the stamped one is carried",
+			from:    network.IPAM{Options: map[string]string{"driver": "host-local", "foo": "bar"}},
+			stamped: map[string]string{"driver": "host-local"},
+			want:    types.IPAMConfig{Options: types.Options{"foo": "bar"}},
+		},
+		{
+			name:    "a stamped key of another value is carried",
+			from:    network.IPAM{Options: map[string]string{"driver": "dhcp"}},
+			stamped: map[string]string{"driver": "host-local"},
+			want:    types.IPAMConfig{Options: types.Options{"driver": "dhcp"}},
 		},
 		{
 			name: "pools are left out unless asked for",
@@ -74,7 +93,7 @@ func TestNewIPAM(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := newIPAM(tt.from, tt.withPools)
+			got := newIPAM(tt.from, tt.withPools, tt.stamped)
 
 			// Assert
 			assert.Equal(t, tt.want, got)

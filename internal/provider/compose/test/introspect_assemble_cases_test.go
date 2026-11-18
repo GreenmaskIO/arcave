@@ -558,12 +558,21 @@ services:
 networks:
   back: {ipam: {options: {foo: bar}}}
 `,
-			want: busyboxBase + `
+			wants: map[composemodel.ContainerRuntimeKind]string{
+				composemodel.ContainerRuntimeDocker: busyboxBase + `
 services:
   app: {<<: *base, scale: 1, networks: {back: null}}
 networks:
   back: {name: "{{project}}_back", driver: bridge, ipam: {driver: default, options: {foo: bar}}}
 `,
+				// Podman's compat API drops IPAM options (BACKLOG.md: Пределы Podman).
+				composemodel.ContainerRuntimePodman: busyboxBase + `
+services:
+  app: {<<: *base, scale: 1, networks: {back: null}}
+networks:
+  back: {name: "{{project}}_back", driver: bridge, ipam: {driver: default}}
+`,
+			},
 		},
 		{
 			name: "static ipv4 address",

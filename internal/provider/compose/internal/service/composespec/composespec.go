@@ -19,7 +19,7 @@ package composespec
 import (
 	"context"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,6 +31,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 const (
@@ -133,7 +134,7 @@ func (s *Assembler) Assemble(ctx context.Context, introspection composemodel.Int
 		Services:     a.newServices(ctx),
 		Volumes:      newVolumes(introspection.Project.Volumes),
 		Networks: newNetworks(introspection.Project.Networks, a.networkKeys,
-			staticAddressNetworks(introspection.Project.Services), s.engineStamps.Networking.StampedIPFamilies),
+			staticAddressNetworks(introspection.Project.Services), s.engineStamps.Networking),
 	}, nil
 }
 
@@ -238,7 +239,7 @@ func newVolumes(introspected []composemodel.NamedVolume) types.Volumes {
 // newNetworks renders the newNetworks: section, foreign ones keyed by docker name and external.
 // Address pools are declared only where a container holds a static address.
 func newNetworks(
-	introspected []composemodel.Network, keys map[string]string, static map[string]bool, ipFamiliesStamped bool,
+	introspected []composemodel.Network, keys map[string]string, static map[string]bool, networking EngineNetworking,
 ) types.Networks {
 	owned := make(map[string]bool, len(introspected))
 	networks := make(types.Networks, len(keys))
@@ -248,14 +249,14 @@ func newNetworks(
 			Name:       projectNetwork.Name,
 			Driver:     projectNetwork.Inspect.Driver,
 			DriverOpts: networkOptions(projectNetwork.Inspect.Options),
-			Ipam:       newIPAM(projectNetwork.Inspect.IPAM, static[projectNetwork.Name]),
+			Ipam:       newIPAM(projectNetwork.Inspect.IPAM, static[projectNetwork.Name], networking.StampedIPAMOptions),
 			Internal:   projectNetwork.Inspect.Internal,
 			Attachable: projectNetwork.Inspect.Attachable,
 			EnableIPv4: declaredIPFamily(projectNetwork.Inspect.Options, enableIPv4Option, projectNetwork.Inspect.EnableIPv4),
 			EnableIPv6: declaredIPFamily(projectNetwork.Inspect.Options, enableIPv6Option, projectNetwork.Inspect.EnableIPv6),
 			Labels:     userLabels(projectNetwork.Inspect.Labels),
 		}
-		if ipFamiliesStamped {
+		if networking.StampedIPFamilies {
 			declared = dropStampedIPFamilies(declared)
 		}
 		networks[projectNetwork.Key] = declared
@@ -302,22 +303,33 @@ func declaredIPFamily(options map[string]string, defaulted string, enabled bool)
 	return &enabled
 }
 
-// newIPAM carries the driver and its options, and the pools only when withPools: a static address
-// needs its pool, while pinning an auto-assigned one risks an overlap on create.
-func newIPAM(from network.IPAM, withPools bool) types.IPAMConfig {
+// newIPAM carries the driver and its options but the ones the engine stamped, and the pools only
+// when withPools: a static address needs its pool, while pinning an auto-assigned one risks an
+// overlap on create.
+func newIPAM(from network.IPAM, withPools bool, stamped map[string]string) types.IPAMConfig {
 	var pools []*types.IPAMPool
 	if withPools {
 		pools = newIPAMPools(from.Config)
 	}
-	var options types.Options
-	if len(from.Options) > 0 {
-		options = types.Options(from.Options)
-	}
+	options := newIPAMOptions(from.Options, stamped)
 	return types.IPAMConfig{
 		Driver:  from.Driver,
 		Config:  pools,
 		Options: options,
 	}
+}
+
+// newIPAMOptions is the options an engine did not stamp, nil for none.
+func newIPAMOptions(from, stamped map[string]string) types.Options {
+	options := maps.Clone(from)
+	maps.DeleteFunc(options, func(key, value string) bool {
+		stampedValue, ok := stamped[key]
+		return ok && stampedValue == value
+	})
+	if len(options) == 0 {
+		return nil
+	}
+	return types.Options(options)
 }
 
 // newIPAMPools spells each pool as compose does, an unset address left out.

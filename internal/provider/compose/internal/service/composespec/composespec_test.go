@@ -269,6 +269,45 @@ func TestAssembler_Assemble_NetworkIPFamilies(t *testing.T) {
 	}
 }
 
+func TestAssembler_Assemble_NetworkIPAMOptions(t *testing.T) {
+	tests := []struct {
+		name   string
+		stamps EngineStamps
+		want   types.Options
+	}{
+		{
+			name:   "Podman's own IPAM driver is no declaration",
+			stamps: NewPodmanStamps(system.Info{}),
+		},
+		{
+			name:   "an engine stamping none: the option is declared",
+			stamps: NewDockerStamps(system.Info{}),
+			want:   types.Options{"driver": "host-local"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ipam := network.IPAM{Driver: "default", Options: map[string]string{"driver": "host-local"}}
+			introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
+				Name: "demo",
+				Services: []composemodel.Service{{Name: "app", Containers: []composemodel.Container{{
+					Inspect: container.InspectResponse{ID: "c1"},
+				}}}},
+				Networks: []composemodel.Network{{Key: "back", Name: "demo_back", Inspect: network.Inspect{IPAM: ipam}}},
+			}}
+
+			// Act
+			project, err := NewAssembler(tt.stamps).Assemble(context.Background(), introspection)
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, project.Networks["back"].Ipam.Options)
+		})
+	}
+}
+
 // A network the project attaches to but does not own carries no compose label, so
 // only the containers name it.
 func TestAssembler_Assemble_ForeignNetwork(t *testing.T) {
