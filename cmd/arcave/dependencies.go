@@ -18,9 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"slices"
 
 	"filippo.io/age"
 	"github.com/greenmaskio/storages"
@@ -44,28 +42,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
-// closers is what a wiring has opened, released newest first.
-type closers struct {
-	releases []func(ctx context.Context)
-}
-
-// add puts closer on the stack; a failure to close it is logged under name.
-func (c *closers) add(name string, closer io.Closer) {
-	c.addFunc(func(ctx context.Context) { closeQuietly(ctx, name, closer) })
-}
-
-// addFunc puts a release that reports its own failure on the stack.
-func (c *closers) addFunc(fn func(ctx context.Context)) {
-	c.releases = append(c.releases, fn)
-}
-
-// release runs the stack newest first.
-func (c *closers) release(ctx context.Context) {
-	for _, v := range slices.Backward(c.releases) {
-		v(ctx)
-	}
-}
-
 // sessionScope is the arcave project's store and the session a command works in.
 type sessionScope struct {
 	arcaveProjectStore storages.Storager
@@ -77,7 +53,7 @@ type sessionScope struct {
 
 // openSessionScope opens the arcave project's store and resolves sessionRef on it.
 func openSessionScope(
-	ctx context.Context, cfg config.Config, projectPath, sessionRef string, opened *closers,
+	ctx context.Context, cfg config.Config, projectPath, sessionRef string, opened *utils.Closers,
 ) (sessionScope, error) {
 	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath, opened)
 	if err != nil {
@@ -113,7 +89,7 @@ type composeProjectScope struct {
 // openComposeProjectScope descends from the session to composeProject's store.
 func openComposeProjectScope(
 	ctx context.Context, cfg config.Config, projectPath, sessionRef string,
-	composeProject model.DockerComposeProjectName, opened *closers,
+	composeProject model.DockerComposeProjectName, opened *utils.Closers,
 ) (composeProjectScope, error) {
 	scope, err := openSessionScope(ctx, cfg, projectPath, sessionRef, opened)
 	if err != nil {
@@ -138,7 +114,7 @@ func openComposeProjectScope(
 // resolves to, the daemon connected; what it opens goes on opened.
 func openSavepointService(
 	ctx context.Context, projectPath string, cfg config.Config, sessionRef string,
-	composeProject model.DockerComposeProjectName, opened *closers,
+	composeProject model.DockerComposeProjectName, opened *utils.Closers,
 ) (*core.Service, error) {
 	scope, err := openComposeProjectScope(ctx, cfg, projectPath, sessionRef, composeProject, opened)
 	if err != nil {
@@ -173,7 +149,7 @@ func openSavepointService(
 // nothing that reaches the daemon is built.
 func openSavepointStoreService(
 	ctx context.Context, projectPath string, cfg config.Config, sessionRef string,
-	composeProject model.DockerComposeProjectName, opened *closers,
+	composeProject model.DockerComposeProjectName, opened *utils.Closers,
 ) (*core.SavepointStoreService, error) {
 	scope, err := openComposeProjectScope(ctx, cfg, projectPath, sessionRef, composeProject, opened)
 	if err != nil {
@@ -194,7 +170,7 @@ func openSavepointStoreService(
 // openStatusService wires status for composeProject; the store opens lazily, so one that fails
 // only makes the status partial.
 func openStatusService(
-	projectPath string, cfg config.Config, composeProject model.DockerComposeProjectName, opened *closers,
+	projectPath string, cfg config.Config, composeProject model.DockerComposeProjectName, opened *utils.Closers,
 ) (*status.Service, error) {
 	if err := storefactory.ValidateComposeProjectName(composeProject); err != nil {
 		return nil, err
@@ -224,7 +200,7 @@ func openStatusService(
 // openSessionService wires the session commands: the arcave project's store and nothing that
 // reaches the daemon.
 func openSessionService(
-	ctx context.Context, projectPath string, cfg config.Config, opened *closers,
+	ctx context.Context, projectPath string, cfg config.Config, opened *utils.Closers,
 ) (*core.SessionService, error) {
 	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath, opened)
 	if err != nil {
@@ -287,13 +263,13 @@ type openedArcaveProject struct {
 // openArcaveProjectStore opens the store root onto opened and descends to the arcave project,
 // encrypted under encryption.enabled. It writes nothing; writeAdmission marks the project.
 func openArcaveProjectStore(
-	ctx context.Context, cfg config.Config, projectPath string, opened *closers,
+	ctx context.Context, cfg config.Config, projectPath string, opened *utils.Closers,
 ) (openedArcaveProject, error) {
 	root, err := storefactory.Root(ctx, cfg.Storage, projectPath)
 	if err != nil {
 		return openedArcaveProject{}, fmt.Errorf("initialise store root: %w", err)
 	}
-	opened.add("store root", root)
+	opened.Add("store root", root)
 	return openArcaveProject(ctx, cfg, root)
 }
 
@@ -379,17 +355,10 @@ func storeKeyFix(err error) (string, bool) {
 	}
 }
 
-// closeQuietly closes c and logs any error without failing the caller.
-func closeQuietly(ctx context.Context, name string, closer io.Closer) {
-	if err := closer.Close(); err != nil {
-		log.Ctx(ctx).Error().Err(err).Msg("close " + name)
-	}
-}
-
 // openGCService wires a gc over the session's compose projects, one collector per kind. The daemon
 // is only connected to here.
 func openGCService(
-	ctx context.Context, projectPath string, cfg config.Config, sessionRef string, opened *closers,
+	ctx context.Context, projectPath string, cfg config.Config, sessionRef string, opened *utils.Closers,
 ) (*gc.GarbageCollector, error) {
 	scope, err := openSessionScope(ctx, cfg, projectPath, sessionRef, opened)
 	if err != nil {

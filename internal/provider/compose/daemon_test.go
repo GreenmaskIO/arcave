@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // newDockerClientOptions is what carries the config into docker/cli. An unset option
@@ -482,8 +483,8 @@ func TestNewDockerClient_RejectsAnUnbuildableClient(t *testing.T) {
 func TestConnectDaemon(t *testing.T) {
 	// Arrange
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
-	var opened closers
-	t.Cleanup(func() { opened.release(context.Background()) })
+	var opened utils.Closers
+	t.Cleanup(func() { opened.Release(context.Background()) })
 
 	// Act
 	daemon, err := connectDaemon(composeconfig.Docker{Host: "tcp://127.0.0.1:1"}, io.Discard, &opened)
@@ -491,5 +492,5 @@ func TestConnectDaemon(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.NotNil(t, daemon.api)
-	assert.Len(t, opened.releases, 1)
+	assert.Equal(t, 1, opened.Len())
 }

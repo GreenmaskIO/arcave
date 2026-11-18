@@ -222,8 +222,8 @@ func requireComposeProject() (model.DockerComposeProjectName, error) {
 // resolveSession turns a --session value into the id of a session that exists, for a command that
 // opens no compose project; "" is the current session, else the default.
 func resolveSession(ctx context.Context, ref string) (model.SessionID, error) {
-	var opened closers
-	defer opened.release(ctx)
+	var opened utils.Closers
+	defer opened.Release(ctx)
 
 	svc, err := openSessionService(ctx, projectRoot, projectCfg, &opened)
 	if err != nil {

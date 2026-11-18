@@ -19,6 +19,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/cli"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 var (
@@ -43,8 +44,8 @@ func runSessionRemove(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	ctx := cmd.Context()
-	var opened closers
-	defer opened.release(ctx)
+	var opened utils.Closers
+	defer opened.Release(ctx)
 
 	svc, err := openSessionService(ctx, projectRoot, projectCfg, &opened)
 	if err != nil {

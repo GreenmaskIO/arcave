@@ -19,7 +19,6 @@ import (
 	"fmt"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
-	"slices"
 
 	dockercompose "github.com/docker/compose/v5/pkg/compose"
 	"github.com/greenmaskio/storages"
@@ -34,6 +33,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/workload"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // Config is what the compose provider is opened with.
@@ -53,30 +53,30 @@ type Config struct {
 // Workload is an opened workload of one compose project, with what it holds open.
 type Workload struct {
 	provider.Workload
-	opened closers
+	opened utils.Closers
 }
 
 // Close releases what Open opened, newest first.
-func (w Workload) Close(ctx context.Context) { w.opened.release(ctx) }
+func (w Workload) Close(ctx context.Context) { w.opened.Release(ctx) }
 
 // Observer reads one compose project off the daemon for a status, with what it holds open.
 type Observer struct {
 	provider.Observer
-	opened closers
+	opened utils.Closers
 }
 
 // Close releases the connection OpenObserver opened.
-func (o Observer) Close(ctx context.Context) { o.opened.release(ctx) }
+func (o Observer) Close(ctx context.Context) { o.opened.Release(ctx) }
 
 // Open connects the daemon and opens the workload of composeProject over its store; on error it
 // releases whatever it had opened.
 func Open(
 	ctx context.Context, cfg Config, store storages.Storager, composeProject model.DockerComposeProjectName,
 ) (Workload, error) {
-	var opened closers
+	var opened utils.Closers
 	workload, err := openWorkload(ctx, cfg, store, composeProject, &opened)
 	if err != nil {
-		opened.release(ctx)
+		opened.Release(ctx)
 		return Workload{}, err
 	}
 	return Workload{
@@ -89,7 +89,7 @@ func Open(
 // the CLI's progress channel goes nowhere; no runtime profile: the container list and the compat
 // inspect read alike on every engine.
 func OpenObserver(cfg Config, composeProject model.DockerComposeProjectName) (Observer, error) {
-	var opened closers
+	var opened utils.Closers
 	daemon, err := connectDaemon(cfg.Settings.Docker, io.Discard, &opened)
 	if err != nil {
 		return Observer{}, err
@@ -104,7 +104,7 @@ func OpenObserver(cfg Config, composeProject model.DockerComposeProjectName) (Ob
 // opens goes on opened.
 func openWorkload(
 	ctx context.Context, cfg Config, store storages.Storager,
-	composeProject model.DockerComposeProjectName, opened *closers,
+	composeProject model.DockerComposeProjectName, opened *utils.Closers,
 ) (provider.Workload, error) {
 	settings := cfg.Settings
 	// Where compose's own progress goes, on the logger initRoot resolved.
@@ -140,7 +140,7 @@ func openWorkload(
 	if err != nil {
 		return nil, err
 	}
-	opened.addFunc(cdcTransport.Close)
+	opened.AddFunc(cdcTransport.Close)
 
 	backendRegistry, err := newBackendRegistry(settings, resticRoot, profile.Volumes, profile.Engine, cdcTransport.transport)
 	if err != nil {
@@ -185,33 +185,4 @@ func openWorkload(
 		Store:              store,
 		Concurrency:        cfg.Concurrency,
 	}), nil
-}
-
-// closers is what an Open has opened, released newest first.
-type closers struct {
-	releases []func(ctx context.Context)
-}
-
-// add puts closer on the stack; a failure to close it is logged under name.
-func (c *closers) add(name string, closer io.Closer) {
-	c.addFunc(func(ctx context.Context) { closeQuietly(ctx, name, closer) })
-}
-
-// addFunc puts a release that reports its own failure on the stack.
-func (c *closers) addFunc(fn func(ctx context.Context)) {
-	c.releases = append(c.releases, fn)
-}
-
-// release runs the stack newest first.
-func (c *closers) release(ctx context.Context) {
-	for _, v := range slices.Backward(c.releases) {
-		v(ctx)
-	}
-}
-
-// closeQuietly closes closer and logs any error without failing the caller.
-func closeQuietly(ctx context.Context, name string, closer io.Closer) {
-	if err := closer.Close(); err != nil {
-		log.Ctx(ctx).Error().Err(err).Msg("close " + name)
-	}
 }

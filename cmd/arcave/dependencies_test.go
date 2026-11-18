@@ -33,7 +33,6 @@ import (
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/config"
@@ -42,6 +41,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // newUnreachableDaemonConfig is a project over a directory store and a daemon that does not answer.
@@ -72,8 +72,8 @@ func TestOpenSavepointStoreService(t *testing.T) {
 	cfg := newUnreachableDaemonConfig(t, projectPath)
 	cfg.ComposeProvider.Backends.FullCopy.Compression = "lz4"
 
-	var opened closers
-	t.Cleanup(func() { opened.release(ctx) })
+	var opened utils.Closers
+	t.Cleanup(func() { opened.Release(ctx) })
 	sessions, err := openSessionService(ctx, projectPath, cfg, &opened)
 	require.NoError(t, err)
 	_, err = sessions.CreateSession(ctx, model.CreateSessionRequest{Name: "exp"})
@@ -121,8 +121,8 @@ func TestOpenSavepointService_DaemonUnreachable(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 	projectPath := t.TempDir()
 	cfg := newUnreachableDaemonConfig(t, projectPath)
-	var opened closers
-	t.Cleanup(func() { opened.release(ctx) })
+	var opened utils.Closers
+	t.Cleanup(func() { opened.Release(ctx) })
 
 	// Act
 	svc, err := openSavepointService(ctx, projectPath, cfg, "", "demo", &opened)
@@ -138,8 +138,8 @@ func TestOpenGCService_DaemonUnreachable(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 	projectPath := t.TempDir()
 	cfg := newUnreachableDaemonConfig(t, projectPath)
-	var opened closers
-	t.Cleanup(func() { opened.release(ctx) })
+	var opened utils.Closers
+	t.Cleanup(func() { opened.Release(ctx) })
 
 	// Act
 	svc, err := openGCService(ctx, projectPath, cfg, "", &opened)
@@ -173,8 +173,8 @@ func TestOpenGCService_RetainsTheSafetySnapshots(t *testing.T) {
 			projectPath := t.TempDir()
 			cfg := newUnreachableDaemonConfig(t, projectPath)
 			cfg.GC.SafetySnapshots.RetainRecent = &tt.retainRecent
-			var opened closers
-			t.Cleanup(func() { opened.release(ctx) })
+			var opened utils.Closers
+			t.Cleanup(func() { opened.Release(ctx) })
 			scope, err := openComposeProjectScope(ctx, cfg, projectPath, "", "demo", &opened)
 			require.NoError(t, err)
 			for _, savepoint := range []model.Savepoint{{ID: oldest, Labels: labels}, {ID: newest, Labels: labels}, {ID: plain}} {
@@ -216,41 +216,12 @@ func TestNewMCPFactories(t *testing.T) {
 	}
 }
 
-// mockCloser is one thing a wiring opened.
-type mockCloser struct{ mock.Mock }
-
-func (m *mockCloser) Close() error { return m.Called().Error(0) }
-
-// The stack unwinds newest first, and a closer that fails stops none of the older ones.
-func TestClosers_release(t *testing.T) {
-	// Arrange
-	ctx := zerolog.Nop().WithContext(context.Background())
-	store, engine, server := &mockCloser{}, &mockCloser{}, &mockCloser{}
-	mock.InOrder(
-		server.On("Close").Return(nil).Once(),
-		engine.On("Close").Return(errors.New("boom")).Once(),
-		store.On("Close").Return(nil).Once(),
-	)
-	var opened closers
-	opened.add("store", store)
-	opened.add("engine", engine)
-	opened.addFunc(func(context.Context) { assert.NoError(t, server.Close()) })
-
-	// Act
-	opened.release(ctx)
-
-	// Assert
-	store.AssertExpectations(t)
-	engine.AssertExpectations(t)
-	server.AssertExpectations(t)
-}
-
 func TestOpenArcaveProjectStore(t *testing.T) {
 	key := newTestStoreKey(t)
 	encrypted := func(t *testing.T, projectPath string) {
 		t.Helper()
-		var opened closers
-		defer opened.release(t.Context())
+		var opened utils.Closers
+		defer opened.Release(t.Context())
 		created, err := openArcaveProjectStore(t.Context(),
 			newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: key}), projectPath, &opened)
 		require.NoError(t, err)
@@ -259,8 +230,8 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 	}
 	plain := func(t *testing.T, projectPath string) {
 		t.Helper()
-		var opened closers
-		defer opened.release(t.Context())
+		var opened utils.Closers
+		defer opened.Release(t.Context())
 		created, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, config.Encryption{}), projectPath, &opened)
 		require.NoError(t, err)
 		require.NoError(t, created.writeAdmission.AdmitWrite(t.Context()))
@@ -335,8 +306,8 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			tt.stored(t, projectPath)
 			before := listTree(t, arcaveProjectPath(projectPath))
 
-			var opened closers
-			t.Cleanup(func() { opened.release(context.Background()) })
+			var opened utils.Closers
+			t.Cleanup(func() { opened.Release(context.Background()) })
 
 			// Act
 			project, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, tt.encryption), projectPath, &opened)
@@ -378,7 +349,7 @@ func TestOpenedArcaveProject_writeAdmission(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			projectPath := t.TempDir()
-			var setup closers
+			var setup utils.Closers
 			if tt.marked != "" {
 				project, err := openArcaveProjectStore(t.Context(),
 					newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: tt.marked}), projectPath, &setup)
@@ -391,10 +362,10 @@ func TestOpenedArcaveProject_writeAdmission(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, project.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("{}")))
 			}
-			setup.release(t.Context())
+			setup.Release(t.Context())
 			before := listTree(t, arcaveProjectPath(projectPath))
-			var opened closers
-			t.Cleanup(func() { opened.release(context.Background()) })
+			var opened utils.Closers
+			t.Cleanup(func() { opened.Release(context.Background()) })
 
 			// Act
 			project, err := openArcaveProjectStore(t.Context(),
@@ -449,8 +420,8 @@ func TestOpenSessionService_WriteAdmission(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 			projectPath := t.TempDir()
 			cfg := newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: newTestStoreKey(t)})
-			var opened closers
-			t.Cleanup(func() { opened.release(ctx) })
+			var opened utils.Closers
+			t.Cleanup(func() { opened.Release(ctx) })
 			svc, err := openSessionService(ctx, projectPath, cfg, &opened)
 			require.NoError(t, err)
 

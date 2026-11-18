@@ -31,6 +31,7 @@ import (
 	"github.com/moby/moby/client"
 
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // daemonConnection is one connection to the daemon, with no request sent over it yet.
@@ -41,12 +42,12 @@ type daemonConnection struct {
 }
 
 // connectDaemon builds the connection; its closer goes on opened.
-func connectDaemon(cfg composeconfig.Docker, progressOut io.Writer, opened *closers) (daemonConnection, error) {
+func connectDaemon(cfg composeconfig.Docker, progressOut io.Writer, opened *utils.Closers) (daemonConnection, error) {
 	daemon, err := newDockerClient(cfg, progressOut)
 	if err != nil {
 		return daemonConnection{}, err
 	}
-	opened.add("docker client", daemon.api)
+	opened.Add("docker client", daemon.api)
 	return daemon, nil
 }
 
@@ -98,7 +99,7 @@ func newDockerClient(cfg composeconfig.Docker, progressOut io.Writer) (daemonCon
 
 	// Resolution succeeded, so the error stream becomes compose's progress channel.
 	if err := command.WithErrorStream(progressOut)(dockerCli); err != nil {
-		closeQuietly(context.Background(), "docker client", apiClient)
+		utils.CloseQuietly(context.Background(), "docker client", apiClient)
 		return daemonConnection{}, fmt.Errorf("initialise docker client: %w", err)
 	}
 	return daemonConnection{

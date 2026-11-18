@@ -25,13 +25,14 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // openComposeWorkload opens the compose provider's workload of composeProject over its store, the
 // daemon connected; what it opens goes on opened.
 func openComposeWorkload(
 	ctx context.Context, cfg config.Config, store storages.Storager,
-	composeProject model.DockerComposeProjectName, opened *closers,
+	composeProject model.DockerComposeProjectName, opened *utils.Closers,
 ) (provider.Workload, error) {
 	// Where compose's own progress goes, on the logger initRoot resolved.
 	composeProgress := composeProgressMode(
@@ -41,7 +42,7 @@ func openComposeWorkload(
 	if err != nil {
 		return nil, err
 	}
-	opened.addFunc(workload.Close)
+	opened.AddFunc(workload.Close)
 	return workload, nil
 }
 
@@ -58,27 +59,27 @@ func newComposeSession(arcaveProjectStore storages.Navigator, id model.SessionID
 // openComposeGarbageSession is the compose provider's side of session id with its garbage, the
 // daemon connected; what it opens goes on opened.
 func openComposeGarbageSession(
-	cfg config.Config, arcaveProjectStore storages.Storager, id model.SessionID, opened *closers,
+	cfg config.Config, arcaveProjectStore storages.Storager, id model.SessionID, opened *utils.Closers,
 ) (provider.Session, error) {
 	// Nothing a gc runs reports compose's progress.
 	session, err := compose.OpenSession(newComposeConfig(cfg, ""), arcaveProjectStore, id)
 	if err != nil {
 		return nil, err
 	}
-	opened.addFunc(session.Close)
+	opened.AddFunc(session.Close)
 	return session, nil
 }
 
 // openComposeObserver observes composeProject on the daemon, as status does; what it opens goes on
 // opened.
 func openComposeObserver(
-	cfg config.Config, composeProject model.DockerComposeProjectName, opened *closers,
+	cfg config.Config, composeProject model.DockerComposeProjectName, opened *utils.Closers,
 ) (provider.Observer, error) {
 	observer, err := compose.OpenObserver(newComposeConfig(cfg, ""), composeProject)
 	if err != nil {
 		return nil, err
 	}
-	opened.addFunc(observer.Close)
+	opened.AddFunc(observer.Close)
 	return observer, nil
 }
 

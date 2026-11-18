@@ -28,16 +28,17 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/gcfinder"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/sessionstore"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // Session is an opened session of the compose provider, with what it holds open.
 type Session struct {
 	provider.Session
-	opened closers
+	opened utils.Closers
 }
 
 // Close releases what OpenSession opened.
-func (s Session) Close(ctx context.Context) { s.opened.release(ctx) }
+func (s Session) Close(ctx context.Context) { s.opened.Release(ctx) }
 
 // garbageFinder finds a session's garbage.
 type garbageFinder interface {
@@ -60,7 +61,7 @@ func NewStoreSession(arcaveProjectStore storages.Navigator, id model.SessionID) 
 // reads differs by engine, so it runs over the client itself, with no runtime profile; whether the
 // daemon answers is the restored-layer collector's probe.
 func OpenSession(cfg Config, arcaveProjectStore storages.Navigator, id model.SessionID) (Session, error) {
-	var opened closers
+	var opened utils.Closers
 	// A docker.* the config gets wrong fails every command alike.
 	daemon, err := connectDaemon(cfg.Settings.Docker, io.Discard, &opened)
 	if err != nil {

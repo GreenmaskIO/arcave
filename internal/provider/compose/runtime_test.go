@@ -33,6 +33,7 @@ import (
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman/libpod"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // A Podman daemon is reached through libpod over the very connection the client resolved: a
@@ -110,8 +111,8 @@ func TestReadRuntimeProfile(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			t.Setenv("DOCKER_CONFIG", t.TempDir())
-			opened := &closers{}
-			defer opened.release(context.Background())
+			opened := &utils.Closers{}
+			defer opened.Release(context.Background())
 			daemon, err := connectDaemon(tt.newCase(t), io.Discard, opened)
 			require.NoError(t, err)
 			libpodClient, err := libpod.NewClient(daemon.api, libpod.Options{Version: "6.1.4"})
