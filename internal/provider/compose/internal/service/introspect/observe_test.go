@@ -23,7 +23,6 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
@@ -53,66 +52,8 @@ func TestNewReplicaState(t *testing.T) {
 }
 
 func TestNewObservedReplica(t *testing.T) {
-	// Arrange
 	created := time.Date(2026, 11, 7, 14, 0, 0, 0, time.UTC)
 	started := time.Date(2026, 11, 7, 14, 2, 30, 0, time.UTC)
-	replica := composemodel.Container{
-		ID:       "c-db-1",
-		Name:     "demo-db-1",
-		Number:   1,
-		Labels:   map[string]string{"k": "v"},
-		Replaces: "demo-db-0",
-		Inspect: container.InspectResponse{
-			Created:      created.Format(time.RFC3339Nano),
-			RestartCount: 2,
-			State: &container.State{
-				Status:    container.StateRunning,
-				Running:   true,
-				OOMKilled: true,
-				StartedAt: started.Format(time.RFC3339Nano),
-				// The daemon writes the zero time for a container never finished.
-				FinishedAt: "0001-01-01T00:00:00Z",
-				Health:     &container.Health{Status: container.Unhealthy, FailingStreak: 3},
-			},
-			NetworkSettings: &container.NetworkSettings{Ports: network.PortMap{
-				network.MustParsePort("5432/tcp"): {{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "5432"}},
-			}},
-		},
-	}
-
-	// Act
-	got := newObservedReplica(replica)
-
-	// Assert
-	assert.Equal(t, provider.ObservedReplica{
-		Number:        1,
-		Container:     "demo-db-1",
-		ContainerID:   "c-db-1",
-		State:         model.ReplicaStateRunning,
-		Health:        model.ReplicaHealthUnhealthy,
-		OOMKilled:     true,
-		RestartCount:  2,
-		FailingChecks: 3,
-		CreatedAt:     &created,
-		StartedAt:     &started,
-		Replaces:      "demo-db-0",
-		Ports:         []model.PublishedPort{{ContainerPort: 5432, Protocol: "tcp", HostIP: "127.0.0.1", HostPort: 5432}},
-	}, got)
-}
-
-func TestNewObservedReplica_NoState(t *testing.T) {
-	// Act: an inspect with no state reads as an exit, with nothing else known.
-	got := newObservedReplica(composemodel.Container{ID: "c-db-1", Number: 1})
-
-	// Assert
-	assert.Equal(t, provider.ObservedReplica{
-		Number:      1,
-		ContainerID: "c-db-1",
-		State:       model.ReplicaStateExited,
-	}, got)
-}
-
-func TestNewObservedReplica_Deployment(t *testing.T) {
 	deployment := model.SavepointDeployment{
 		DeployedAt:    time.Date(2026, 11, 7, 14, 2, 11, 0, time.UTC),
 		ArcaveProject: "demo",
@@ -130,27 +71,95 @@ func TestNewObservedReplica_Deployment(t *testing.T) {
 	broken := maps.Clone(deployment.Labels())
 	broken[string(model.SystemLabelDeploymentDeployedAt)] = "not-a-time"
 	tests := []struct {
-		name           string
-		labels         map[string]string
-		wantDeployment *model.SavepointDeployment
-		wantErr        bool
+		name      string
+		container composemodel.Container
+		want      provider.ObservedReplica
+		// wantErr is what DeploymentErr names; empty for none.
+		wantErr string
 	}{
-		{name: "no deployment labels", labels: map[string]string{"k": "v"}},
-		{name: "a deployment", labels: deployment.Labels(), wantDeployment: &deployment},
-		{name: "labels that do not parse", labels: broken, wantErr: true},
+		{
+			name: "a running replica as the daemon inspects it",
+			container: composemodel.Container{
+				ID:       "c-db-1",
+				Name:     "demo-db-1",
+				Number:   1,
+				Labels:   map[string]string{"k": "v"},
+				Replaces: "demo-db-0",
+				Inspect: container.InspectResponse{
+					Created:      created.Format(time.RFC3339Nano),
+					RestartCount: 2,
+					State: &container.State{
+						Status:    container.StateRunning,
+						Running:   true,
+						OOMKilled: true,
+						StartedAt: started.Format(time.RFC3339Nano),
+						// The daemon writes the zero time for a container never finished.
+						FinishedAt: "0001-01-01T00:00:00Z",
+						Health:     &container.Health{Status: container.Unhealthy, FailingStreak: 3},
+					},
+					NetworkSettings: &container.NetworkSettings{Ports: network.PortMap{
+						network.MustParsePort("5432/tcp"): {{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "5432"}},
+					}},
+				},
+			},
+			want: provider.ObservedReplica{
+				Number:        1,
+				Container:     "demo-db-1",
+				ContainerID:   "c-db-1",
+				State:         model.ReplicaStateRunning,
+				Health:        model.ReplicaHealthUnhealthy,
+				OOMKilled:     true,
+				RestartCount:  2,
+				FailingChecks: 3,
+				CreatedAt:     &created,
+				StartedAt:     &started,
+				Replaces:      "demo-db-0",
+				Ports:         []model.PublishedPort{{ContainerPort: 5432, Protocol: "tcp", HostIP: "127.0.0.1", HostPort: 5432}},
+			},
+		},
+		{
+			name:      "an inspect with no state reads as an exit, with nothing else known",
+			container: composemodel.Container{ID: "c-db-1", Number: 1},
+			want: provider.ObservedReplica{
+				Number:      1,
+				ContainerID: "c-db-1",
+				State:       model.ReplicaStateExited,
+			},
+		},
+		{
+			name:      "a replica a rollback built carries its deployment",
+			container: composemodel.Container{ID: "c-db-1", Number: 1, Labels: deployment.Labels()},
+			want: provider.ObservedReplica{
+				Number:      1,
+				ContainerID: "c-db-1",
+				Deployment:  &deployment,
+				State:       model.ReplicaStateExited,
+			},
+		},
+		{
+			name:      "deployment labels that do not parse",
+			container: composemodel.Container{ID: "c-db-1", Number: 1, Labels: broken},
+			want: provider.ObservedReplica{
+				Number:      1,
+				ContainerID: "c-db-1",
+				State:       model.ReplicaStateExited,
+			},
+			wantErr: string(model.SystemLabelDeploymentDeployedAt),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := newObservedReplica(composemodel.Container{ID: "c-db-1", Number: 1, Labels: tt.labels})
+			got := newObservedReplica(tt.container)
 
 			// Assert
-			assert.Equal(t, tt.wantDeployment, got.Deployment)
-			if tt.wantErr {
-				require.Error(t, got.DeploymentErr)
-				return
+			if tt.wantErr != "" {
+				assert.ErrorContains(t, got.DeploymentErr, tt.wantErr)
+			} else {
+				assert.NoError(t, got.DeploymentErr)
 			}
-			assert.NoError(t, got.DeploymentErr)
+			got.DeploymentErr = nil
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

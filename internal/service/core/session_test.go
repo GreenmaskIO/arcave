@@ -411,10 +411,14 @@ func TestSessionService_CreateSession_Clone(t *testing.T) {
 	beat := beats.On("Write", mock.Anything, isClone, forkBeatOf(heartbeat.StatusInProgress)).Return(nil).Once()
 	cp := repo.On("CopySession", mock.Anything, otherSession, isClone, []string{heartbeat.FileName}).Return(int64(4096), nil).Once()
 	verify := grantedLock.On("Verify", mock.Anything).Return(nil).Once()
+	// An interrupt after the record is written still marks the heartbeat done.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	save := repo.On("SaveSession", mock.Anything, mock.MatchedBy(func(s model.Session) bool {
 		return s.ID == clone && s.Name == "feat/x" && s.From != nil && *s.From == model.SessionOrigin{Session: otherSession}
-	})).Return(nil).Once()
-	done := beats.On("Write", mock.Anything, isClone, forkBeatOf(heartbeat.StatusDone)).Return(nil).Once()
+	})).Run(func(mock.Arguments) { cancel() }).Return(nil).Once()
+	live := mock.MatchedBy(func(c context.Context) bool { return c.Err() == nil })
+	done := beats.On("Write", live, isClone, forkBeatOf(heartbeat.StatusDone)).Return(nil).Once()
 	free := grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
 	release := locker.On("Release").Return(nil).Once()
 	mock.InOrder(acquire, list, lock, check, empty, beat, cp, verify, save, done, free, release)
@@ -427,7 +431,7 @@ func TestSessionService_CreateSession_Clone(t *testing.T) {
 	svc.heartbeatWriter = beats.writerFor
 
 	// Act
-	got, err := svc.CreateSession(context.Background(), model.CreateSessionRequest{Name: "feat/x", From: "exp"})
+	got, err := svc.CreateSession(ctx, model.CreateSessionRequest{Name: "feat/x", From: "exp"})
 
 	// Assert
 	require.NoError(t, err)
@@ -611,11 +615,12 @@ func TestSessionService_CreateSession_HeartbeatLostCancelsTheFork(t *testing.T) 
 	tests := []struct {
 		name    string
 		copyErr error
+		wantErr string
 	}{
 		// The copy stops on the cancel; its own error gives way to the cause.
-		{name: "the copy is cancelled", copyErr: errors.New("copy compose: context canceled")},
+		{name: "the copy is cancelled", copyErr: errors.New("copy compose: context canceled"), wantErr: "cloning session "},
 		// The copy finishes as the cancel lands: Alive refuses the commit.
-		{name: "the copy finishes anyway"},
+		{name: "the copy finishes anyway", wantErr: "committing session "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -649,6 +654,7 @@ func TestSessionService_CreateSession_HeartbeatLostCancelsTheFork(t *testing.T) 
 
 			// Assert
 			require.ErrorIs(t, err, model.ErrHeartbeatLost)
+			assert.ErrorContains(t, err, tt.wantErr)
 			repo.AssertExpectations(t)
 			beats.AssertExpectations(t)
 			locker.AssertExpectations(t)

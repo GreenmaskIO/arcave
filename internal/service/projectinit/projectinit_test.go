@@ -85,11 +85,13 @@ func TestService_Init(t *testing.T) {
 			cw.On("Exists").Return(tt.exists, nil)
 			cw.On("Path").Return(configPath).Maybe()
 			var saved config.Config
-			cw.On("Save", mock.MatchedBy(func(c config.Config) bool {
-				return c.Project.Name != ""
-			})).Run(func(args mock.Arguments) {
-				saved = args.Get(0).(config.Config)
-			}).Return(nil).Maybe()
+			if tt.wantErr == "" {
+				cw.On("Save", mock.MatchedBy(func(c config.Config) bool {
+					return c.Project.Name != ""
+				})).Run(func(args mock.Arguments) {
+					saved = args.Get(0).(config.Config)
+				}).Return(nil).Once()
+			}
 			svc := New("/proj", cw)
 
 			// Act
@@ -99,7 +101,6 @@ func TestService_Init(t *testing.T) {
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
-				cw.AssertNotCalled(t, "Save", mock.Anything)
 				cw.AssertExpectations(t)
 				return
 			}
