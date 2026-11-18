@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package core
+// Package projectinit writes a project's arcave config, the one workflow of `arcave init`.
+package projectinit
 
 import (
 	"context"
@@ -29,22 +30,25 @@ type configWriter interface {
 	Path() string
 }
 
-// InitService creates a project's arcave metadata. It writes one file and holds
+// Service creates a project's arcave metadata. It writes one file and holds
 // nothing else: no storage, no snapshot backend, no daemon and no compose project.
-type InitService struct {
+type Service struct {
 	projectRoot  string
 	configWriter configWriter
 }
 
-// NewInitService wires an InitService for the project rooted at projectRoot.
-func NewInitService(projectRoot string, writer configWriter) *InitService {
-	return &InitService{projectRoot: projectRoot, configWriter: writer}
+// New wires a Service for the project rooted at projectRoot.
+func New(projectRoot string, writer configWriter) *Service {
+	return &Service{
+		projectRoot:  projectRoot,
+		configWriter: writer,
+	}
 }
 
 // Init fills cfg's defaults, validates it and writes it to .arcave/config.yaml,
 // returning the resolved project name and the file's path. An initialised project
 // is an error unless override.
-func (s *InitService) Init(_ context.Context, cfg config.Config, override bool) (resolvedName, path string, err error) {
+func (s *Service) Init(_ context.Context, cfg config.Config, override bool) (resolvedName, path string, err error) {
 	exists, err := s.configWriter.Exists()
 	if err != nil {
 		return "", "", fmt.Errorf("check existing config: %w", err)

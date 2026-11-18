@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package storefactory turns a config.Storage union into the storages.Storager
+// Package storefactory turns a storageconfig.Storage union into the storages.Storager
 // the backends write through. It is the one place a configured path becomes a
 // store root, which makes it the one place the store namespace and the segments
 // below it are appended.
@@ -39,7 +39,7 @@ import (
 	"github.com/greenmaskio/storages/ssh"
 	"github.com/rs/zerolog/log"
 
-	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
@@ -68,7 +68,7 @@ const (
 // validating every segment, outermost first, before anything is opened.
 func New(
 	ctx context.Context,
-	cfg config.Storage,
+	cfg storageconfig.Storage,
 	projectRoot string,
 	arcaveProject model.ArcaveProjectName,
 	session model.SessionID,
@@ -103,7 +103,7 @@ func New(
 // refused credential fails here rather than halfway through a capture. A relative
 // directory path resolves against projectRoot and is created on first use; an
 // absolute one must already exist, so a typo fails.
-func Root(ctx context.Context, cfg config.Storage, projectRoot string) (storages.Storager, error) {
+func Root(ctx context.Context, cfg storageconfig.Storage, projectRoot string) (storages.Storager, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
@@ -121,15 +121,15 @@ func Root(ctx context.Context, cfg config.Storage, projectRoot string) (storages
 	return store, nil
 }
 
-func openRoot(ctx context.Context, cfg config.Storage, projectRoot string) (storages.Storager, error) {
+func openRoot(ctx context.Context, cfg storageconfig.Storage, projectRoot string) (storages.Storager, error) {
 	switch cfg.Type {
-	case config.StorageTypeDirectory:
+	case storageconfig.StorageTypeDirectory:
 		return openDirectory(*cfg.Directory, projectRoot)
-	case config.StorageTypeS3:
+	case storageconfig.StorageTypeS3:
 		return openS3(ctx, *cfg.S3)
-	case config.StorageTypeAzure:
+	case storageconfig.StorageTypeAzure:
 		return openAzure(ctx, *cfg.Azure)
-	case config.StorageTypeSSH:
+	case storageconfig.StorageTypeSSH:
 		return openSSH(ctx, *cfg.SSH)
 	default:
 		// Unreachable: cfg.Validate rejects every other tag.
@@ -137,7 +137,7 @@ func openRoot(ctx context.Context, cfg config.Storage, projectRoot string) (stor
 	}
 }
 
-func openDirectory(cfg config.DirectoryStorage, projectRoot string) (storages.Storager, error) {
+func openDirectory(cfg storageconfig.DirectoryStorage, projectRoot string) (storages.Storager, error) {
 	rootPath, prefix := projectRoot, path.Join(filepath.ToSlash(cfg.Path), namespaceStore)
 	if filepath.IsAbs(cfg.Path) {
 		rootPath, prefix = cfg.Path, namespaceStore
@@ -148,7 +148,7 @@ func openDirectory(cfg config.DirectoryStorage, projectRoot string) (storages.St
 	}, directory.WithCreatePrefix())
 }
 
-func openS3(ctx context.Context, cfg config.S3Storage) (storages.Storager, error) {
+func openS3(ctx context.Context, cfg storageconfig.S3Storage) (storages.Storager, error) {
 	s3Cfg := s3.DefaultConfig()
 	s3Cfg.Endpoint = cfg.Endpoint
 	s3Cfg.Bucket = cfg.Bucket
@@ -181,7 +181,7 @@ func openS3(ctx context.Context, cfg config.S3Storage) (storages.Storager, error
 	return s3.New(ctx, s3Cfg)
 }
 
-func openAzure(ctx context.Context, cfg config.AzureStorage) (storages.Storager, error) {
+func openAzure(ctx context.Context, cfg storageconfig.AzureStorage) (storages.Storager, error) {
 	azureCfg := azure.DefaultConfig()
 	azureCfg.Container = cfg.Container
 	azureCfg.StorageAccount = cfg.StorageAccount
@@ -203,7 +203,7 @@ func openAzure(ctx context.Context, cfg config.AzureStorage) (storages.Storager,
 	return azure.New(ctx, azureCfg)
 }
 
-func openSSH(ctx context.Context, cfg config.SSHStorage) (storages.Storager, error) {
+func openSSH(ctx context.Context, cfg storageconfig.SSHStorage) (storages.Storager, error) {
 	sshCfg := ssh.DefaultConfig()
 	sshCfg.Host = cfg.Host
 	if cfg.Port != 0 {

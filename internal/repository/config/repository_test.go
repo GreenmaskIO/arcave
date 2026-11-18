@@ -25,6 +25,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
@@ -106,9 +107,9 @@ func TestRepository_Save(t *testing.T) {
 			name: "full config",
 			cfg: config.Config{
 				Project: config.Project{Name: "shop"},
-				Storage: config.Storage{
-					Type:      config.StorageTypeDirectory,
-					Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/shop"},
+				Storage: storageconfig.Storage{
+					Type:      storageconfig.StorageTypeDirectory,
+					Directory: &storageconfig.DirectoryStorage{Path: ".arcave/savepoints/shop"},
 				},
 				Log: config.Log{Level: "debug", Format: "json"},
 				ComposeProvider: composeconfig.Config{
@@ -125,9 +126,9 @@ func TestRepository_Save(t *testing.T) {
 			name: "zero log settings are omitted",
 			cfg: config.Config{
 				Project: config.Project{Name: "shop"},
-				Storage: config.Storage{
-					Type:      config.StorageTypeDirectory,
-					Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/shop"},
+				Storage: storageconfig.Storage{
+					Type:      storageconfig.StorageTypeDirectory,
+					Directory: &storageconfig.DirectoryStorage{Path: ".arcave/savepoints/shop"},
 				},
 				ComposeProvider: composeconfig.Config{
 					Snapshot: composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendFullCopy},
@@ -201,9 +202,9 @@ func TestRepository_Save_Overwrites(t *testing.T) {
 func savedConfig(name string) config.Config {
 	return config.Config{
 		Project: config.Project{Name: name},
-		Storage: config.Storage{
-			Type:      config.StorageTypeDirectory,
-			Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/" + name},
+		Storage: storageconfig.Storage{
+			Type:      storageconfig.StorageTypeDirectory,
+			Directory: &storageconfig.DirectoryStorage{Path: ".arcave/savepoints/" + name},
 		},
 		ComposeProvider: composeconfig.Config{
 			Snapshot: composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendFullCopy},

@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
@@ -68,9 +68,9 @@ func TestRollback_ThroughTheBuiltBinary(t *testing.T) {
 	env.upDocument(t, fmt.Sprintf(rebuiltReplicaSpec, env.project, t.TempDir()))
 	projectRoot := t.TempDir()
 	runArcave(t, projectRoot, nil, "init", "--name", "arcave-binary-rollback")
-	writeStorageConfig(t, projectRoot, config.Storage{
-		Type:      config.StorageTypeDirectory,
-		Directory: &config.DirectoryStorage{Path: t.TempDir()},
+	writeStorageConfig(t, projectRoot, storageconfig.Storage{
+		Type:      storageconfig.StorageTypeDirectory,
+		Directory: &storageconfig.DirectoryStorage{Path: t.TempDir()},
 	}, composeconfig.SnapshotBackendFullCopy)
 	run := func(args ...string) []byte {
 		t.Helper()

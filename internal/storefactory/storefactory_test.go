@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
@@ -39,16 +39,16 @@ const (
 )
 
 // directoryStorage returns the directory arm of the storage union, pointed at path.
-func directoryStorage(path string) config.Storage {
-	return config.Storage{
-		Type:      config.StorageTypeDirectory,
-		Directory: &config.DirectoryStorage{Path: path},
+func directoryStorage(path string) storageconfig.Storage {
+	return storageconfig.Storage{
+		Type:      storageconfig.StorageTypeDirectory,
+		Directory: &storageconfig.DirectoryStorage{Path: path},
 	}
 }
 
 // newComposeProjectStore builds the store every case works over: the full layout, with only
 // the configured path varying.
-func newComposeProjectStore(t *testing.T, cfg config.Storage, projectRoot string) (storages.Storager, error) {
+func newComposeProjectStore(t *testing.T, cfg storageconfig.Storage, projectRoot string) (storages.Storager, error) {
 	t.Helper()
 	return New(t.Context(), cfg, projectRoot, testArcaveProject, model.DefaultSession, testComposeProject)
 }
@@ -205,7 +205,7 @@ func TestNew(t *testing.T) {
 
 	t.Run("an arm arcave does not implement is rejected", func(t *testing.T) {
 		// Act
-		_, err := newComposeProjectStore(t, config.Storage{Type: "gcs"}, t.TempDir())
+		_, err := newComposeProjectStore(t, storageconfig.Storage{Type: "gcs"}, t.TempDir())
 
 		// Assert
 		require.ErrorContains(t, err, "unsupported storage.type")
@@ -215,12 +215,12 @@ func TestNew(t *testing.T) {
 func TestRoot_UnreachableStorage(t *testing.T) {
 	tests := []struct {
 		name    string
-		cfg     config.Storage
+		cfg     storageconfig.Storage
 		wantMsg string
 	}{
 		{
 			name: "s3",
-			cfg: config.Storage{Type: config.StorageTypeS3, S3: &config.S3Storage{
+			cfg: storageconfig.Storage{Type: storageconfig.StorageTypeS3, S3: &storageconfig.S3Storage{
 				Endpoint: "http://127.0.0.1:1", Bucket: "savepoints", Region: "us-east-1",
 				AccessKeyID: "key", SecretAccessKey: "secret", MaxRetries: 1,
 			}},
@@ -228,7 +228,7 @@ func TestRoot_UnreachableStorage(t *testing.T) {
 		},
 		{
 			name: "ssh",
-			cfg: config.Storage{Type: config.StorageTypeSSH, SSH: &config.SSHStorage{
+			cfg: storageconfig.Storage{Type: storageconfig.StorageTypeSSH, SSH: &storageconfig.SSHStorage{
 				Host: "127.0.0.1", Port: 1, User: "arcave", Password: "secret",
 			}},
 			wantMsg: "reach ssh storage",

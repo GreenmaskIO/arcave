@@ -22,7 +22,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	"github.com/greenmaskio/arcave/internal/model"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 )
@@ -35,7 +35,7 @@ const sessionArcaveProject = "arcave-session-tenant"
 type sessionEnv struct {
 	ctx         context.Context
 	projectRoot string
-	storage     config.Storage
+	storage     storageconfig.Storage
 	inflight    *inflightrepo.Repository
 	// composeProject is the compose project, project its name; nil and empty until
 	// withComposeProject.
@@ -50,9 +50,9 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 	return &sessionEnv{
 		ctx:         zerolog.New(io.Discard).WithContext(context.Background()),
 		projectRoot: projectRoot,
-		storage: config.Storage{
-			Type:      config.StorageTypeDirectory,
-			Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
+		storage: storageconfig.Storage{
+			Type:      storageconfig.StorageTypeDirectory,
+			Directory: &storageconfig.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 		},
 		inflight: inflightrepo.New(projectRoot),
 	}

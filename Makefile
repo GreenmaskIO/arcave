@@ -69,7 +69,7 @@ test-storage:
 
 # What the e2e suite may import of arcave: it drives the built binary, never a service, client or
 # provider of its own.
-E2E_ALLOWED_IMPORTS := internal/(model|config|provider/compose/config|storefactory|repository/[a-z]+|service/lock|utils/testutils/daemontest)|pkg/.+
+E2E_ALLOWED_IMPORTS := internal/(model|config|config/storageconfig|provider/compose/config|storefactory|repository/[a-z]+|service/lock|utils/testutils/daemontest)|pkg/.+
 
 lint: lint-e2e-imports
 	golangci-lint run ./...

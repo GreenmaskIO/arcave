@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package core
+package projectinit
 
 import (
 	"context"
@@ -24,12 +24,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 const configPath = "/proj/.arcave/config.yaml"
 
-func TestInitService_Init(t *testing.T) {
+func TestService_Init(t *testing.T) {
 	tests := []struct {
 		name     string
 		cfg      config.Config
@@ -90,7 +91,7 @@ func TestInitService_Init(t *testing.T) {
 			})).Run(func(args mock.Arguments) {
 				saved = args.Get(0).(config.Config)
 			}).Return(nil).Maybe()
-			svc := NewInitService("/proj", cw)
+			svc := New("/proj", cw)
 
 			// Act
 			name, path, err := svc.Init(context.Background(), tt.cfg, tt.override)
@@ -119,7 +120,7 @@ func TestInitService_Init(t *testing.T) {
 
 // A Config reaches Init by value, so the defaults it stamps must not reach back
 // through the caller's storage-arm pointer.
-func TestInitService_Init_LeavesTheCallersConfigUntouched(t *testing.T) {
+func TestService_Init_LeavesTheCallersConfigUntouched(t *testing.T) {
 	// Arrange
 	cw := &mockConfig{}
 	cw.On("Exists").Return(false, nil)
@@ -127,8 +128,8 @@ func TestInitService_Init_LeavesTheCallersConfigUntouched(t *testing.T) {
 	cw.On("Save", mock.MatchedBy(func(c config.Config) bool {
 		return c.Project.Name != ""
 	})).Return(nil)
-	svc := NewInitService("/proj", cw)
-	cfg := config.Config{Storage: config.Storage{Directory: &config.DirectoryStorage{}}}
+	svc := New("/proj", cw)
+	cfg := config.Config{Storage: storageconfig.Storage{Directory: &storageconfig.DirectoryStorage{}}}
 
 	// Act
 	_, _, err := svc.Init(context.Background(), cfg, false)
@@ -142,7 +143,7 @@ func TestInitService_Init_LeavesTheCallersConfigUntouched(t *testing.T) {
 
 // The project name defaults to the project root's base name, normalized into
 // the charset a store-root segment may carry.
-func TestInitService_Init_DefaultsTheName(t *testing.T) {
+func TestService_Init_DefaultsTheName(t *testing.T) {
 	// Arrange
 	cw := &mockConfig{}
 	cw.On("Exists").Return(false, nil)
@@ -153,7 +154,7 @@ func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	})).Run(func(args mock.Arguments) {
 		saved = args.Get(0).(config.Config)
 	}).Return(nil)
-	svc := NewInitService(filepath.Join("/home", "vadim", "MyProj"), cw)
+	svc := New(filepath.Join("/home", "vadim", "MyProj"), cw)
 
 	// Act
 	name, _, err := svc.Init(context.Background(), config.Config{}, false)

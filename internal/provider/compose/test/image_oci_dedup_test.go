@@ -36,7 +36,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/config/storageconfig"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose"
@@ -88,9 +88,9 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	})
 
 	projectRoot := t.TempDir()
-	composeProjectStore, err := storefactory.New(t.Context(), config.Storage{
-		Type:      config.StorageTypeDirectory,
-		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
+	composeProjectStore, err := storefactory.New(t.Context(), storageconfig.Storage{
+		Type:      storageconfig.StorageTypeDirectory,
+		Directory: &storageconfig.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 	}, projectRoot, "arcave-oci-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
