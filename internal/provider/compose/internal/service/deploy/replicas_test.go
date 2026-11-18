@@ -148,7 +148,7 @@ func TestProvider_rebuildDivergentReplicas(t *testing.T) {
 			}
 			// A name is claimed only once the container holding it has been rebuilt away.
 			mock.InOrder(calls...)
-			s := New(Deps{ComposeInspector: inspector, ContainerRebuilder: rebuilder})
+			s := New(Deps{ComposeReader: inspector, ContainerRebuilder: rebuilder})
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
@@ -172,7 +172,7 @@ func TestProvider_rebuildDivergentReplicas_CreatedAsRecorded(t *testing.T) {
 	// Arrange
 	inspector := &composetest.MockInspector{}
 	rebuilder := &composetest.MockContainerRebuilder{}
-	s := New(Deps{ComposeInspector: inspector, ContainerRebuilder: rebuilder})
+	s := New(Deps{ComposeReader: inspector, ContainerRebuilder: rebuilder})
 	replicas := []recordedReplica{
 		{service: composetest.DemoService, number: 2, image: composetest.DemoRestoredTag(1)},
 		{service: composetest.DemoService, number: 1, image: composetest.DemoRestoredTag(1)},
@@ -198,7 +198,7 @@ func TestProvider_rebuildDivergentReplicas_WarnsOnARenumberedReplica(t *testing.
 	rebuilder := &composetest.MockContainerRebuilder{}
 	rebuilder.On("RecreateWithImage", mock.Anything, createdID(2),
 		composemodel.ReplicaIdentity{Name: composetest.DemoContainerName(3), Number: 3}, composetest.DemoRestoredTag(3)).Return("rebuilt", nil).Once()
-	s := New(Deps{ComposeInspector: inspector, ContainerRebuilder: rebuilder})
+	s := New(Deps{ComposeReader: inspector, ContainerRebuilder: rebuilder})
 	logs := &composetest.SyncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 

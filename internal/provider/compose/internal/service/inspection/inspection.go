@@ -34,7 +34,7 @@ type composeIntrospector interface {
 
 // Deps are Inspector's collaborators.
 type Deps struct {
-	ComposeInspector composeIntrospector
+	ComposeReader composeIntrospector
 	// DaemonVersion is the version the engine reports; Inspect judges it.
 	DaemonVersion string
 	// MinDaemonMajor is the oldest major of that engine a workflow runs on; 0 requires none.
@@ -43,17 +43,17 @@ type Deps struct {
 
 // Inspector reads one compose project as the daemon holds it.
 type Inspector struct {
-	composeInspector composeIntrospector
-	daemonVersion    string
-	minDaemonMajor   int
+	composeReader  composeIntrospector
+	daemonVersion  string
+	minDaemonMajor int
 }
 
 // New builds an Inspector from deps.
 func New(deps Deps) *Inspector {
 	return &Inspector{
-		composeInspector: deps.ComposeInspector,
-		daemonVersion:    deps.DaemonVersion,
-		minDaemonMajor:   deps.MinDaemonMajor,
+		composeReader:  deps.ComposeReader,
+		daemonVersion:  deps.DaemonVersion,
+		minDaemonMajor: deps.MinDaemonMajor,
 	}
 }
 
@@ -73,7 +73,7 @@ func (s *Inspector) Inspect(ctx context.Context) (composemodel.IntrospectionResu
 // Introspect reads the compose project as the daemon holds it now, under its own step.
 func (s *Inspector) Introspect(ctx context.Context) (composemodel.IntrospectionResult, error) {
 	ctx, step := progress.Run(ctx, progress.Step{Kind: kindProjectIntrospect})
-	introspection, err := s.composeInspector.Introspect(ctx)
+	introspection, err := s.composeReader.Introspect(ctx)
 	step.End(err)
 	if err != nil {
 		return composemodel.IntrospectionResult{}, fmt.Errorf("introspect compose project: %w", err)

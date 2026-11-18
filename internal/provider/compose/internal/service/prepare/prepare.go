@@ -19,6 +19,7 @@ package prepare
 import (
 	"context"
 	"fmt"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/fanout"
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -61,8 +62,8 @@ type Deps struct {
 	// LeftoverVolumes is what preparing over an absent compose project does with a volume that
 	// outlived it and the build overwrites; empty is model.LeftoverVolumesOverwrite.
 	LeftoverVolumes model.LeftoverVolumesPolicy
-	// MaxConcurrentOperations caps the layers loaded at once, an errgroup limit.
-	MaxConcurrentOperations int
+	// Concurrency caps the layers loaded at once; 0 leaves it unbounded.
+	Concurrency int
 }
 
 // Preparer makes the savepoints of one compose project ready to build.
@@ -87,7 +88,7 @@ func New(deps Deps) *Preparer {
 		backendRegistry:         deps.BackendRegistry,
 		store:                   deps.Store,
 		leftoverVolumes:         deps.LeftoverVolumes,
-		maxConcurrentOperations: deps.MaxConcurrentOperations,
+		maxConcurrentOperations: fanout.Limit(deps.Concurrency),
 	}
 }
 

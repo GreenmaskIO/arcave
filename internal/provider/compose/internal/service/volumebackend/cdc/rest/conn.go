@@ -27,7 +27,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // The HTTP/2 flow-control windows of one served stream, at net/http's ceilings:
@@ -41,13 +41,13 @@ const (
 // ConnServer serves one repository per stream: restic's REST protocol over
 // HTTP/2 with prior knowledge, the way restic speaks it to an rclone child.
 type ConnServer struct {
-	repos model.RepositoryResolver
+	repos restmodel.RepositoryResolver
 	echo  *echo.Echo
 }
 
 // NewConnServer routes every stream it serves into repos. The context is
 // NewEcho's: its logger is the one echo writes through.
-func NewConnServer(ctx context.Context, repos model.RepositoryResolver) *ConnServer {
+func NewConnServer(ctx context.Context, repos restmodel.RepositoryResolver) *ConnServer {
 	return &ConnServer{
 		repos: repos,
 		echo:  NewEcho(ctx, repos),

@@ -87,7 +87,7 @@ func TestProvider_Inspect(t *testing.T) {
 			// Arrange
 			inspector := &composetest.MockInspector{}
 			inspector.On("Introspect", mock.Anything).Return(composetest.DemoAbsentIntrospection(), nil).Once()
-			svc := newComposeWorkload(Deps{ComposeInspector: inspector, DaemonVersion: tt.version, MinDaemonMajor: 25})
+			svc := newComposeWorkload(Deps{ComposeReader: inspector, DaemonVersion: tt.version, MinDaemonMajor: 25})
 			recorder := &composetest.StepRecorder{}
 
 			// Act
@@ -149,7 +149,7 @@ func TestProvider_Inspect_WalksALiveRollback(t *testing.T) {
 	codec.On("Parse", mock.Anything, composetest.DemoTargetSpecBytes).Return(composetest.DemoTargetSpec, nil).Once()
 	svc := newComposeWorkload(Deps{
 		SavepointRepo:    repo,
-		ComposeInspector: inspector,
+		ComposeReader:    inspector,
 		ComposeRunner:    runner,
 		ProjectAssembler: assembler,
 		SpecCodec:        codec,
@@ -222,14 +222,14 @@ func TestProvider_Inspect_DiscardsAFailedColdStart(t *testing.T) {
 		remover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once(),
 	)
 	svc := newComposeWorkload(Deps{
-		SavepointRepo:    repo,
-		ComposeInspector: inspector,
-		ComposeRunner:    runner,
-		SpecCodec:        codec,
-		BackendRegistry:  registry,
-		VolumeRemover:    remover,
-		ImageLookup:      &composetest.MockImageLookup{},
-		Store:            store,
+		SavepointRepo:   repo,
+		ComposeReader:   inspector,
+		ComposeRunner:   runner,
+		SpecCodec:       codec,
+		BackendRegistry: registry,
+		VolumeRemover:   remover,
+		ImageLookup:     &composetest.MockImageLookup{},
+		Store:           store,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 	live, err := svc.Inspect(ctx)
@@ -292,14 +292,14 @@ func TestProvider_Inspect_ReapsTheOrphanedAnonymousVolume(t *testing.T) {
 		remover.On("RemoveVolume", mock.Anything, "9f8e7d").Return(nil).Once(),
 	)
 	svc := newComposeWorkload(Deps{
-		SavepointRepo:    repo,
-		ComposeInspector: inspector,
-		ComposeRunner:    runner,
-		SpecCodec:        codec,
-		BackendRegistry:  registry,
-		VolumeRemover:    remover,
-		ImageLookup:      &composetest.MockImageLookup{},
-		Store:            store,
+		SavepointRepo:   repo,
+		ComposeReader:   inspector,
+		ComposeRunner:   runner,
+		SpecCodec:       codec,
+		BackendRegistry: registry,
+		VolumeRemover:   remover,
+		ImageLookup:     &composetest.MockImageLookup{},
+		Store:           store,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 	live, err := svc.Inspect(ctx)
@@ -325,26 +325,4 @@ func TestProvider_Inspect_ReapsTheOrphanedAnonymousVolume(t *testing.T) {
 	runner.AssertExpectations(t)
 	backend.AssertExpectations(t)
 	remover.AssertExpectations(t)
-}
-
-func TestFanOutLimit(t *testing.T) {
-	tests := []struct {
-		name        string
-		concurrency int
-		want        int
-	}{
-		{name: "a configured concurrency is the limit", concurrency: 5, want: 5},
-		{name: "one runs the fan-out serially", concurrency: 1, want: 1},
-		{name: "zero leaves the fan-out unbounded", concurrency: 0, want: -1},
-		{name: "a negative concurrency leaves it unbounded", concurrency: -3, want: -1},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got := fanOutLimit(tt.concurrency)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-		})
-	}
 }

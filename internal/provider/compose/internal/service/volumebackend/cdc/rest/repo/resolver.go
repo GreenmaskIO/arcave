@@ -20,10 +20,10 @@ import (
 
 	"github.com/greenmaskio/storages"
 
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
-var _ model.RepositoryResolver = (*Resolver)(nil)
+var _ restmodel.RepositoryResolver = (*Resolver)(nil)
 
 // Resolver serves every repository under one root: a name is the directory it
 // lives in, so resolving it is re-rooting the store and nothing else.
@@ -46,14 +46,14 @@ func NewResolver(root storages.Navigator) *Resolver {
 // Lookup answers with the repository the arcave ObjectID names. It reaches no
 // backend and creates nothing: SubStorage only re-roots, so a name that never
 // held a repository resolves and then answers 404 to every read of it.
-func (r *Resolver) Lookup(arcaveObjectID string) (model.Repository, error) {
+func (r *Resolver) Lookup(arcaveObjectID string) (restmodel.Repository, error) {
 	if arcaveObjectID == "" || strings.Contains(arcaveObjectID, "/") {
-		return nil, fmt.Errorf("%w: %q", model.ErrRepositoryNotFound, arcaveObjectID)
+		return nil, fmt.Errorf("%w: %q", restmodel.ErrRepositoryNotFound, arcaveObjectID)
 	}
 
 	store, err := r.root.SubStorage(arcaveObjectID, true)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %q: %w", model.ErrRepositoryNotFound, arcaveObjectID, err)
+		return nil, fmt.Errorf("%w: %q: %w", restmodel.ErrRepositoryNotFound, arcaveObjectID, err)
 	}
 	return New(store), nil
 }

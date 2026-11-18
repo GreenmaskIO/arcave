@@ -115,7 +115,7 @@ func TestVacant_Build_RebuildsDivergentReplicasBeforeTheRestore(t *testing.T) {
 			composemodel.ReplicaIdentity{Name: composetest.DemoContainerName(2), Number: 2}, composetest.DemoRestoredTag(2)).Return("rebuilt", nil).Once(),
 		backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once(),
 	)
-	svc := newComposeWorkload(Deps{ComposeRunner: runner, ComposeInspector: inspector, ContainerRebuilder: rebuilder})
+	svc := newComposeWorkload(Deps{ComposeRunner: runner, ComposeReader: inspector, ContainerRebuilder: rebuilder})
 	vacant := vacantWorkload{service: svc}
 	prepared := preparedSavepoint{Target: composemodel.Target{
 		Savepoint:  record,
@@ -203,7 +203,7 @@ func TestVacant_Discard(t *testing.T) {
 				inspector.On("Introspect", mock.Anything).Return(now, nil).Once(),
 				remover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once(),
 			)
-			svc := newComposeWorkload(Deps{ComposeRunner: runner, ComposeInspector: inspector, VolumeRemover: remover})
+			svc := newComposeWorkload(Deps{ComposeRunner: runner, ComposeReader: inspector, VolumeRemover: remover})
 			vacant := vacantWorkload{service: svc, ownedBefore: map[string]bool{"demo_db": true}, downProject: composetest.DemoTargetSpec}
 
 			// Act

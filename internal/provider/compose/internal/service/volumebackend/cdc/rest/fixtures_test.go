@@ -24,13 +24,13 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // testID is a name of the shape restic writes: 64 lowercase hex characters, and
 // stubBody is what the repository below holds under it.
 var (
-	testID   = model.ObjectID(strings.Repeat("0a1b2c3d", 8))
+	testID   = restmodel.ObjectID(strings.Repeat("0a1b2c3d", 8))
 	stubBody = []byte("0123456789abcdef")
 )
 
@@ -60,35 +60,35 @@ func journalled(w io.Writer) context.Context {
 // rather than repo.NewResolver over a real store: what this package's tests are
 // about is routing, and a name that resolves to nothing has to be a 404 without
 // a filesystem in the way.
-func serving(repos map[string]model.Repository) model.RepositoryResolver {
+func serving(repos map[string]restmodel.Repository) restmodel.RepositoryResolver {
 	return stubResolver(repos)
 }
 
 // oneRepository serves repo under every name the route table addresses, so a
 // case about routing says nothing about resolution.
-func oneRepository(repo model.Repository) model.RepositoryResolver {
-	return serving(map[string]model.Repository{
+func oneRepository(repo restmodel.Repository) restmodel.RepositoryResolver {
+	return serving(map[string]restmodel.Repository{
 		testRepoName:  repo,
 		otherRepoName: repo,
 		objectIDName:  repo,
 	})
 }
 
-var _ model.RepositoryResolver = stubResolver(nil)
+var _ restmodel.RepositoryResolver = stubResolver(nil)
 
 // stubResolver answers with the repository a name is mapped to, and
 // ErrRepositoryNotFound for every other name.
-type stubResolver map[string]model.Repository
+type stubResolver map[string]restmodel.Repository
 
-func (s stubResolver) Lookup(arcaveObjectID string) (model.Repository, error) {
+func (s stubResolver) Lookup(arcaveObjectID string) (restmodel.Repository, error) {
 	repo, ok := s[arcaveObjectID]
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", model.ErrRepositoryNotFound, arcaveObjectID)
+		return nil, fmt.Errorf("%w: %s", restmodel.ErrRepositoryNotFound, arcaveObjectID)
 	}
 	return repo, nil
 }
 
-var _ model.Repository = stubRepository{}
+var _ restmodel.Repository = stubRepository{}
 
 // stubRepository answers every operation successfully, for the tests about
 // routing rather than about the protocol's own answers. Its body is what a read
@@ -116,15 +116,15 @@ func (stubRepository) SaveConfig(context.Context, io.Reader) error { return nil 
 
 func (stubRepository) DeleteConfig(context.Context) error { return nil }
 
-func (s stubRepository) ListBlobs(context.Context, model.ListBlobsRequest) ([]model.Blob, error) {
-	return []model.Blob{{Name: string(testID), Size: int64(len(s.content()))}}, nil
+func (s stubRepository) ListBlobs(context.Context, restmodel.ListBlobsRequest) ([]restmodel.Blob, error) {
+	return []restmodel.Blob{{Name: string(testID), Size: int64(len(s.content()))}}, nil
 }
 
-func (s stubRepository) StatBlob(context.Context, model.StatBlobRequest) (int64, error) {
+func (s stubRepository) StatBlob(context.Context, restmodel.StatBlobRequest) (int64, error) {
 	return int64(len(s.content())), nil
 }
 
-func (s stubRepository) OpenBlobRange(_ context.Context, req model.OpenBlobRangeRequest) (io.ReadCloser, error) {
+func (s stubRepository) OpenBlobRange(_ context.Context, req restmodel.OpenBlobRangeRequest) (io.ReadCloser, error) {
 	body := s.content()
 	if req.Offset+req.Length > int64(len(body)) {
 		return nil, fmt.Errorf("the range %d+%d is outside the stub", req.Offset, req.Length)
@@ -132,11 +132,11 @@ func (s stubRepository) OpenBlobRange(_ context.Context, req model.OpenBlobRange
 	return io.NopCloser(bytes.NewReader(body[req.Offset : req.Offset+req.Length])), nil
 }
 
-func (stubRepository) SaveBlob(context.Context, model.SaveBlobRequest) error {
+func (stubRepository) SaveBlob(context.Context, restmodel.SaveBlobRequest) error {
 	return nil
 }
 
-func (stubRepository) DeleteBlob(context.Context, model.DeleteBlobRequest) error {
+func (stubRepository) DeleteBlob(context.Context, restmodel.DeleteBlobRequest) error {
 	return nil
 }
 

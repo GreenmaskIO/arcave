@@ -121,7 +121,7 @@ func TestHeld_Teardown(t *testing.T) {
 		inspector.On("Introspect", mock.Anything).Return(now, nil).Once(),
 		remover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once(),
 	)
-	svc := newComposeWorkload(Deps{ComposeRunner: runner, ComposeInspector: inspector, VolumeRemover: remover})
+	svc := newComposeWorkload(Deps{ComposeRunner: runner, ComposeReader: inspector, VolumeRemover: remover})
 	plan := svc.newCapturePlan(composemodel.Plan{Project: composetest.DemoSpec, Services: []composemodel.ServiceHold{{Service: composetest.DemoService}}}, introspection)
 	ctx := zerolog.Nop().WithContext(context.Background())
 	holding, err := plan.Hold(ctx)

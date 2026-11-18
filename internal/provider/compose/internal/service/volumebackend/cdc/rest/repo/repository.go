@@ -28,7 +28,7 @@ import (
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // configKey is the repository config, the one object that lives at the store
@@ -36,7 +36,7 @@ import (
 // route table matches: the two spell the same word and mean different things.
 const configKey = "config"
 
-var _ model.Repository = (*Repository)(nil)
+var _ restmodel.Repository = (*Repository)(nil)
 
 // Repository is one restic repository held in one Storager, and the whole of
 // what this package does with storage: it renders the keys, decides which of
@@ -79,7 +79,7 @@ func (r *Repository) OpenConfig(ctx context.Context) (io.ReadCloser, error) {
 	rc, err := r.store.GetObject(ctx, configKey)
 	if err != nil {
 		if errors.Is(err, storages.ErrFileNotFound) {
-			return nil, fmt.Errorf("%w: %s", model.ErrObjectNotFound, configKey)
+			return nil, fmt.Errorf("%w: %s", restmodel.ErrObjectNotFound, configKey)
 		}
 		return nil, fmt.Errorf("open %s: %w", configKey, err)
 	}
@@ -100,7 +100,7 @@ func (r *Repository) SaveConfig(ctx context.Context, body io.Reader) error {
 		return fmt.Errorf("checking %s: %w", configKey, err)
 	}
 	if exists {
-		return model.ErrConfigExists
+		return restmodel.ErrConfigExists
 	}
 	if err := r.store.PutObject(ctx, configKey, body); err != nil {
 		return fmt.Errorf("writing %s: %w", configKey, err)
@@ -119,19 +119,19 @@ func (r *Repository) DeleteConfig(ctx context.Context) error {
 // A type holding nothing is an empty slice, never an error: Create makes no
 // directories here, so "absent" and "empty" are the same state, and restic must
 // be able to list a fresh repository.
-func (r *Repository) ListBlobs(ctx context.Context, req model.ListBlobsRequest) ([]model.Blob, error) {
+func (r *Repository) ListBlobs(ctx context.Context, req restmodel.ListBlobsRequest) ([]restmodel.Blob, error) {
 	objectType := string(req.Type)
 	stats, err := r.store.List(ctx, objectType)
 	if err != nil {
 		return nil, fmt.Errorf("listing %s: %w", objectType, err)
 	}
 
-	blobs := make([]model.Blob, 0, len(stats))
+	blobs := make([]restmodel.Blob, 0, len(stats))
 	for _, st := range stats {
 		if !isBlobName(st.Name) {
 			continue
 		}
-		blobs = append(blobs, model.Blob{Name: st.Name, Size: st.Size})
+		blobs = append(blobs, restmodel.Blob{Name: st.Name, Size: st.Size})
 	}
 
 	// WARN, and counted rather than named one by one: a key under a type that
@@ -147,7 +147,7 @@ func (r *Repository) ListBlobs(ctx context.Context, req model.ListBlobsRequest) 
 
 // StatBlob reports one blob's size, or ErrObjectNotFound. restic asks it to
 // decide whether it already holds a pack.
-func (r *Repository) StatBlob(_ context.Context, req model.StatBlobRequest) (int64, error) {
+func (r *Repository) StatBlob(_ context.Context, req restmodel.StatBlobRequest) (int64, error) {
 	return r.statObject(blobKey(req.Type, req.ID))
 }
 
@@ -158,7 +158,7 @@ func (r *Repository) StatBlob(_ context.Context, req model.StatBlobRequest) (int
 // A zero-length interval is answered without asking the store: an empty blob
 // legitimately has one, and every range over a zero-length object is
 // ErrInvalidRange down there.
-func (r *Repository) OpenBlobRange(ctx context.Context, req model.OpenBlobRangeRequest) (io.ReadCloser, error) {
+func (r *Repository) OpenBlobRange(ctx context.Context, req restmodel.OpenBlobRangeRequest) (io.ReadCloser, error) {
 	if req.Length == 0 {
 		return io.NopCloser(bytes.NewReader(nil)), nil
 	}
@@ -167,7 +167,7 @@ func (r *Repository) OpenBlobRange(ctx context.Context, req model.OpenBlobRangeR
 	rc, err := r.store.GetObjectRange(ctx, key, req.Offset, req.Length)
 	if err != nil {
 		if errors.Is(err, storages.ErrFileNotFound) {
-			return nil, fmt.Errorf("%w: %s", model.ErrObjectNotFound, key)
+			return nil, fmt.Errorf("%w: %s", restmodel.ErrObjectNotFound, key)
 		}
 		return nil, fmt.Errorf("open %s at %d+%d: %w", key, req.Offset, req.Length, err)
 	}
@@ -185,7 +185,7 @@ func (r *Repository) OpenBlobRange(ctx context.Context, req model.OpenBlobRangeR
 // be refused.
 //
 // (Append-only mode, when it lands, refuses an overwrite here.)
-func (r *Repository) SaveBlob(ctx context.Context, req model.SaveBlobRequest) error {
+func (r *Repository) SaveBlob(ctx context.Context, req restmodel.SaveBlobRequest) error {
 	key := blobKey(req.Type, req.ID)
 	if err := r.store.PutObject(ctx, key, req.Body); err != nil {
 		return fmt.Errorf("writing %s: %w", key, err)
@@ -196,7 +196,7 @@ func (r *Repository) SaveBlob(ctx context.Context, req model.SaveBlobRequest) er
 // DeleteBlob removes one blob, idempotently.
 //
 // (Append-only mode, when it lands, refuses here — for every type but locks.)
-func (r *Repository) DeleteBlob(ctx context.Context, req model.DeleteBlobRequest) error {
+func (r *Repository) DeleteBlob(ctx context.Context, req restmodel.DeleteBlobRequest) error {
 	return r.deleteObject(ctx, blobKey(req.Type, req.ID))
 }
 
@@ -209,7 +209,7 @@ func (r *Repository) statObject(key string) (int64, error) {
 		return 0, fmt.Errorf("stat %s: %w", key, err)
 	}
 	if !st.Exist {
-		return 0, fmt.Errorf("%w: %s", model.ErrObjectNotFound, key)
+		return 0, fmt.Errorf("%w: %s", restmodel.ErrObjectNotFound, key)
 	}
 	return st.Size, nil
 }
@@ -242,7 +242,7 @@ func (r *Repository) deleteObject(ctx context.Context, key string) error {
 // blobKey renders the key one blob lives under. Keys are flat — "<type>/<name>"
 // — where rest-server shards data/ over 256 sub-directories: that is filesystem
 // hygiene, invisible to the protocol, and pointless on an object store.
-func blobKey(objectType model.ObjectType, id model.ObjectID) string {
+func blobKey(objectType restmodel.ObjectType, id restmodel.ObjectID) string {
 	return string(objectType) + "/" + string(id)
 }
 

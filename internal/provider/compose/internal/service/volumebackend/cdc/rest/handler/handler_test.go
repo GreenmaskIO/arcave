@@ -33,7 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/api"
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // The twelve operations run through the generated contract into a recorder, over
@@ -45,7 +45,7 @@ var errStore = errors.New("store unreachable")
 
 // errNotFound is the sentinel as a repository raises it: wrapped, since an
 // operation matches it with errors.Is and never by equality.
-var errNotFound = fmt.Errorf("%w: %s", model.ErrObjectNotFound, testID)
+var errNotFound = fmt.Errorf("%w: %s", restmodel.ErrObjectNotFound, testID)
 
 // blobBody is the object every read test is served from; its length is what the
 // Range table is expressed against.
@@ -60,7 +60,7 @@ const (
 
 // serving is the resolver a case runs against: repo under testRepoName, nothing
 // under any other name.
-func serving(repo model.Repository) model.RepositoryResolver {
+func serving(repo restmodel.Repository) restmodel.RepositoryResolver {
 	return stubResolver{name: testRepoName, repo: repo}
 }
 
@@ -104,7 +104,7 @@ func TestHandler_CreateRepository(t *testing.T) {
 func TestHandler_CreateRepository_AlreadyInitialised(t *testing.T) {
 	// Arrange
 	store := &mockRepository{}
-	store.On("Create", mock.Anything).Return(model.ErrConfigExists).Once()
+	store.On("Create", mock.Anything).Return(restmodel.ErrConfigExists).Once()
 	h := New(serving(store))
 	request := api.CreateRepositoryRequestObject{ArcaveObjectID: testRepoName, Params: api.CreateRepositoryParams{Create: "true"}}
 
@@ -241,7 +241,7 @@ func TestHandler_SaveConfig(t *testing.T) {
 	}{
 		{name: "init writes it", wantStatus: http.StatusOK},
 		// The refusal restic's init depends on: never re-initialise a repository holding data.
-		{name: "a second init is refused", err: model.ErrConfigExists, wantStatus: http.StatusForbidden},
+		{name: "a second init is refused", err: restmodel.ErrConfigExists, wantStatus: http.StatusForbidden},
 	}
 
 	for _, tt := range tests {
@@ -300,9 +300,9 @@ func TestHandler_DeleteConfig(t *testing.T) {
 // restic's v2 media type — and the domain type reaching the repository.
 func TestHandler_ListBlobs(t *testing.T) {
 	// Arrange
-	otherID := model.ObjectID(strings.Repeat("f", 64))
+	otherID := restmodel.ObjectID(strings.Repeat("f", 64))
 	store := &mockRepository{}
-	store.On("ListBlobs", mock.Anything, model.ListBlobsRequest{Type: model.TypeData}).Return([]model.Blob{
+	store.On("ListBlobs", mock.Anything, restmodel.ListBlobsRequest{Type: restmodel.TypeData}).Return([]restmodel.Blob{
 		{Name: string(testID), Size: 16},
 		{Name: string(otherID), Size: 3},
 	}, nil).Once()
@@ -327,7 +327,7 @@ func TestHandler_ListBlobs(t *testing.T) {
 func TestHandler_ListBlobs_Empty(t *testing.T) {
 	// Arrange
 	store := &mockRepository{}
-	store.On("ListBlobs", mock.Anything, model.ListBlobsRequest{Type: model.TypeLocks}).Return(nil, nil).Once()
+	store.On("ListBlobs", mock.Anything, restmodel.ListBlobsRequest{Type: restmodel.TypeLocks}).Return(nil, nil).Once()
 	h := New(serving(store))
 
 	// Act
@@ -405,7 +405,7 @@ func TestHandler_StatBlob(t *testing.T) {
 		{
 			name: "an object that is there", objectType: api.Data, objectName: string(testID),
 			stat: func(m *mockRepository) {
-				m.On("StatBlob", mock.Anything, model.StatBlobRequest{Type: model.TypeData, ID: testID}).
+				m.On("StatBlob", mock.Anything, restmodel.StatBlobRequest{Type: restmodel.TypeData, ID: testID}).
 					Return(int64(16), nil).Once()
 			},
 			wantStatus: http.StatusOK, wantLength: "16",
@@ -413,7 +413,7 @@ func TestHandler_StatBlob(t *testing.T) {
 		{
 			name: "an object that is not", objectType: api.Index, objectName: string(testID),
 			stat: func(m *mockRepository) {
-				m.On("StatBlob", mock.Anything, model.StatBlobRequest{Type: model.TypeIndex, ID: testID}).
+				m.On("StatBlob", mock.Anything, restmodel.StatBlobRequest{Type: restmodel.TypeIndex, ID: testID}).
 					Return(int64(0), errNotFound).Once()
 			},
 			wantStatus: http.StatusNotFound,
@@ -520,11 +520,11 @@ func TestHandler_GetBlob(t *testing.T) {
 			// Arrange
 			body := newStream(tt.wantBody)
 			store := &mockRepository{}
-			stat := store.On("StatBlob", mock.Anything, model.StatBlobRequest{Type: model.TypeData, ID: testID}).
+			stat := store.On("StatBlob", mock.Anything, restmodel.StatBlobRequest{Type: restmodel.TypeData, ID: testID}).
 				Return(int64(len(blobBody)), nil).Once()
 			if tt.wantOpen {
-				read := model.OpenBlobRangeRequest{
-					Type:   model.TypeData,
+				read := restmodel.OpenBlobRangeRequest{
+					Type:   restmodel.TypeData,
 					ID:     testID,
 					Offset: tt.wantOpenAt,
 					Length: tt.wantOpenLen,
@@ -577,7 +577,7 @@ func TestHandler_GetBlob_NotFound(t *testing.T) {
 		{
 			name: "an object that is not there", objectType: api.Index, objectName: string(testID),
 			stat: func(m *mockRepository) {
-				m.On("StatBlob", mock.Anything, model.StatBlobRequest{Type: model.TypeIndex, ID: testID}).
+				m.On("StatBlob", mock.Anything, restmodel.StatBlobRequest{Type: restmodel.TypeIndex, ID: testID}).
 					Return(int64(0), errNotFound).Once()
 			},
 		},
@@ -636,7 +636,7 @@ func TestHandler_SaveBlob(t *testing.T) {
 		// Arrange
 		body := strings.NewReader("a pack")
 		store := &mockRepository{}
-		store.On("SaveBlob", mock.Anything, model.SaveBlobRequest{Type: model.TypeData, ID: testID, Body: body}).
+		store.On("SaveBlob", mock.Anything, restmodel.SaveBlobRequest{Type: restmodel.TypeData, ID: testID, Body: body}).
 			Return(nil).Once()
 		h := New(serving(store))
 		request := api.SaveBlobRequestObject{ArcaveObjectID: testRepoName, Type: api.Data, ResticObjectID: string(testID), Body: body}
@@ -683,7 +683,7 @@ func TestHandler_DeleteBlob(t *testing.T) {
 		{
 			name: "an object that is there", objectName: string(testID),
 			remove: func(m *mockRepository) {
-				m.On("DeleteBlob", mock.Anything, model.DeleteBlobRequest{Type: model.TypeData, ID: testID}).
+				m.On("DeleteBlob", mock.Anything, restmodel.DeleteBlobRequest{Type: restmodel.TypeData, ID: testID}).
 					Return(nil).Once()
 			},
 			wantStatus: http.StatusOK,
@@ -692,7 +692,7 @@ func TestHandler_DeleteBlob(t *testing.T) {
 			// Idempotent: a retry landing after the first attempt must not fail a prune.
 			name: "an object that is already gone", objectName: string(testID),
 			remove: func(m *mockRepository) {
-				m.On("DeleteBlob", mock.Anything, model.DeleteBlobRequest{Type: model.TypeData, ID: testID}).
+				m.On("DeleteBlob", mock.Anything, restmodel.DeleteBlobRequest{Type: restmodel.TypeData, ID: testID}).
 					Return(errNotFound).Once()
 			},
 			wantStatus: http.StatusOK,
@@ -791,7 +791,7 @@ func TestHandler_SentinelsNeverEscape(t *testing.T) {
 		// Everything a read, a stat or a delete can ask for is absent.
 		{name: "a repository that holds nothing"},
 		// Create and SaveConfig raise theirs; the rest still answer.
-		{name: "a repository that already holds a config", initErr: model.ErrConfigExists},
+		{name: "a repository that already holds a config", initErr: restmodel.ErrConfigExists},
 	}
 
 	for _, r := range repositories {
@@ -989,17 +989,17 @@ func repositoryRaising(initErr error) *mockRepository {
 	store.On("OpenConfig", mock.Anything).Return(nil, errNotFound).Maybe()
 	store.On("SaveConfig", mock.Anything, anyBody).Return(initErr).Maybe()
 	store.On("DeleteConfig", mock.Anything).Return(errNotFound).Maybe()
-	store.On("ListBlobs", mock.Anything, model.ListBlobsRequest{Type: model.TypeData}).Return(nil, nil).Maybe()
-	store.On("StatBlob", mock.Anything, model.StatBlobRequest{Type: model.TypeData, ID: testID}).
+	store.On("ListBlobs", mock.Anything, restmodel.ListBlobsRequest{Type: restmodel.TypeData}).Return(nil, nil).Maybe()
+	store.On("StatBlob", mock.Anything, restmodel.StatBlobRequest{Type: restmodel.TypeData, ID: testID}).
 		Return(int64(0), errNotFound).Maybe()
-	store.On("SaveBlob", mock.Anything, anySaveOf(model.TypeData, testID)).Return(nil).Maybe()
-	store.On("DeleteBlob", mock.Anything, model.DeleteBlobRequest{Type: model.TypeData, ID: testID}).
+	store.On("SaveBlob", mock.Anything, anySaveOf(restmodel.TypeData, testID)).Return(nil).Maybe()
+	store.On("DeleteBlob", mock.Anything, restmodel.DeleteBlobRequest{Type: restmodel.TypeData, ID: testID}).
 		Return(errNotFound).Maybe()
 	return store
 }
 
 // testID is a name of the shape restic writes: 64 lowercase hex characters.
-var testID = model.ObjectID(strings.Repeat("0a1b2c3d", 8))
+var testID = restmodel.ObjectID(strings.Repeat("0a1b2c3d", 8))
 
 // anyBody matches an upload whose identity is not stable, built inside the case
 // that passes it; that there is a body at all is what it asserts.
@@ -1007,8 +1007,8 @@ var anyBody = mock.MatchedBy(func(r io.Reader) bool { return r != nil })
 
 // anySaveOf is anyBody for the save request that now carries it: the address is
 // matched exactly, and only the stream is the part no case can name.
-func anySaveOf(t model.ObjectType, id model.ObjectID) any {
-	return mock.MatchedBy(func(req model.SaveBlobRequest) bool {
+func anySaveOf(t restmodel.ObjectType, id restmodel.ObjectID) any {
+	return mock.MatchedBy(func(req restmodel.SaveBlobRequest) bool {
 		return req.Type == t && req.ID == id && req.Body != nil
 	})
 }

@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package tarcopybackend round-trips one volume through the fullcopy backend against a real
+// Package fullcopybackend round-trips one volume through the fullcopy backend against a real
 // daemon and store; -short or an unreachable daemon skips it.
-package tarcopybackend
+package fullcopybackend
 
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
+	"os"
 	"testing"
 
 	dockercontext "github.com/docker/cli/cli/context/docker"
@@ -129,7 +129,7 @@ func TestSnapshotter_Snapshot_MissingVolume(t *testing.T) {
 
 	// Arrange
 	e := newEnv(t, fullcopy.CompressionZstd)
-	vol := namedVolume(itProject + "-never-created-" + randomSuffix(t))
+	vol := namedVolume(itProject + "-never-created-" + daemontest.RandomSuffix(t))
 
 	// Act
 	_, err := e.backend(t, vol).Snapshot(e.ctx, model.BackendSnapshotRequest{SnapshotID: idFirst})
@@ -154,7 +154,7 @@ type env struct {
 func newEnv(t *testing.T, compression fullcopy.Compression) *env {
 	t.Helper()
 
-	cli := newDaemonClient(t)
+	cli := daemontest.NewClient(t)
 	store := inmemory.New("session")
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	engine := dockerclient.NewEngine(cli)
@@ -217,7 +217,7 @@ func (e *env) newSubpathVolume(t *testing.T, service, target, subpath string) mo
 func (e *env) newFilledVolume(t *testing.T, service string) string {
 	t.Helper()
 
-	name := itProject + "-" + service + "-" + randomSuffix(t)
+	name := itProject + "-" + service + "-" + daemontest.RandomSuffix(t)
 	createVolume(t, e.cli, name)
 	e.fill(t, name)
 	return name
@@ -290,33 +290,6 @@ func objectNames(t *testing.T, store storages.Storager) []string {
 	return names
 }
 
-// newDaemonClient skips the test unless a docker daemon answers.
-func newDaemonClient(t *testing.T) *client.Client {
-	t.Helper()
-
-	if testing.Short() {
-		t.Skip("skipping the fullcopy backend volume-level test in short mode")
-	}
-	cli, err := client.New(client.FromEnv)
-	require.NoError(t, err)
-	if _, err := cli.Ping(context.Background(), client.PingOptions{}); err != nil {
-		_ = cli.Close()
-		t.Skip("skipping the fullcopy backend volume-level test: no reachable docker daemon: " + err.Error())
-	}
-	t.Cleanup(func() { _ = cli.Close() })
-	return cli
-}
-
-// randomSuffix keeps concurrent copies of these tests apart on one daemon.
-func randomSuffix(t *testing.T) string {
-	t.Helper()
-
-	b := make([]byte, 5)
-	_, err := rand.Read(b)
-	require.NoError(t, err)
-	return hex.EncodeToString(b)
-}
-
 // createVolume makes an empty named volume, removed with the test.
 func createVolume(t *testing.T, cli *client.Client, name string) {
 	t.Helper()
@@ -383,4 +356,8 @@ func busybox(t *testing.T, engine *dockerclient.Engine, name, script string) str
 	})
 	require.NoErrorf(t, err, "busybox %q failed:\nstdout:\n%s\nstderr:\n%s", script, stdout.String(), stderr.String())
 	return stdout.String()
+}
+
+func TestMain(m *testing.M) {
+	os.Exit(daemontest.Run(m))
 }

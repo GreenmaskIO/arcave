@@ -13,5 +13,5 @@
 // limitations under the License.
 
 // Package provider is the stages a workload is run through, one handle per stage; a provider
-// implements them, core and gc call them. A stage that fails returns a nil handle.
+// implements them, core, gc and status call them. A stage that fails returns a nil handle.
 package provider

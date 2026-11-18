@@ -23,17 +23,17 @@ import (
 	"github.com/greenmaskio/storages/directory"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // blobID is a syntactically valid object name: exactly 64 lowercase hex
 // characters. The repository itself never judges the shape — a request carries
 // an address already parsed — but the tests read better with a name of the real
 // form.
-const blobID = model.ObjectID("1111111111111111111111111111111111111111111111111111111111111111")
+const blobID = restmodel.ObjectID("1111111111111111111111111111111111111111111111111111111111111111")
 
 // otherBlobID is a second valid name, for the cases that need two.
-const otherBlobID = model.ObjectID("2222222222222222222222222222222222222222222222222222222222222222")
+const otherBlobID = restmodel.ObjectID("2222222222222222222222222222222222222222222222222222222222222222")
 
 // newRepository returns the repository over a fresh directory store, plus that
 // store so a test can plant objects behind the repository's back and read what

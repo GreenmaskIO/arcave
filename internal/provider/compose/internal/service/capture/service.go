@@ -20,6 +20,7 @@ package capture
 import (
 	"context"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/fanout"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -56,15 +57,6 @@ func New(deps Deps) *Capturer {
 	return &Capturer{
 		savepointRepo:           deps.SavepointRepo,
 		imageBackend:            deps.ImageBackend,
-		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
+		maxConcurrentOperations: fanout.Limit(deps.Concurrency),
 	}
-}
-
-// fanOutLimit turns a configured concurrency into an errgroup limit, where a negative one is
-// unbounded and zero would admit no goroutine at all.
-func fanOutLimit(concurrency int) int {
-	if concurrency < 1 {
-		return -1
-	}
-	return concurrency
 }

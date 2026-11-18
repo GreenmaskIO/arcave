@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package resticrest drives the restic REST endpoint the way its clients do —
+// Package cdcrest drives the restic REST endpoint the way its clients do —
 // a restic binary on the host, a stock restic container over the loopback — so
 // nothing here is a unit of the packages it wires: the echo app, the repository
 // registry and the repositories behind them, over a real listener.
@@ -20,11 +20,12 @@
 // It lives outside those packages for that reason, beside the other integration
 // tests. Guarded twice, per test: -short skips, and so does a host with no
 // restic and no reachable daemon.
-package resticrest
+package cdcrest
 
 import (
 	"context"
 	"fmt"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 	"io"
 	"net"
 	"os"
@@ -70,7 +71,7 @@ func TestMain(m *testing.M) {
 	if socket := os.Getenv(relaySocketEnv); socket != "" {
 		os.Exit(relay(socket))
 	}
-	os.Exit(m.Run())
+	os.Exit(daemontest.Run(m))
 }
 
 // relay pipes stdin and stdout through the unix socket at path.

@@ -35,7 +35,7 @@ import (
 // Observe reads the compose project's replicas as the daemon runs them and the services each waits
 // on to complete, nothing they mount or run on; it refuses no daemon. None means never started or
 // taken down. A container gone between the listing and its inspect is left out, its service too.
-func (s *Inspector) Observe(ctx context.Context) (model.ObservedWorkload, error) {
+func (s *Reader) Observe(ctx context.Context) (model.ObservedWorkload, error) {
 	listed, err := s.listContainers(ctx)
 	if err != nil {
 		return model.ObservedWorkload{}, fmt.Errorf("read containers of compose project %q: %w", s.composeProject, err)

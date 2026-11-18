@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // A name is a directory under the root, so what Lookup answers with has to write
@@ -78,7 +78,7 @@ func TestResolver_Lookup_KeepsRepositoriesApart(t *testing.T) {
 
 	// Assert
 	_, err = second.StatConfig(context.Background())
-	assert.ErrorIs(t, err, model.ErrObjectNotFound)
+	assert.ErrorIs(t, err, restmodel.ErrObjectNotFound)
 }
 
 // The root is the boundary: a name that is not one segment inside it never
@@ -106,7 +106,7 @@ func TestResolver_Lookup_RefusesWhatCannotNameARepository(t *testing.T) {
 			repo, err := resolver.Lookup(tt.arcaveObjectID)
 
 			// Assert
-			assert.ErrorIs(t, err, model.ErrRepositoryNotFound)
+			assert.ErrorIs(t, err, restmodel.ErrRepositoryNotFound)
 			assert.Nil(t, repo)
 		})
 	}

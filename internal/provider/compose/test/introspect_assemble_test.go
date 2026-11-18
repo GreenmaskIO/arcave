@@ -133,7 +133,7 @@ type fidelityEnv struct {
 	daemon    *client.Client
 	compose   api.Compose
 	runner    *composeclient.Client
-	inspector *introspect.Inspector
+	inspector *introspect.Reader
 	assembler *composespec.Assembler
 	codec     *composespec.Codec
 	// runtime is the engine behind the daemon, which decides the want a case is held to.
@@ -176,7 +176,7 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 		runner: composeclient.NewClient(composeService, composeclient.Options{
 			WaitTimeout: 90 * time.Second, StopTimeout: 2 * time.Second, Prompter: prompter,
 		}),
-		inspector: introspect.NewInspector(profile.API, model.DockerComposeProjectName(project)),
+		inspector: introspect.NewReader(profile.API, model.DockerComposeProjectName(project)),
 		assembler: profile.Assembler,
 		codec:     composespec.NewCodec(),
 		runtime:   profile.Kind,

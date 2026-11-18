@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 	"testing"
 	"time"
 
@@ -165,7 +166,7 @@ func TestSnapshotter_Snapshot_Stdio_Concurrent(t *testing.T) {
 func (e *env) newSlowVolume(t *testing.T, service string) model.Volume {
 	t.Helper()
 
-	name := itProject + "-" + service + "-" + randomSuffix(t)
+	name := itProject + "-" + service + "-" + daemontest.RandomSuffix(t)
 	createVolume(t, e.cli, name)
 	busybox(t, e.engine, name, fmt.Sprintf("dd if=/dev/urandom of=/data/blob bs=1k count=%d 2>/dev/null", slowKiB))
 	return namedVolume(name, model.ServiceReference{Service: "db", Target: "/data"})

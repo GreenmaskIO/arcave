@@ -46,7 +46,7 @@ type Deps struct {
 	NewSavepointReader func(store storages.Storager) garbage.SavepointReader
 	Daemon             daemon
 	ArcaveProject      model.ArcaveProjectName
-	// Concurrency caps how many units one fan-out works at once; 0 leaves it unbounded.
+	// Concurrency caps how many units one fan-out works at once; below 1 runs gc's fan-outs one at a time.
 	Concurrency      int
 	ResticInspectors resticrepo.InspectorOpener
 	ResticPruners    eraser.PrunerOpener

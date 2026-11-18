@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package workload is the provider's stages (prepare, deploy, capture, hold) over one compose project.
 package workload
 
 import (
@@ -113,10 +114,10 @@ type containerControl interface {
 
 // Deps are the collaborators of a compose project's workload.
 type Deps struct {
-	SavepointRepo    savepointRepository
-	ComposeInspector composeIntrospector
-	ImageBackend     imageBackend
-	ComposeRunner    composeRunner
+	SavepointRepo savepointRepository
+	ComposeReader composeIntrospector
+	ImageBackend  imageBackend
+	ComposeRunner composeRunner
 	// ContainerControl pauses the services captured with model.CaptureModePause, and resumes a
 	// replica found frozen.
 	ContainerControl   containerControl
@@ -163,9 +164,9 @@ func New(deps Deps) provider.Workload {
 // newComposeWorkload builds the workload and the components it delegates to.
 func newComposeWorkload(deps Deps) *composeWorkload {
 	inspector := inspection.New(inspection.Deps{
-		ComposeInspector: deps.ComposeInspector,
-		DaemonVersion:    deps.DaemonVersion,
-		MinDaemonMajor:   deps.MinDaemonMajor,
+		ComposeReader:  deps.ComposeReader,
+		DaemonVersion:  deps.DaemonVersion,
+		MinDaemonMajor: deps.MinDaemonMajor,
 	})
 	return &composeWorkload{
 		savepointRepo: deps.SavepointRepo,
@@ -178,23 +179,23 @@ func newComposeWorkload(deps Deps) *composeWorkload {
 			Store:            deps.Store,
 		}),
 		preparer: prepare.New(prepare.Deps{
-			SpecReader:              deps.SavepointRepo,
-			SpecParser:              deps.SpecCodec,
-			LayerRestorer:           deps.ImageBackend,
-			ImageLookup:             deps.ImageLookup,
-			BackendRegistry:         deps.BackendRegistry,
-			Store:                   deps.Store,
-			LeftoverVolumes:         deps.LeftoverVolumes,
-			MaxConcurrentOperations: fanOutLimit(deps.Concurrency),
+			SpecReader:      deps.SavepointRepo,
+			SpecParser:      deps.SpecCodec,
+			LayerRestorer:   deps.ImageBackend,
+			ImageLookup:     deps.ImageLookup,
+			BackendRegistry: deps.BackendRegistry,
+			Store:           deps.Store,
+			LeftoverVolumes: deps.LeftoverVolumes,
+			Concurrency:     deps.Concurrency,
 		}),
 		deployer: deploy.New(deploy.Deps{
-			ComposeRunner:           deps.ComposeRunner,
-			ContainerControl:        deps.ContainerControl,
-			ContainerRebuilder:      deps.ContainerRebuilder,
-			Inspector:               inspector,
-			ComposeInspector:        deps.ComposeInspector,
-			VolumeRemover:           deps.VolumeRemover,
-			MaxConcurrentOperations: fanOutLimit(deps.Concurrency),
+			ComposeRunner:      deps.ComposeRunner,
+			ContainerControl:   deps.ContainerControl,
+			ContainerRebuilder: deps.ContainerRebuilder,
+			Inspector:          inspector,
+			ComposeReader:      deps.ComposeReader,
+			VolumeRemover:      deps.VolumeRemover,
+			Concurrency:        deps.Concurrency,
 		}),
 		capturer: capture.New(capture.Deps{
 			SavepointRepo: deps.SavepointRepo,
@@ -217,13 +218,4 @@ func (s *composeWorkload) Inspect(ctx context.Context) (provider.LiveWorkload, e
 		service:       s,
 		introspection: introspection,
 	}, nil
-}
-
-// fanOutLimit turns a configured concurrency into an errgroup limit, where a
-// negative one is unbounded and zero would admit no goroutine at all.
-func fanOutLimit(concurrency int) int {
-	if concurrency < 1 {
-		return -1
-	}
-	return concurrency
 }

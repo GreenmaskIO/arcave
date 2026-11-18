@@ -24,11 +24,10 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 	"os"
 	"sort"
 	"sync"
@@ -111,7 +110,7 @@ const (
 	transportTCP   = composeconfig.CDCTransportTCP
 )
 
-// newEnv wires the backend as cmd/arcave does by default — over the exec stream —
+// newEnv wires the backend as the provider's root does by default — over the exec stream —
 // with the compose project store in memory.
 func newEnv(t *testing.T, opts cdc.Options) *env {
 	t.Helper()
@@ -124,7 +123,7 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 func newEnvOver(t *testing.T, transport string, opts cdc.Options) *env {
 	t.Helper()
 
-	cli := newDaemonClient(t)
+	cli := daemontest.NewClient(t)
 	// restic's own output goes to the logger; it is worth reading only when a case
 	// failed, and reading it then is most of the diagnosis.
 	logs := &syncBuffer{}
@@ -245,7 +244,7 @@ func (e *env) newSubpathVolume(t *testing.T, service, target, subpath string) mo
 func (e *env) newFilledVolume(t *testing.T, service string) string {
 	t.Helper()
 
-	name := itProject + "-" + service + "-" + randomSuffix(t)
+	name := itProject + "-" + service + "-" + daemontest.RandomSuffix(t)
 	createVolume(t, e.cli, name)
 	e.fill(t, name)
 	return name
@@ -420,23 +419,6 @@ func objectNames(t *testing.T, store storages.Storager, prefix string) []string 
 	return names
 }
 
-// newDaemonClient skips the test unless a docker daemon answers.
-func newDaemonClient(t *testing.T) *client.Client {
-	t.Helper()
-
-	if testing.Short() {
-		t.Skip("skipping the cdc backend volume-level test in short mode")
-	}
-	cli, err := client.New(client.FromEnv)
-	require.NoError(t, err)
-	if _, err := cli.Ping(context.Background(), client.PingOptions{}); err != nil {
-		_ = cli.Close()
-		t.Skip("skipping the cdc backend volume-level test: no reachable docker daemon: " + err.Error())
-	}
-	t.Cleanup(func() { _ = cli.Close() })
-	return cli
-}
-
 // resolveNetwork resolves how this daemon's containers reach the test's tcp
 // server, exactly as the DI root's auto mode does.
 // ARCAVE_TEST_NETWORK_MODE (host, bridge) and ARCAVE_TEST_CONTAINER_HOST override
@@ -457,16 +439,6 @@ func resolveNetwork(t *testing.T, engine *dockerclient.Engine) (hostNetwork bool
 		return true, "127.0.0.1"
 	}
 	return false, containerHost
-}
-
-// randomSuffix keeps concurrent copies of these tests apart on one daemon.
-func randomSuffix(t *testing.T) string {
-	t.Helper()
-
-	b := make([]byte, 5)
-	_, err := rand.Read(b)
-	require.NoError(t, err)
-	return hex.EncodeToString(b)
 }
 
 // createVolume makes an empty named volume, removed with the test.
@@ -545,4 +517,8 @@ func busybox(t *testing.T, engine *dockerclient.Engine, name, script string) str
 	})
 	require.NoErrorf(t, err, "busybox %q failed:\nstdout:\n%s\nstderr:\n%s", script, stdout.String(), stderr.String())
 	return stdout.String()
+}
+
+func TestMain(m *testing.M) {
+	os.Exit(daemontest.Run(m))
 }

@@ -20,6 +20,7 @@ package deploy
 import (
 	"context"
 	"fmt"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/fanout"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -80,12 +81,12 @@ type Deps struct {
 	ContainerControl   containerResumer
 	ContainerRebuilder containerRebuilder
 	// Inspector reads the project under its own step, to find the volumes a failed build created;
-	// ComposeInspector reads it with none, to find the containers a create built.
-	Inspector        composeIntrospector
-	ComposeInspector composeIntrospector
-	VolumeRemover    volumeRemover
-	// MaxConcurrentOperations caps the volumes restored at once, an errgroup limit.
-	MaxConcurrentOperations int
+	// ComposeReader reads it with none, to find the containers a create built.
+	Inspector     composeIntrospector
+	ComposeReader composeIntrospector
+	VolumeRemover volumeRemover
+	// Concurrency caps the volumes restored at once; 0 leaves it unbounded.
+	Concurrency int
 }
 
 // Deployer builds and runs one compose project.
@@ -94,7 +95,7 @@ type Deployer struct {
 	containerControl        containerResumer
 	containerRebuilder      containerRebuilder
 	inspector               composeIntrospector
-	composeInspector        composeIntrospector
+	composeReader           composeIntrospector
 	volumeRemover           volumeRemover
 	maxConcurrentOperations int
 }
@@ -106,9 +107,9 @@ func New(deps Deps) *Deployer {
 		containerControl:        deps.ContainerControl,
 		containerRebuilder:      deps.ContainerRebuilder,
 		inspector:               deps.Inspector,
-		composeInspector:        deps.ComposeInspector,
+		composeReader:           deps.ComposeReader,
 		volumeRemover:           deps.VolumeRemover,
-		maxConcurrentOperations: deps.MaxConcurrentOperations,
+		maxConcurrentOperations: fanout.Limit(deps.Concurrency),
 	}
 }
 

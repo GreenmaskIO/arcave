@@ -20,21 +20,21 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
-var _ model.RepositoryResolver = stubResolver{}
+var _ restmodel.RepositoryResolver = stubResolver{}
 
 // stubResolver serves one repository under one name. A stub and not a mock:
 // what a name resolves to is the resolver's question, not this package's.
 type stubResolver struct {
 	name string
-	repo model.Repository
+	repo restmodel.Repository
 }
 
-func (s stubResolver) Lookup(arcaveObjectID string) (model.Repository, error) {
+func (s stubResolver) Lookup(arcaveObjectID string) (restmodel.Repository, error) {
 	if arcaveObjectID != s.name {
-		return nil, model.ErrRepositoryNotFound
+		return nil, restmodel.ErrRepositoryNotFound
 	}
 	return s.repo, nil
 }
@@ -43,9 +43,9 @@ func (s stubResolver) Lookup(arcaveObjectID string) (model.Repository, error) {
 // protocol has a status for.
 type failingResolver struct{}
 
-func (failingResolver) Lookup(string) (model.Repository, error) { return nil, errStore }
+func (failingResolver) Lookup(string) (restmodel.Repository, error) { return nil, errStore }
 
-var _ model.Repository = (*mockRepository)(nil)
+var _ restmodel.Repository = (*mockRepository)(nil)
 
 // mockRepository is the seam's double: which method a test asks of a repository,
 // with which arguments, in which order, and what it answered.
@@ -76,27 +76,27 @@ func (m *mockRepository) DeleteConfig(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
 
-func (m *mockRepository) ListBlobs(ctx context.Context, req model.ListBlobsRequest) ([]model.Blob, error) {
+func (m *mockRepository) ListBlobs(ctx context.Context, req restmodel.ListBlobsRequest) ([]restmodel.Blob, error) {
 	args := m.Called(ctx, req)
-	blobs, _ := args.Get(0).([]model.Blob)
+	blobs, _ := args.Get(0).([]restmodel.Blob)
 	return blobs, args.Error(1)
 }
 
-func (m *mockRepository) StatBlob(ctx context.Context, req model.StatBlobRequest) (int64, error) {
+func (m *mockRepository) StatBlob(ctx context.Context, req restmodel.StatBlobRequest) (int64, error) {
 	args := m.Called(ctx, req)
 	return args.Get(0).(int64), args.Error(1)
 }
 
-func (m *mockRepository) OpenBlobRange(ctx context.Context, req model.OpenBlobRangeRequest) (io.ReadCloser, error) {
+func (m *mockRepository) OpenBlobRange(ctx context.Context, req restmodel.OpenBlobRangeRequest) (io.ReadCloser, error) {
 	args := m.Called(ctx, req)
 	body, _ := args.Get(0).(io.ReadCloser)
 	return body, args.Error(1)
 }
 
-func (m *mockRepository) SaveBlob(ctx context.Context, req model.SaveBlobRequest) error {
+func (m *mockRepository) SaveBlob(ctx context.Context, req restmodel.SaveBlobRequest) error {
 	return m.Called(ctx, req).Error(0)
 }
 
-func (m *mockRepository) DeleteBlob(ctx context.Context, req model.DeleteBlobRequest) error {
+func (m *mockRepository) DeleteBlob(ctx context.Context, req restmodel.DeleteBlobRequest) error {
 	return m.Called(ctx, req).Error(0)
 }

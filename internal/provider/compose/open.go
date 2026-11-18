@@ -42,8 +42,8 @@ type Config struct {
 	Settings composeconfig.Config
 	// ArcaveProject is project.name: the namespace of the layer tags a rollback leaves.
 	ArcaveProject model.ArcaveProjectName
-	// Concurrency is common.concurrency: how many units one fan-out works at once; 0 leaves it
-	// unbounded.
+	// Concurrency is common.concurrency: how many units one fan-out works at once; below 1 leaves
+	// the capture and rollback fan-outs unbounded.
 	Concurrency int
 	// ComposeProgress is where compose's own progress goes: compose.progress as the DI root resolved
 	// it against its own output.
@@ -95,7 +95,7 @@ func OpenObserver(cfg Config, composeProject model.DockerComposeProjectName) (Ob
 		return Observer{}, err
 	}
 	return Observer{
-		Observer: introspect.NewInspector(daemon.api, composeProject),
+		Observer: introspect.NewReader(daemon.api, composeProject),
 		opened:   opened,
 	}, nil
 }
@@ -166,7 +166,7 @@ func openWorkload(
 	return workload.New(workload.Deps{
 		// One store for the records and the data, so every record travels with its data.
 		SavepointRepo:    sprepo.New(store),
-		ComposeInspector: introspect.NewInspector(profile.API, composeProject),
+		ComposeReader:    introspect.NewReader(profile.API, composeProject),
 		ImageBackend:     imageBackend,
 		ComposeRunner:    composeRunner,
 		ContainerControl: profile.Engine,

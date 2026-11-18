@@ -59,7 +59,7 @@ func (s *Deployer) rebuildDivergentReplicas(ctx context.Context, replicas []reco
 		return nil
 	}
 
-	introspection, err := s.composeInspector.Introspect(ctx)
+	introspection, err := s.composeReader.Introspect(ctx)
 	if err != nil {
 		return fmt.Errorf("introspecting the rebuilt compose project: %w", err)
 	}

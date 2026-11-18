@@ -19,7 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // The hand-written conversions between the specification's types and the
@@ -31,8 +31,8 @@ import (
 // It answers the one operation that asks the repository nothing: HeadBlobs only
 // judges its segment, so building a request for a call that never happens would
 // be a lie.
-func ObjectTypeOf(t ObjectTypePath) (model.ObjectType, error) {
-	return model.ParseObjectType(string(t))
+func ObjectTypeOf(t ObjectTypePath) (restmodel.ObjectType, error) {
+	return restmodel.ParseObjectType(string(t))
 }
 
 // The five constructors an operation reaches its repository through. They are
@@ -40,30 +40,30 @@ func ObjectTypeOf(t ObjectTypePath) (model.ObjectType, error) {
 // specification — so a handler's one line says which side of the seam it is on.
 
 // NewRepoListBlobsRequest carries a listing's namespace into the domain.
-func NewRepoListBlobsRequest(r ListBlobsRequestObject) (model.ListBlobsRequest, error) {
-	return model.NewListBlobsRequest(string(r.Type))
+func NewRepoListBlobsRequest(r ListBlobsRequestObject) (restmodel.ListBlobsRequest, error) {
+	return restmodel.NewListBlobsRequest(string(r.Type))
 }
 
 // NewRepoStatBlobRequest carries an object's address into the domain.
-func NewRepoStatBlobRequest(r StatBlobRequestObject) (model.StatBlobRequest, error) {
-	return model.NewStatBlobRequest(string(r.Type), string(r.ResticObjectID))
+func NewRepoStatBlobRequest(r StatBlobRequestObject) (restmodel.StatBlobRequest, error) {
+	return restmodel.NewStatBlobRequest(string(r.Type), string(r.ResticObjectID))
 }
 
 // NewRepoGetBlobRequest carries a read's address into the domain. A GET begins
 // with a stat — the size decides the range and both answers render it — so what
 // a GET's path carries is that stat's request; the interval follows it.
-func NewRepoGetBlobRequest(r GetBlobRequestObject) (model.StatBlobRequest, error) {
-	return model.NewStatBlobRequest(string(r.Type), string(r.ResticObjectID))
+func NewRepoGetBlobRequest(r GetBlobRequestObject) (restmodel.StatBlobRequest, error) {
+	return restmodel.NewStatBlobRequest(string(r.Type), string(r.ResticObjectID))
 }
 
 // NewRepoSaveBlobRequest carries an upload's address and its body into the domain.
-func NewRepoSaveBlobRequest(r SaveBlobRequestObject) (model.SaveBlobRequest, error) {
-	return model.NewSaveBlobRequest(string(r.Type), string(r.ResticObjectID), r.Body)
+func NewRepoSaveBlobRequest(r SaveBlobRequestObject) (restmodel.SaveBlobRequest, error) {
+	return restmodel.NewSaveBlobRequest(string(r.Type), string(r.ResticObjectID), r.Body)
 }
 
 // NewRepoDeleteBlobRequest carries an object's address into the domain.
-func NewRepoDeleteBlobRequest(r DeleteBlobRequestObject) (model.DeleteBlobRequest, error) {
-	return model.NewDeleteBlobRequest(string(r.Type), string(r.ResticObjectID))
+func NewRepoDeleteBlobRequest(r DeleteBlobRequestObject) (restmodel.DeleteBlobRequest, error) {
+	return restmodel.NewDeleteBlobRequest(string(r.Type), string(r.ResticObjectID))
 }
 
 // Listing renders the listing — name and size per object, the only shape this
@@ -72,7 +72,7 @@ func NewRepoDeleteBlobRequest(r DeleteBlobRequestObject) (model.DeleteBlobReques
 // The bytes are ours because oapi-codegen encodes only media types that are
 // application/json or end in "+json", and restic's is neither; renaming it is
 // not an option, since restic compares the header against that exact string.
-func Listing(blobs []model.Blob) (ListBlobs200ApplicationvndXResticRestV2Response, error) {
+func Listing(blobs []restmodel.Blob) (ListBlobs200ApplicationvndXResticRestV2Response, error) {
 	body, length, err := jsonBody(BlobListOf(blobs))
 	if err != nil {
 		return ListBlobs200ApplicationvndXResticRestV2Response{}, fmt.Errorf("json body: %w", err)
@@ -82,7 +82,7 @@ func Listing(blobs []model.Blob) (ListBlobs200ApplicationvndXResticRestV2Respons
 
 // BlobListOf renders a listing's objects. The slice is never nil, so an empty
 // namespace marshals as [] and not null — a fresh repository is listed early.
-func BlobListOf(blobs []model.Blob) BlobList {
+func BlobListOf(blobs []restmodel.Blob) BlobList {
 	list := make(BlobList, 0, len(blobs))
 	for _, b := range blobs {
 		list = append(list, Blob{Name: b.Name, Size: b.Size})

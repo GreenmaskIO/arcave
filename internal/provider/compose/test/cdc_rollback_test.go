@@ -421,14 +421,14 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 			SpecCodec:        spec,
 			BackendRegistry:  registry,
 			CaptureDefaults:  newCaptureDefaults(model.SnapshotBackendCDC),
-			ComposeInspector: stubInspector{result: introspectionOf(e.volumes)},
+			ComposeReader:    stubInspector{result: introspectionOf(e.volumes)},
 			VolumeRemover:    stubVolumeRemover{},
 		}),
 	})
 	return svc, composeProjectStore
 }
 
-// newCaptureDefaults are the capture defaults the DI root builds from a config that names
+// newCaptureDefaults are the capture defaults the provider's root builds from a config that names
 // only the volume backend: every kind captured, layers deduplicated.
 func newCaptureDefaults(volumeBackend model.SnapshotBackendKind) capturepolicy.CaptureDefaults {
 	return capturepolicy.CaptureDefaults{
@@ -602,7 +602,7 @@ func (s stubInspector) Introspect(context.Context) (composemodel.IntrospectionRe
 }
 
 // cdcTransport resolves how this daemon's containers reach the test's restic
-// server, exactly as the DI root's auto mode does.
+// server, exactly as the provider's root auto mode does.
 // ARCAVE_TEST_NETWORK_MODE (host, bridge) and ARCAVE_TEST_CONTAINER_HOST override
 // it, as network_mode and container_host do the binary's.
 func cdcTransport(t *testing.T, engine *dockerclient.Engine) (hostNetwork bool, containerHost string) {

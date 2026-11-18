@@ -30,7 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/repo"
 )
 
@@ -250,7 +250,7 @@ func TestConnServer_ServeRepository_Refused(t *testing.T) {
 	err := server.ServeRepository(context.Background(), unknownRepoName, serverEnd)
 
 	// Assert
-	require.ErrorIs(t, err, model.ErrRepositoryNotFound)
+	require.ErrorIs(t, err, restmodel.ErrRepositoryNotFound)
 	_, err = clientEnd.Read(make([]byte, 1))
 	assert.ErrorIs(t, err, io.EOF, "the stream is closed")
 }

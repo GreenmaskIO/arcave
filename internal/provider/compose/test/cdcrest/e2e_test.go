@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package resticrest
+package cdcrest
 
 import (
 	"bytes"
@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 	"os"
 	"strings"
 	"testing"
@@ -103,7 +104,7 @@ func e2eTransport(t *testing.T, engine *docker.Engine) (hostNetwork bool, contai
 
 func TestResticEndToEnd(t *testing.T) {
 	// Arrange: repository root → resolver → served endpoint on the host loopback.
-	cli := newDockerClient(t)
+	cli := daemontest.NewClient(t)
 	ctx := t.Context()
 
 	root, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
@@ -167,23 +168,6 @@ func TestResticEndToEnd(t *testing.T) {
 	t.Logf("restore: %s", time.Since(restoreStart).Round(time.Second))
 	after := hashVolume(t, runner, vol)
 	require.Equal(t, mutated, after, "the restored volume must hash identically to the state the latest backup covered")
-}
-
-// newDockerClient skips unless a docker daemon is reachable, and returns its
-// client, closed with the test.
-func newDockerClient(t *testing.T) *client.Client {
-	t.Helper()
-	if testing.Short() {
-		t.Skip("skipping the restic transport e2e test in short mode")
-	}
-	cli, err := client.New(client.FromEnv)
-	require.NoError(t, err)
-	if _, err := cli.Ping(context.Background(), client.PingOptions{}); err != nil {
-		_ = cli.Close()
-		t.Skip("skipping the restic transport e2e test: no reachable docker daemon: " + err.Error())
-	}
-	t.Cleanup(func() { _ = cli.Close() })
-	return cli
 }
 
 // newDataVolume creates a named volume filled with random data — one large blob

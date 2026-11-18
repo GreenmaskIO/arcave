@@ -35,6 +35,9 @@ jobs:
         with:
           version: v2.14.0
 
+      - name: e2e import check
+        run: make lint-e2e-imports
+
   unit:
     name: Unit tests
     runs-on: ubuntu-latest
@@ -73,8 +76,8 @@ jobs:
             pkgs: ./internal/provider/compose/test
           - name: cdcbackend
             pkgs: ./internal/provider/compose/test/cdcbackend
-          - name: resticrest, tarcopybackend
-            pkgs: ./internal/provider/compose/test/resticrest ./internal/provider/compose/test/tarcopybackend
+          - name: cdcrest, fullcopybackend
+            pkgs: ./internal/provider/compose/test/cdcrest ./internal/provider/compose/test/fullcopybackend
     steps:
       - uses: actions/checkout@v4
 
@@ -82,7 +85,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # compose/test/resticrest skips its conformance test when no restic binary is on
+      # compose/test/cdcrest skips its conformance test when no restic binary is on
       # PATH, so without this the suite would go green having never run it.
       - name: Install restic
         run: |

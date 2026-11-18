@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // TestNewEcho is a test of the router and not of the protocol: which paths
@@ -122,7 +122,7 @@ func TestNewEcho_ResolvesTheNamedRepository(t *testing.T) {
 	// Arrange
 	first := stubRepository{body: []byte("0123456789abcdef")}
 	second := stubRepository{body: []byte("fedcba9876543210")}
-	e := NewEcho(context.Background(), serving(map[string]model.Repository{
+	e := NewEcho(context.Background(), serving(map[string]restmodel.Repository{
 		testRepoName:  first,
 		otherRepoName: second,
 	}))
@@ -280,7 +280,7 @@ func TestNewEcho_JournalsBothEnds(t *testing.T) {
 func TestNewEcho_JournalsServedRequestsAtDebug(t *testing.T) {
 	tests := []struct {
 		name      string
-		repo      model.Repository
+		repo      restmodel.Repository
 		target    string
 		wantEmpty bool
 	}{

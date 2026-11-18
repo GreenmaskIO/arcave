@@ -1,4 +1,4 @@
-.PHONY: build demo-media docs-install docs-serve docs-build test test-unit test-integration test-verbose test-fidelity test-storage lint clean generate-restic-api
+.PHONY: build demo-media docs-install docs-serve docs-build test test-unit test-integration test-verbose test-fidelity test-storage lint lint-e2e-imports clean generate-restic-api
 
 # The restic REST API is generated from its own OpenAPI document; the version is
 # pinned because the generated code is committed and a generator bump is a diff.
@@ -71,9 +71,11 @@ test-storage:
 # provider of its own.
 E2E_ALLOWED_IMPORTS := internal/(model|config|provider/compose/config|storefactory|repository/[a-z]+|service/lock|utils/testutils/daemontest)|pkg/.+
 
-lint:
+lint: lint-e2e-imports
 	golangci-lint run ./...
-	@leaked=$$(go list -f '{{join .TestImports "\n"}}' $(E2E_DIR)/... | grep 'greenmaskio/arcave/' | \
+
+lint-e2e-imports:
+	@leaked=$$(go list -f '{{join .Imports "\n"}}{{"\n"}}{{join .TestImports "\n"}}{{"\n"}}{{join .XTestImports "\n"}}' $(E2E_DIR)/... | grep 'greenmaskio/arcave/' | \
 		grep -Ev 'greenmaskio/arcave/($(E2E_ALLOWED_IMPORTS))$$' | sort -u); \
 	if [ -n "$$leaked" ]; then echo "test/ imports what the e2e suite may not: $$leaked" >&2; exit 1; fi
 

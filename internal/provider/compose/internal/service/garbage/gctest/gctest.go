@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package gctest holds the fixtures the collectors' tests share: a directory store, the objects
-// planted in it and the scope gc would build over it.
+// Package gctest holds the fixtures the collectors' and erasers' tests share: a directory store, the
+// objects planted in it and the scope gc would build over it.
 package gctest
 
 import (

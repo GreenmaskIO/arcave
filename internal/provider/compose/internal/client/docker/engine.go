@@ -12,23 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package docker acts on the compose project's containers through the Docker API, in contrast to
-// the compose client beside it (client/compose), which runs the compose project's lifecycle. It
-// holds the two types arcave needs to reach the daemon, split by what they act on:
-//
-//   - Engine (engine.go) moves a volume's bytes in and out of the volume
-//     itself, through a throwaway container of its own.
-//   - ComposeRunner (loader.go) stops and starts the project's services,
-//     through the compose library (github.com/docker/compose/v5), since the
-//     Docker API itself has no Compose equivalent.
-//
-// Both reach the daemon through Go libraries — arcave shells out to nothing, so it
-// needs no docker CLI or compose plugin installed, only a reachable daemon.
-// They share one client: Engine owns the docker/cli instance that resolves
-// Options (host, context, TLS) into a connection, and ComposeRunner is built
-// over that same instance. Targeting one daemon is therefore a property of the
-// construction rather than a contract two halves have to honour by hand, and
-// that shared client is why the two live in one package.
+// Package docker acts on the compose project's containers, volumes and images through the Docker API.
+// The connection is made in the provider root (daemon.go); the compose lifecycle is client/compose.
 package docker
 
 import (

@@ -221,7 +221,7 @@ type recreateEnv struct {
 	compose   *composeclient.Client
 	engine    *dockerclient.Engine
 	daemon    *client.Client
-	inspector *introspect.Inspector
+	inspector *introspect.Reader
 	codec     *composespec.Codec
 	project   string
 	hostDir   string
@@ -246,7 +246,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService, prompter := newComposeService(t, cli)
 	profile := newRuntimeProfile(t, daemonAPI)
-	inspector := introspect.NewInspector(profile.API, model.DockerComposeProjectName(project))
+	inspector := introspect.NewReader(profile.API, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second, Prompter: prompter,
 	})

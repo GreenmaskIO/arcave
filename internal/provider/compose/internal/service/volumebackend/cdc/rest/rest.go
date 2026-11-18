@@ -33,7 +33,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/api"
 	docs "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/docs/api"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/handler"
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // readHeaderTimeout sheds a client that connects and sends no request header.
@@ -45,7 +45,7 @@ const readHeaderTimeout = 10 * time.Second
 //
 // Nothing here resolves a repository: the operation reading {arcaveObjectID}
 // looks it up.
-func NewEcho(ctx context.Context, repos model.RepositoryResolver) *echo.Echo {
+func NewEcho(ctx context.Context, repos restmodel.RepositoryResolver) *echo.Echo {
 	logger := lecho.From(*zerolog.Ctx(ctx))
 
 	e := echo.New()

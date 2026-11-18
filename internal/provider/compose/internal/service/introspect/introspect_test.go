@@ -51,7 +51,7 @@ const (
 	testBaseImageID = model.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
 )
 
-func TestInspector_Introspect(t *testing.T) {
+func TestReader_Introspect(t *testing.T) {
 	// Arrange
 	daemon := &mockDockerAPI{}
 	daemon.expectContainers(
@@ -65,7 +65,7 @@ func TestInspector_Introspect(t *testing.T) {
 	daemon.expectVolumes(ownedVolume(ownedName, "pgdata"), ownedVolume("demo_orphan", "orphan"))
 	daemon.expectNetworks(network.Summary{Name: "demo_back", Labels: map[string]string{api.NetworkLabel: "back"}})
 	daemon.expectImage(testImageID, nil)
-	inspector := NewInspector(daemon, composeProject)
+	inspector := NewReader(daemon, composeProject)
 
 	// Act
 	got, err := inspector.Introspect(context.Background())
@@ -98,7 +98,7 @@ func TestInspector_Introspect(t *testing.T) {
 	daemon.AssertExpectations(t)
 }
 
-func TestInspector_Introspect_Referenced(t *testing.T) {
+func TestReader_Introspect_Referenced(t *testing.T) {
 	const (
 		vpnID  = "c-vpn"
 		goneID = "c-gone"
@@ -177,7 +177,7 @@ func TestInspector_Introspect_Referenced(t *testing.T) {
 			daemon.expectImage(testImageID, nil)
 
 			// Act
-			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+			got, err := NewReader(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			require.NoError(t, err)
@@ -187,7 +187,7 @@ func TestInspector_Introspect_Referenced(t *testing.T) {
 	}
 }
 
-func TestInspector_Introspect_JoinsTheTwoVolumeLevels(t *testing.T) {
+func TestReader_Introspect_JoinsTheTwoVolumeLevels(t *testing.T) {
 	// Arrange
 	daemon := &mockDockerAPI{}
 	daemon.expectContainers(summary("c-db-1", "db", "postgres:16", 1,
@@ -198,7 +198,7 @@ func TestInspector_Introspect_JoinsTheTwoVolumeLevels(t *testing.T) {
 	daemon.expectImage(testImageID, nil)
 
 	// Act
-	got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+	got, err := NewReader(daemon, composeProject).Introspect(context.Background())
 
 	// Assert
 	require.NoError(t, err)
@@ -210,7 +210,7 @@ func TestInspector_Introspect_JoinsTheTwoVolumeLevels(t *testing.T) {
 	daemon.AssertExpectations(t)
 }
 
-func TestInspector_Introspect_ClassifiesMounts(t *testing.T) {
+func TestReader_Introspect_ClassifiesMounts(t *testing.T) {
 	tests := []struct {
 		name   string
 		mount  container.MountPoint
@@ -286,7 +286,7 @@ func TestInspector_Introspect_ClassifiesMounts(t *testing.T) {
 			}
 
 			// Act
-			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+			got, err := NewReader(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			require.NoError(t, err)
@@ -296,7 +296,7 @@ func TestInspector_Introspect_ClassifiesMounts(t *testing.T) {
 	}
 }
 
-func TestInspector_Introspect_MountOptions(t *testing.T) {
+func TestReader_Introspect_MountOptions(t *testing.T) {
 	tests := []struct {
 		name  string
 		mount container.MountPoint
@@ -402,7 +402,7 @@ func TestInspector_Introspect_MountOptions(t *testing.T) {
 			daemon.expectImage(testImageID, nil)
 
 			// Act
-			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+			got, err := NewReader(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			require.NoError(t, err)
@@ -412,7 +412,7 @@ func TestInspector_Introspect_MountOptions(t *testing.T) {
 	}
 }
 
-func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
+func TestReader_Introspect_GroupsReplicas(t *testing.T) {
 	// Arrange
 	second := summary("c-web-2", "web", "nginx:1", 2)
 	second.Labels[api.ContainerReplaceLabel] = "demo-web-2-old"
@@ -428,7 +428,7 @@ func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
 	daemon.expectImage(testImageID, nil)
 
 	// Act
-	got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+	got, err := NewReader(daemon, composeProject).Introspect(context.Background())
 
 	// Assert
 	require.NoError(t, err)
@@ -442,7 +442,7 @@ func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
 	daemon.AssertExpectations(t)
 }
 
-func TestInspector_Observe(t *testing.T) {
+func TestReader_Observe(t *testing.T) {
 	// Arrange: two services, one waiting on the other to complete, a hook's runner and a one-off,
 	// in one listing.
 	web := summary("c-web-1", "web", "nginx:1", 1)
@@ -457,7 +457,7 @@ func TestInspector_Observe(t *testing.T) {
 	daemon.expectInspect("c-migrate-1", "c-web-1")
 
 	// Act: no volume, network or image is read, so none is expected.
-	got, err := NewInspector(daemon, composeProject).Observe(context.Background())
+	got, err := NewReader(daemon, composeProject).Observe(context.Background())
 
 	// Assert
 	require.NoError(t, err)
@@ -471,7 +471,7 @@ func TestInspector_Observe(t *testing.T) {
 	daemon.AssertExpectations(t)
 }
 
-func TestInspector_Observe_GoneUnderTheRead(t *testing.T) {
+func TestReader_Observe_GoneUnderTheRead(t *testing.T) {
 	// Arrange: web-2 and the only migrate replica go between the listing and their inspect, as a
 	// rollback rebuilding them removes them.
 	daemon := &mockDockerAPI{}
@@ -487,7 +487,7 @@ func TestInspector_Observe_GoneUnderTheRead(t *testing.T) {
 	}
 
 	// Act
-	got, err := NewInspector(daemon, composeProject).Observe(context.Background())
+	got, err := NewReader(daemon, composeProject).Observe(context.Background())
 
 	// Assert
 	require.NoError(t, err)
@@ -498,7 +498,7 @@ func TestInspector_Observe_GoneUnderTheRead(t *testing.T) {
 	daemon.AssertExpectations(t)
 }
 
-func TestInspector_Observe_DaemonFailures(t *testing.T) {
+func TestReader_Observe_DaemonFailures(t *testing.T) {
 	daemonErr := errors.New("daemon refused")
 	tests := []struct {
 		name  string
@@ -526,7 +526,7 @@ func TestInspector_Observe_DaemonFailures(t *testing.T) {
 			tt.setup(daemon)
 
 			// Act
-			got, err := NewInspector(daemon, composeProject).Observe(context.Background())
+			got, err := NewReader(daemon, composeProject).Observe(context.Background())
 
 			// Assert
 			require.ErrorIs(t, err, daemonErr)
@@ -569,7 +569,7 @@ func TestKeepProjectContainers(t *testing.T) {
 	}
 }
 
-func TestInspector_Introspect_AnonymousVolumePerReplica(t *testing.T) {
+func TestReader_Introspect_AnonymousVolumePerReplica(t *testing.T) {
 	anon := func(name string) volume.Volume {
 		return volume.Volume{Name: name, Labels: map[string]string{anonymousVolumeLabel: ""}}
 	}
@@ -634,7 +634,7 @@ func TestInspector_Introspect_AnonymousVolumePerReplica(t *testing.T) {
 			ctx := zerolog.New(&logs).WithContext(context.Background())
 
 			// Act
-			got, err := NewInspector(daemon, composeProject).Introspect(ctx)
+			got, err := NewReader(daemon, composeProject).Introspect(ctx)
 
 			// Assert
 			require.NoError(t, err)
@@ -652,7 +652,7 @@ func TestInspector_Introspect_AnonymousVolumePerReplica(t *testing.T) {
 	}
 }
 
-func TestInspector_Introspect_InheritedMounts(t *testing.T) {
+func TestReader_Introspect_InheritedMounts(t *testing.T) {
 	const vpnID = "c-vpn"
 	anon := func(name, target string) container.MountPoint {
 		return mountPoint(mount.TypeVolume, name, "/var/lib/docker/volumes/"+name+"/_data", target, false)
@@ -717,7 +717,7 @@ func TestInspector_Introspect_InheritedMounts(t *testing.T) {
 			daemon.expectImage(testImageID, nil)
 
 			// Act
-			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+			got, err := NewReader(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			require.NoError(t, err)
@@ -797,7 +797,7 @@ func TestUndeclaredMounts(t *testing.T) {
 
 // A compose project taken down is reported, not refused: no service, and the named
 // volumes `compose down` kept.
-func TestInspector_Introspect_NoContainers(t *testing.T) {
+func TestReader_Introspect_NoContainers(t *testing.T) {
 	oneoff := summary("c-web-run", "web", "nginx:1", 1)
 	oneoff.Labels[api.OneoffLabel] = "True"
 	hook := summary("c-web-hook", "web", "nginx:1", 0)
@@ -822,7 +822,7 @@ func TestInspector_Introspect_NoContainers(t *testing.T) {
 			daemon.expectNetworks()
 
 			// Act
-			introspection, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+			introspection, err := NewReader(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			require.NoError(t, err)
@@ -835,7 +835,7 @@ func TestInspector_Introspect_NoContainers(t *testing.T) {
 	}
 }
 
-func TestInspector_Introspect_DaemonFailures(t *testing.T) {
+func TestReader_Introspect_DaemonFailures(t *testing.T) {
 	daemonErr := errors.New("daemon refused")
 
 	tests := []struct {
@@ -952,7 +952,7 @@ func TestInspector_Introspect_DaemonFailures(t *testing.T) {
 			tt.setup(daemon)
 
 			// Act
-			_, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+			_, err := NewReader(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			wantErr := tt.wantErr
@@ -966,7 +966,7 @@ func TestInspector_Introspect_DaemonFailures(t *testing.T) {
 	}
 }
 
-func TestInspector_Introspect_Images(t *testing.T) {
+func TestReader_Introspect_Images(t *testing.T) {
 	labelledBase := map[string]string{string(model.SystemLabelBaseImageID): testBaseImageID.String()}
 
 	tests := []struct {
@@ -1034,7 +1034,7 @@ func TestInspector_Introspect_Images(t *testing.T) {
 			}
 
 			// Act
-			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+			got, err := NewReader(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			require.NoError(t, err)
@@ -1047,7 +1047,7 @@ func TestInspector_Introspect_Images(t *testing.T) {
 	}
 }
 
-func TestInspector_Introspect_Volumes(t *testing.T) {
+func TestReader_Introspect_Volumes(t *testing.T) {
 	shared := volume.Volume{Name: "shared", Driver: "local"}
 	anonFirst := volume.Volume{Name: anonName, Labels: map[string]string{anonymousVolumeLabel: ""}}
 	anonSecond := volume.Volume{Name: "second-anon", Labels: map[string]string{anonymousVolumeLabel: ""}}
@@ -1107,7 +1107,7 @@ func TestInspector_Introspect_Volumes(t *testing.T) {
 			}
 
 			// Act
-			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+			got, err := NewReader(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			require.NoError(t, err)

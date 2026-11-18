@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // The repository over a real store, with no HTTP anywhere: these are the tests
@@ -40,8 +40,8 @@ func TestRepository_SaveBlob(t *testing.T) {
 	repo, store := newRepository(t)
 	ctx := context.Background()
 	save := func(body string) error {
-		return repo.SaveBlob(ctx, model.SaveBlobRequest{
-			Type: model.TypeData, ID: blobID, Body: strings.NewReader(body),
+		return repo.SaveBlob(ctx, restmodel.SaveBlobRequest{
+			Type: restmodel.TypeData, ID: blobID, Body: strings.NewReader(body),
 		})
 	}
 
@@ -65,26 +65,26 @@ func TestRepository_StatBlob(t *testing.T) {
 		name       string
 		key        string
 		body       string
-		objectType model.ObjectType
-		blobName   model.ObjectID
+		objectType restmodel.ObjectType
+		blobName   restmodel.ObjectID
 		wantSize   int64
 		wantErr    error
 	}{
 		{
 			name: "a stored blob", key: "data/" + string(blobID), body: "0123456789",
-			objectType: model.TypeData, blobName: blobID, wantSize: 10,
+			objectType: restmodel.TypeData, blobName: blobID, wantSize: 10,
 		},
 		{
 			name: "an empty blob", key: "locks/" + string(blobID),
-			objectType: model.TypeLocks, blobName: blobID, wantSize: 0,
+			objectType: restmodel.TypeLocks, blobName: blobID, wantSize: 0,
 		},
 		{
 			name:       "a blob that is not there",
-			objectType: model.TypeData, blobName: blobID, wantErr: model.ErrObjectNotFound,
+			objectType: restmodel.TypeData, blobName: blobID, wantErr: restmodel.ErrObjectNotFound,
 		},
 		{
 			name: "a blob of another type", key: "index/" + string(blobID), body: "xy",
-			objectType: model.TypeData, blobName: blobID, wantErr: model.ErrObjectNotFound,
+			objectType: restmodel.TypeData, blobName: blobID, wantErr: restmodel.ErrObjectNotFound,
 		},
 	}
 
@@ -97,7 +97,7 @@ func TestRepository_StatBlob(t *testing.T) {
 			}
 
 			// Act
-			size, err := repo.StatBlob(context.Background(), model.StatBlobRequest{Type: tt.objectType, ID: tt.blobName})
+			size, err := repo.StatBlob(context.Background(), restmodel.StatBlobRequest{Type: tt.objectType, ID: tt.blobName})
 
 			// Assert
 			if tt.wantErr != nil {
@@ -119,7 +119,7 @@ func TestRepository_OpenBlobRange(t *testing.T) {
 		name     string
 		key      string
 		body     string
-		blobName model.ObjectID
+		blobName restmodel.ObjectID
 		offset   int64
 		length   int64
 		want     string
@@ -141,7 +141,7 @@ func TestRepository_OpenBlobRange(t *testing.T) {
 		},
 		{
 			name: "a blob that is not there", blobName: otherBlobID,
-			length: 4, wantErr: model.ErrObjectNotFound,
+			length: 4, wantErr: restmodel.ErrObjectNotFound,
 		},
 	}
 
@@ -154,8 +154,8 @@ func TestRepository_OpenBlobRange(t *testing.T) {
 			}
 
 			// Act
-			body, err := repo.OpenBlobRange(context.Background(), model.OpenBlobRangeRequest{
-				Type: model.TypeData, ID: tt.blobName, Offset: tt.offset, Length: tt.length,
+			body, err := repo.OpenBlobRange(context.Background(), restmodel.OpenBlobRangeRequest{
+				Type: restmodel.TypeData, ID: tt.blobName, Offset: tt.offset, Length: tt.length,
 			})
 
 			// Assert
@@ -186,7 +186,7 @@ func TestRepository_SaveConfig(t *testing.T) {
 
 	// Assert
 	require.NoError(t, first)
-	require.ErrorIs(t, second, model.ErrConfigExists)
+	require.ErrorIs(t, second, restmodel.ErrConfigExists)
 
 	src, err := repo.OpenConfig(ctx)
 	require.NoError(t, err)
@@ -205,7 +205,7 @@ func TestRepository_OpenConfig_Missing(t *testing.T) {
 	_, err := repo.OpenConfig(context.Background())
 
 	// Assert
-	assert.ErrorIs(t, err, model.ErrObjectNotFound)
+	assert.ErrorIs(t, err, restmodel.ErrObjectNotFound)
 }
 
 // StatConfig reports the config's size once it exists, ErrObjectNotFound before.
@@ -220,7 +220,7 @@ func TestRepository_StatConfig(t *testing.T) {
 	size, err := repo.StatConfig(ctx)
 
 	// Assert
-	assert.ErrorIs(t, missing, model.ErrObjectNotFound)
+	assert.ErrorIs(t, missing, restmodel.ErrObjectNotFound)
 	require.NoError(t, err)
 	assert.EqualValues(t, len("[repository]"), size)
 }
@@ -237,13 +237,13 @@ func TestRepository_Delete(t *testing.T) {
 		{
 			name: "a blob", key: "data/" + string(blobID),
 			delete: func(repo *Repository, ctx context.Context) error {
-				return repo.DeleteBlob(ctx, model.DeleteBlobRequest{Type: model.TypeData, ID: blobID})
+				return repo.DeleteBlob(ctx, restmodel.DeleteBlobRequest{Type: restmodel.TypeData, ID: blobID})
 			},
 		},
 		{
 			name: "a lock", key: "locks/" + string(blobID),
 			delete: func(repo *Repository, ctx context.Context) error {
-				return repo.DeleteBlob(ctx, model.DeleteBlobRequest{Type: model.TypeLocks, ID: blobID})
+				return repo.DeleteBlob(ctx, restmodel.DeleteBlobRequest{Type: restmodel.TypeLocks, ID: blobID})
 			},
 		},
 		{
@@ -281,21 +281,21 @@ func TestRepository_Delete(t *testing.T) {
 func TestRepository_ListBlobs(t *testing.T) {
 	tests := []struct {
 		name       string
-		objectType model.ObjectType
-		want       []model.Blob
+		objectType restmodel.ObjectType
+		want       []restmodel.Blob
 	}{
 		{
-			name: "the blobs of one type", objectType: model.TypeData,
-			want: []model.Blob{{Name: string(blobID), Size: 3}, {Name: string(otherBlobID), Size: 5}},
+			name: "the blobs of one type", objectType: restmodel.TypeData,
+			want: []restmodel.Blob{{Name: string(blobID), Size: 3}, {Name: string(otherBlobID), Size: 5}},
 		},
 		{
-			name: "a type never matches its prefix-sharing sibling", objectType: model.TypeIndex,
-			want: []model.Blob{{Name: string(blobID), Size: 2}},
+			name: "a type never matches its prefix-sharing sibling", objectType: restmodel.TypeIndex,
+			want: []restmodel.Blob{{Name: string(blobID), Size: 2}},
 		},
 		{
 			// Create makes no directories, so "absent" and "empty" are the same
 			// state and a fresh repository must still be listable.
-			name: "a type never written", objectType: model.TypeSnapshots, want: []model.Blob{},
+			name: "a type never written", objectType: restmodel.TypeSnapshots, want: []restmodel.Blob{},
 		},
 	}
 
@@ -308,7 +308,7 @@ func TestRepository_ListBlobs(t *testing.T) {
 			put(t, store, "index/"+string(blobID), "xy")
 
 			// Act
-			blobs, err := repo.ListBlobs(context.Background(), model.ListBlobsRequest{Type: tt.objectType})
+			blobs, err := repo.ListBlobs(context.Background(), restmodel.ListBlobsRequest{Type: tt.objectType})
 
 			// Assert
 			require.NoError(t, err)
@@ -327,9 +327,9 @@ func TestRepository_ListBlobs_SkipsNestedKeys(t *testing.T) {
 	put(t, store, "data/aa/"+string(otherBlobID), "nested")
 
 	// Act
-	blobs, err := repo.ListBlobs(context.Background(), model.ListBlobsRequest{Type: model.TypeData})
+	blobs, err := repo.ListBlobs(context.Background(), restmodel.ListBlobsRequest{Type: restmodel.TypeData})
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, []model.Blob{{Name: string(blobID), Size: 3}}, blobs)
+	assert.Equal(t, []restmodel.Blob{{Name: string(blobID), Size: 3}}, blobs)
 }

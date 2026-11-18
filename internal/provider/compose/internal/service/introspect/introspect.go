@@ -60,19 +60,19 @@ type dockerAPI interface {
 	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 }
 
-// Inspector reports the one compose project it is constructed with.
-type Inspector struct {
+// Reader reports the one compose project it is constructed with.
+type Reader struct {
 	api            dockerAPI
 	composeProject model.DockerComposeProjectName
 }
 
-func NewInspector(api dockerAPI, composeProject model.DockerComposeProjectName) *Inspector {
-	return &Inspector{api: api, composeProject: composeProject}
+func NewReader(api dockerAPI, composeProject model.DockerComposeProjectName) *Reader {
+	return &Reader{api: api, composeProject: composeProject}
 }
 
 // Introspect reports the compose project, stopped containers included. It cannot see an external volume
 // named like a generated one, an unmounted foreign volume, or a torn-down compose project.
-func (s *Inspector) Introspect(ctx context.Context) (composemodel.IntrospectionResult, error) {
+func (s *Reader) Introspect(ctx context.Context) (composemodel.IntrospectionResult, error) {
 	listed, err := s.listContainers(ctx)
 	if err != nil {
 		return composemodel.IntrospectionResult{}, fmt.Errorf("read containers of compose project %q: %w", s.composeProject, err)
@@ -126,7 +126,7 @@ func (s *Inspector) Introspect(ctx context.Context) (composemodel.IntrospectionR
 
 // listContainers lists every container compose stamped with the compose project's name, stopped
 // ones included.
-func (s *Inspector) listContainers(ctx context.Context) ([]container.Summary, error) {
+func (s *Reader) listContainers(ctx context.Context) ([]container.Summary, error) {
 	listed, err := s.api.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
 		Filters: s.newProjectFilter(),
@@ -138,7 +138,7 @@ func (s *Inspector) listContainers(ctx context.Context) ([]container.Summary, er
 }
 
 // newProjectFilter selects what compose stamped with this compose project's name.
-func (s *Inspector) newProjectFilter() client.Filters {
+func (s *Reader) newProjectFilter() client.Filters {
 	return make(client.Filters).Add("label", api.ProjectLabel+"="+s.composeProject.String())
 }
 
@@ -159,7 +159,7 @@ func keepProjectContainers(summaries []container.Summary) []container.Summary {
 
 // readOwnedVolumes are the project's own named volumes, keyed by docker name: the volume index
 // the rest of the pass adds to.
-func (s *Inspector) readOwnedVolumes(ctx context.Context) (map[string]volume.Volume, error) {
+func (s *Reader) readOwnedVolumes(ctx context.Context) (map[string]volume.Volume, error) {
 	listed, err := s.api.VolumeList(ctx, client.VolumeListOptions{
 		Filters: s.newProjectFilter(),
 	})
@@ -174,7 +174,7 @@ func (s *Inspector) readOwnedVolumes(ctx context.Context) (map[string]volume.Vol
 }
 
 // readServices reports the compose project's readServices, sorted by name.
-func (s *Inspector) readServices(
+func (s *Reader) readServices(
 	ctx context.Context, containers []container.Summary, volumeIndex map[string]volume.Volume,
 ) ([]composemodel.Service, error) {
 	byService := groupByService(containers)
@@ -207,7 +207,7 @@ func groupByService(summaries []container.Summary) map[string][]container.Summar
 }
 
 // readService reports one readService from its replicas.
-func (s *Inspector) readService(
+func (s *Reader) readService(
 	ctx context.Context, name string, replicas []container.Summary, volumeIndex map[string]volume.Volume,
 ) (composemodel.Service, error) {
 	containers, err := s.readContainers(ctx, replicas)
@@ -234,7 +234,7 @@ func (s *Inspector) readService(
 // volume is not — docker creates one per container — so every replica's is reported,
 // numbered by its replica. A mount the first replica does not declare alike is warned of:
 // the spec is the first replica's, so a rollback rebuilds the replica without it.
-func (s *Inspector) replicaMounts(
+func (s *Reader) replicaMounts(
 	ctx context.Context, service string, replicas []container.Summary, containers []composemodel.Container,
 	volumeIndex map[string]volume.Volume,
 ) ([]composemodel.ServiceVolume, error) {
@@ -267,7 +267,7 @@ func (s *Inspector) replicaMounts(
 }
 
 // readContainers inspects each replica and carries the raw response verbatim.
-func (s *Inspector) readContainers(ctx context.Context, group []container.Summary) ([]composemodel.Container, error) {
+func (s *Reader) readContainers(ctx context.Context, group []container.Summary) ([]composemodel.Container, error) {
 	containers := make([]composemodel.Container, 0, len(group))
 	for _, summary := range group {
 		inspected, err := s.readContainer(ctx, summary)
@@ -281,7 +281,7 @@ func (s *Inspector) readContainers(ctx context.Context, group []container.Summar
 
 // readPresentContainers inspects every container of group the daemon still holds: one removed
 // since the listing is skipped.
-func (s *Inspector) readPresentContainers(ctx context.Context, group []container.Summary) ([]composemodel.Container, error) {
+func (s *Reader) readPresentContainers(ctx context.Context, group []container.Summary) ([]composemodel.Container, error) {
 	containers := make([]composemodel.Container, 0, len(group))
 	for _, summary := range group {
 		inspected, err := s.readContainer(ctx, summary)
@@ -298,7 +298,7 @@ func (s *Inspector) readPresentContainers(ctx context.Context, group []container
 }
 
 // readContainer inspects the container summary lists.
-func (s *Inspector) readContainer(ctx context.Context, summary container.Summary) (composemodel.Container, error) {
+func (s *Reader) readContainer(ctx context.Context, summary container.Summary) (composemodel.Container, error) {
 	inspected, err := s.api.ContainerInspect(ctx, summary.ID, client.ContainerInspectOptions{})
 	if err != nil {
 		return composemodel.Container{}, fmt.Errorf("inspect container %s: %w", summary.ID, err)
@@ -349,7 +349,7 @@ func containerName(names []string) string {
 
 // readServiceVolumes classifies one container's mounts, sorted by target. The rule must keep
 // mirroring client/docker's matchMount, or a capture and its restore address different data.
-func (s *Inspector) readServiceVolumes(
+func (s *Reader) readServiceVolumes(
 	ctx context.Context, replica container.Summary, inspect container.InspectResponse,
 	volumeIndex map[string]volume.Volume,
 ) ([]composemodel.ServiceVolume, error) {
@@ -391,7 +391,7 @@ func undeclaredMounts(first, own []composemodel.ServiceVolume) []composemodel.Se
 }
 
 // readServiceVolume classifies one mount; a volume mount is the project's own, anonymous, or external.
-func (s *Inspector) readServiceVolume(
+func (s *Reader) readServiceVolume(
 	ctx context.Context, mountPoint container.MountPoint, volumeIndex map[string]volume.Volume,
 ) (composemodel.ServiceVolume, error) {
 	serviceVolume := composemodel.ServiceVolume{
@@ -436,7 +436,7 @@ func (s *Inspector) readServiceVolume(
 }
 
 // volume answers from the index, inspecting and recording a volume it does not hold yet.
-func (s *Inspector) volume(ctx context.Context, name string, volumeIndex map[string]volume.Volume) (volume.Volume, error) {
+func (s *Reader) volume(ctx context.Context, name string, volumeIndex map[string]volume.Volume) (volume.Volume, error) {
 	if known, ok := volumeIndex[name]; ok {
 		return known, nil
 	}
@@ -544,7 +544,7 @@ func newBindOptions(mountPoint container.MountPoint, declared declaredMount) *co
 
 // owns tells the project's own volume by the label compose stamped on it — the one
 // ownedVolumes lists by.
-func (s *Inspector) owns(dockerVolume volume.Volume) bool {
+func (s *Reader) owns(dockerVolume volume.Volume) bool {
 	return dockerVolume.Labels[api.ProjectLabel] == s.composeProject.String()
 }
 
@@ -558,7 +558,7 @@ func isAnonymous(dockerVolume volume.Volume) bool {
 }
 
 // mountedVolumes reads into the index every volume any replica mounts, not only the first.
-func (s *Inspector) mountedVolumes(ctx context.Context, services []composemodel.Service, volumeIndex map[string]volume.Volume) error {
+func (s *Reader) mountedVolumes(ctx context.Context, services []composemodel.Service, volumeIndex map[string]volume.Volume) error {
 	for _, name := range mountedVolumeNames(services) {
 		if _, err := s.volume(ctx, name, volumeIndex); err != nil {
 			return fmt.Errorf("mounted volume %q: %w", name, err)
@@ -583,7 +583,7 @@ func mountedVolumeNames(services []composemodel.Service) []string {
 }
 
 // readNetworks reports the project's readNetworks, sorted by key.
-func (s *Inspector) readNetworks(ctx context.Context) ([]composemodel.Network, error) {
+func (s *Reader) readNetworks(ctx context.Context) ([]composemodel.Network, error) {
 	listed, err := s.api.NetworkList(ctx, client.NetworkListOptions{Filters: s.newProjectFilter()})
 	if err != nil {
 		return nil, err
@@ -605,7 +605,7 @@ func (s *Inspector) readNetworks(ctx context.Context) ([]composemodel.Network, e
 
 // readImages inspects each distinct image the containers run on, then the base readImages those name
 // by model.SystemLabelBaseImageID — the true base of a container a rollback rebuilt on an arcave tag.
-func (s *Inspector) readImages(
+func (s *Reader) readImages(
 	ctx context.Context, services []composemodel.Service,
 ) (map[model.ImageDigestID]image.InspectResponse, error) {
 	ids, err := containerImageIDs(services)
@@ -658,7 +658,7 @@ func containerImage(inspect container.InspectResponse) string {
 // the upstream image the user's compose file named (e.g. postgres:16), as opposed to a layer
 // arcave committed on top of it. If the daemon no longer has that image (it was removed), it is
 // just not added to the index; that is not an error.
-func (s *Inspector) baseImage(
+func (s *Reader) baseImage(
 	ctx context.Context, id model.ImageDigestID, images map[model.ImageDigestID]image.InspectResponse,
 ) error {
 	base, ok := baseImageID(images[id])
@@ -694,7 +694,7 @@ func baseImageID(inspect image.InspectResponse) (model.ImageDigestID, bool) {
 
 // readReferenced inspects each distinct container outside the project a replica refers to, keyed by
 // id. One the daemon no longer has is left out; that is not an error.
-func (s *Inspector) readReferenced(
+func (s *Reader) readReferenced(
 	ctx context.Context, services []composemodel.Service,
 ) (map[string]container.InspectResponse, error) {
 	referenced := map[string]container.InspectResponse{}
@@ -812,7 +812,7 @@ func inheritedFrom(inspect container.InspectResponse, target string, sources map
 
 // newNamedVolumes lists the volumes compose owns, an unmounted one included, plus the external
 // ones only a mount reveals, each with its users filled in.
-func (s *Inspector) newNamedVolumes(services []composemodel.Service, volumeIndex map[string]volume.Volume) []composemodel.NamedVolume {
+func (s *Reader) newNamedVolumes(services []composemodel.Service, volumeIndex map[string]volume.Volume) []composemodel.NamedVolume {
 	users := newVolumeUsers(services)
 
 	volumes := make([]composemodel.NamedVolume, 0, len(volumeIndex))

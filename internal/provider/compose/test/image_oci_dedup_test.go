@@ -248,7 +248,7 @@ func (e *ociDedupEnv) mutateContainer(t *testing.T, content string) {
 func (e *ociDedupEnv) containerID(t *testing.T) string {
 	t.Helper()
 
-	res, err := introspect.NewInspector(e.daemon, model.DockerComposeProjectName(e.project)).Introspect(e.ctx)
+	res, err := introspect.NewReader(e.daemon, model.DockerComposeProjectName(e.project)).Introspect(e.ctx)
 	require.NoError(t, err)
 	require.Len(t, res.Project.Services, 1)
 	require.Len(t, res.Project.Services[0].Containers, 1)

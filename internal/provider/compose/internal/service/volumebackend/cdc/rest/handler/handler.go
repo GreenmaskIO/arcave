@@ -22,15 +22,15 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/api"
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
+	restmodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 type handler struct {
-	repos model.RepositoryResolver
+	repos restmodel.RepositoryResolver
 }
 
-func New(repos model.RepositoryResolver) api.StrictServerInterface {
+func New(repos restmodel.RepositoryResolver) api.StrictServerInterface {
 	return &handler{repos: repos}
 }
 
@@ -44,7 +44,7 @@ func (s *handler) CreateRepository(ctx context.Context, request api.CreateReposi
 
 	repo, err := s.repos.Lookup(request.ArcaveObjectID)
 	switch {
-	case errors.Is(err, model.ErrRepositoryNotFound):
+	case errors.Is(err, restmodel.ErrRepositoryNotFound):
 		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.CreateRepository404Response{}, nil
 	case err != nil:
@@ -52,7 +52,7 @@ func (s *handler) CreateRepository(ctx context.Context, request api.CreateReposi
 	}
 
 	// An existing repository is this call's success; the refusal belongs to SaveConfig.
-	if err := repo.Create(ctx); err != nil && !errors.Is(err, model.ErrConfigExists) {
+	if err := repo.Create(ctx); err != nil && !errors.Is(err, restmodel.ErrConfigExists) {
 		return nil, fmt.Errorf("repo create: %w", err)
 	}
 	return api.CreateRepository200Response{}, nil
@@ -70,7 +70,7 @@ func (s *handler) DeleteRepository(_ context.Context, _ api.DeleteRepositoryRequ
 func (s *handler) StatConfig(ctx context.Context, request api.StatConfigRequestObject) (api.StatConfigResponseObject, error) {
 	repo, err := s.repos.Lookup(request.ArcaveObjectID)
 	switch {
-	case errors.Is(err, model.ErrRepositoryNotFound):
+	case errors.Is(err, restmodel.ErrRepositoryNotFound):
 		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.StatConfig404Response{}, nil
 	case err != nil:
@@ -79,7 +79,7 @@ func (s *handler) StatConfig(ctx context.Context, request api.StatConfigRequestO
 
 	size, err := repo.StatConfig(ctx)
 	switch {
-	case errors.Is(err, model.ErrObjectNotFound):
+	case errors.Is(err, restmodel.ErrObjectNotFound):
 		return api.StatConfig404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo stat config: %w", err)
@@ -94,7 +94,7 @@ func (s *handler) StatConfig(ctx context.Context, request api.StatConfigRequestO
 func (s *handler) GetConfig(ctx context.Context, request api.GetConfigRequestObject) (api.GetConfigResponseObject, error) {
 	repo, err := s.repos.Lookup(request.ArcaveObjectID)
 	switch {
-	case errors.Is(err, model.ErrRepositoryNotFound):
+	case errors.Is(err, restmodel.ErrRepositoryNotFound):
 		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.GetConfig404Response{}, nil
 	case err != nil:
@@ -103,7 +103,7 @@ func (s *handler) GetConfig(ctx context.Context, request api.GetConfigRequestObj
 
 	body, err := repo.OpenConfig(ctx)
 	switch {
-	case errors.Is(err, model.ErrObjectNotFound):
+	case errors.Is(err, restmodel.ErrObjectNotFound):
 		return api.GetConfig404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo open config: %w", err)
@@ -116,7 +116,7 @@ func (s *handler) GetConfig(ctx context.Context, request api.GetConfigRequestObj
 func (s *handler) SaveConfig(ctx context.Context, request api.SaveConfigRequestObject) (api.SaveConfigResponseObject, error) {
 	repo, err := s.repos.Lookup(request.ArcaveObjectID)
 	switch {
-	case errors.Is(err, model.ErrRepositoryNotFound):
+	case errors.Is(err, restmodel.ErrRepositoryNotFound):
 		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.SaveConfig404Response{}, nil
 	case err != nil:
@@ -125,7 +125,7 @@ func (s *handler) SaveConfig(ctx context.Context, request api.SaveConfigRequestO
 
 	err = repo.SaveConfig(ctx, request.Body)
 	switch {
-	case errors.Is(err, model.ErrConfigExists):
+	case errors.Is(err, restmodel.ErrConfigExists):
 		// The refusal restic's init depends on: never re-initialise a repository holding data.
 		return api.SaveConfig403Response{}, nil
 	case err != nil:
@@ -139,7 +139,7 @@ func (s *handler) SaveConfig(ctx context.Context, request api.SaveConfigRequestO
 func (s *handler) DeleteConfig(ctx context.Context, request api.DeleteConfigRequestObject) (api.DeleteConfigResponseObject, error) {
 	repo, err := s.repos.Lookup(request.ArcaveObjectID)
 	switch {
-	case errors.Is(err, model.ErrRepositoryNotFound):
+	case errors.Is(err, restmodel.ErrRepositoryNotFound):
 		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.DeleteConfig404Response{}, nil
 	case err != nil:
@@ -147,7 +147,7 @@ func (s *handler) DeleteConfig(ctx context.Context, request api.DeleteConfigRequ
 	}
 
 	// Idempotent: a config already gone is the state this call asks for.
-	if err := repo.DeleteConfig(ctx); err != nil && !errors.Is(err, model.ErrObjectNotFound) {
+	if err := repo.DeleteConfig(ctx); err != nil && !errors.Is(err, restmodel.ErrObjectNotFound) {
 		return nil, fmt.Errorf("repo delete config: %w", err)
 	}
 	return api.DeleteConfig200Response{}, nil
@@ -163,7 +163,7 @@ func (s *handler) ListBlobs(ctx context.Context, request api.ListBlobsRequestObj
 
 	repo, err := s.repos.Lookup(request.ArcaveObjectID)
 	switch {
-	case errors.Is(err, model.ErrRepositoryNotFound):
+	case errors.Is(err, restmodel.ErrRepositoryNotFound):
 		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.ListBlobs404Response{}, nil
 	case err != nil:
@@ -194,7 +194,7 @@ func (s *handler) HeadBlobs(ctx context.Context, request api.HeadBlobsRequestObj
 	// HEAD answers 200 for a repository that is not served.
 	_, err := s.repos.Lookup(request.ArcaveObjectID)
 	switch {
-	case errors.Is(err, model.ErrRepositoryNotFound):
+	case errors.Is(err, restmodel.ErrRepositoryNotFound):
 		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.HeadBlobs404Response{}, nil
 	case err != nil:
@@ -213,7 +213,7 @@ func (s *handler) StatBlob(ctx context.Context, request api.StatBlobRequestObjec
 
 	repo, err := s.repos.Lookup(request.ArcaveObjectID)
 	switch {
-	case errors.Is(err, model.ErrRepositoryNotFound):
+	case errors.Is(err, restmodel.ErrRepositoryNotFound):
 		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.StatBlob404Response{}, nil
 	case err != nil:
@@ -222,7 +222,7 @@ func (s *handler) StatBlob(ctx context.Context, request api.StatBlobRequestObjec
 
 	size, err := repo.StatBlob(ctx, req)
 	switch {
-	case errors.Is(err, model.ErrObjectNotFound):
+	case errors.Is(err, restmodel.ErrObjectNotFound):
 		return api.StatBlob404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo stat blob: %w", err)
@@ -243,7 +243,7 @@ func (s *handler) GetBlob(ctx context.Context, request api.GetBlobRequestObject)
 
 	repo, err := s.repos.Lookup(request.ArcaveObjectID)
 	switch {
-	case errors.Is(err, model.ErrRepositoryNotFound):
+	case errors.Is(err, restmodel.ErrRepositoryNotFound):
 		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.GetBlob404Response{}, nil
 	case err != nil:
@@ -252,7 +252,7 @@ func (s *handler) GetBlob(ctx context.Context, request api.GetBlobRequestObject)
 
 	size, err := repo.StatBlob(ctx, blobRequest)
 	switch {
-	case errors.Is(err, model.ErrObjectNotFound):
+	case errors.Is(err, restmodel.ErrObjectNotFound):
 		return api.GetBlob404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo stat blob: %w", err)
@@ -272,10 +272,10 @@ func (s *handler) GetBlob(ctx context.Context, request api.GetBlobRequestObject)
 
 // wholeBlob answers the 200: the object entire. Accept-Ranges tells the client
 // it may ask for a part of it next time.
-func wholeBlob(ctx context.Context, repo model.Repository, req model.OpenBlobRangeRequest, size int64) (api.GetBlobResponseObject, error) {
+func wholeBlob(ctx context.Context, repo restmodel.Repository, req restmodel.OpenBlobRangeRequest, size int64) (api.GetBlobResponseObject, error) {
 	body, err := repo.OpenBlobRange(ctx, req)
 	switch {
-	case errors.Is(err, model.ErrObjectNotFound):
+	case errors.Is(err, restmodel.ErrObjectNotFound):
 		return api.GetBlob404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo open blob range: %w", err)
@@ -289,10 +289,10 @@ func wholeBlob(ctx context.Context, repo model.Repository, req model.OpenBlobRan
 
 // partialBlob answers the 206: the requested interval, and the size it was cut
 // from, so the client knows what else it may ask for.
-func partialBlob(ctx context.Context, repo model.Repository, req model.OpenBlobRangeRequest, size int64) (api.GetBlobResponseObject, error) {
+func partialBlob(ctx context.Context, repo restmodel.Repository, req restmodel.OpenBlobRangeRequest, size int64) (api.GetBlobResponseObject, error) {
 	body, err := repo.OpenBlobRange(ctx, req)
 	switch {
-	case errors.Is(err, model.ErrObjectNotFound):
+	case errors.Is(err, restmodel.ErrObjectNotFound):
 		return api.GetBlob404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo open blob range: %w", err)
@@ -317,7 +317,7 @@ func (s *handler) SaveBlob(ctx context.Context, request api.SaveBlobRequestObjec
 
 	repo, err := s.repos.Lookup(request.ArcaveObjectID)
 	switch {
-	case errors.Is(err, model.ErrRepositoryNotFound):
+	case errors.Is(err, restmodel.ErrRepositoryNotFound):
 		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.SaveBlob404Response{}, nil
 	case err != nil:
@@ -341,7 +341,7 @@ func (s *handler) DeleteBlob(ctx context.Context, request api.DeleteBlobRequestO
 
 	repo, err := s.repos.Lookup(request.ArcaveObjectID)
 	switch {
-	case errors.Is(err, model.ErrRepositoryNotFound):
+	case errors.Is(err, restmodel.ErrRepositoryNotFound):
 		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.DeleteBlob404Response{}, nil
 	case err != nil:
@@ -349,7 +349,7 @@ func (s *handler) DeleteBlob(ctx context.Context, request api.DeleteBlobRequestO
 	}
 
 	// Idempotent: a retry landing after the first attempt must not fail a prune.
-	if err := repo.DeleteBlob(ctx, req); err != nil && !errors.Is(err, model.ErrObjectNotFound) {
+	if err := repo.DeleteBlob(ctx, req); err != nil && !errors.Is(err, restmodel.ErrObjectNotFound) {
 		return nil, fmt.Errorf("repo delete blob: %w", err)
 	}
 	return api.DeleteBlob200Response{}, nil
