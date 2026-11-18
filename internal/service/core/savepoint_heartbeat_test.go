@@ -31,6 +31,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // demoCaptureID is the id the heartbeat tests capture under.
@@ -191,4 +192,42 @@ func (s *failingAfterFirstPutStore) PutObject(ctx context.Context, filePath stri
 		return errors.New("store unreachable")
 	}
 	return s.Storager.PutObject(ctx, filePath, body)
+}
+
+// A capture the lost heartbeat interrupts ends cancelled; the step opened before the heartbeat
+// fails, carrying the cause once.
+func TestService_captureHeld_HeartbeatLostFailsTheFramingStep(t *testing.T) {
+	// Arrange
+	ctx, recorder := newProgressContext()
+	ctx, root := progress.Begin(ctx, progress.Step{Kind: "savepoint.create"})
+	req := provider.CaptureRequest{ID: demoCaptureID, Name: "sp"}
+	stages := newMockStages(false)
+	grantedLock := &mockGrantedSessionLock{}
+	mock.InOrder(
+		stages.expectHold(nil),
+		stages.expectCaptureOf(req, context.Canceled).
+			Run(func(args mock.Arguments) {
+				captureCtx, step := progress.Run(args.Get(0).(context.Context), progress.Step{Kind: "savepoint.capture"})
+				<-captureCtx.Done()
+				step.End(captureCtx.Err())
+			}),
+		stages.expectRelease(time.Minute, nil),
+	)
+	svc := New(Deps{
+		Store:               &failingAfterFirstPutStore{Storager: newDirStore(t)},
+		HeartbeatInterval:   10 * time.Millisecond,
+		HeartbeatStaleAfter: 30 * time.Millisecond,
+	})
+
+	// Act
+	_, err := svc.captureHeld(ctx, grantedLock, &stages.plan, req, time.Minute)
+	root.End(err)
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrHeartbeatLost)
+	require.Len(t, recorder.ended, 2)
+	assert.Equal(t, "savepoint.create/savepoint.capture cancelled", recorder.ended[0])
+	assert.Regexp(t, `^savepoint\.create failed error=capturing the savepoint: heartbeat lost: `, recorder.ended[1])
+	stages.AssertExpectations(t)
+	grantedLock.AssertExpectations(t)
 }
