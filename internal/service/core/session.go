@@ -27,6 +27,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/sessionref"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -159,7 +160,7 @@ func (s *SessionService) SetSession(ctx context.Context, ref string) (model.Sess
 	if ref == "" {
 		return model.Session{}, model.ErrNoSessionRef
 	}
-	return withUnlock(ctx, s.locker, func() (model.Session, error) {
+	return workflow.WithUnlock(ctx, s.locker, func() (model.Session, error) {
 		sessions, err := s.sessions.ListSessions(ctx)
 		if err != nil {
 			return model.Session{}, fmt.Errorf("listing sessions: %w", err)
@@ -180,7 +181,7 @@ func (s *SessionService) SetSession(ctx context.Context, ref string) (model.Sess
 // UnsetSession clears the current-session pointer, so commands that name no session work in
 // the default one.
 func (s *SessionService) UnsetSession(ctx context.Context) (model.Session, error) {
-	return withUnlock(ctx, s.locker, func() (model.Session, error) {
+	return workflow.WithUnlock(ctx, s.locker, func() (model.Session, error) {
 		if err := s.current.Clear(ctx); err != nil {
 			return model.Session{}, err
 		}
@@ -234,7 +235,7 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 	if err := req.Validate(); err != nil {
 		return model.Session{}, err
 	}
-	return withWriteUnlock(ctx, s.locker, s.admission, func() (model.Session, error) {
+	return workflow.WithWriteUnlock(ctx, s.locker, s.admission, func() (model.Session, error) {
 		var sessions []model.Session
 		if req.Name != "" || req.From != "" {
 			var err error
@@ -287,7 +288,7 @@ func (s *SessionService) RemoveSession(
 	if req.Session == "" {
 		return model.RemoveSessionResponse{}, model.ErrNoSessionRef
 	}
-	return withWriteUnlock(ctx, s.locker, s.admission, func() (model.RemoveSessionResponse, error) {
+	return workflow.WithWriteUnlock(ctx, s.locker, s.admission, func() (model.RemoveSessionResponse, error) {
 		id, err := s.findRemovable(ctx, req)
 		if err != nil {
 			return model.RemoveSessionResponse{}, err
@@ -305,7 +306,7 @@ func (s *SessionService) RemoveSession(
 		if found && marker.Session == id {
 			err := &model.InterruptedRollbackError{Marker: marker}
 			zerolog.Ctx(ctx).Error().Err(err).Str("session", id.String()).
-				Str("compose_project", marker.ComposeProject.String()).Msg(recoveryHint(marker))
+				Str("compose_project", marker.ComposeProject.String()).Msg(workflow.RecoveryHint(marker))
 			return model.RemoveSessionResponse{}, err
 		}
 		current, err := s.requireNotInUse(ctx, id, req)
@@ -316,7 +317,7 @@ func (s *SessionService) RemoveSession(
 		if err != nil {
 			return model.RemoveSessionResponse{}, fmt.Errorf("open the lock of session %s: %w", id, err)
 		}
-		size, err := withSessionLock(ctx, locker, model.SessionLockOperationSessionRemove,
+		size, err := workflow.WithSessionLock(ctx, locker, model.SessionLockOperationSessionRemove,
 			func(ctx context.Context, grantedLock model.GrantedSessionLock) (int64, error) {
 				return s.deleteSession(ctx, grantedLock, id)
 			})
@@ -354,7 +355,7 @@ func (s *SessionService) deleteSession(ctx context.Context, grantedLock model.Gr
 	}
 	zerolog.Ctx(ctx).Debug().Str("session", id.String()).Int64("size_bytes", size).Msg("deleting session")
 	if err := s.sessions.DeleteSession(ctx, id); err != nil {
-		logInterrupt(ctx, "session remove interrupted: run it again with the session id to remove the rest")
+		workflow.LogInterrupt(ctx, "session remove interrupted: run it again with the session id to remove the rest")
 		return 0, fmt.Errorf("deleting session %s: %w", id, err)
 	}
 	zerolog.Ctx(ctx).Info().Str("session", id.String()).Int64("freed_bytes", size).
@@ -654,10 +655,10 @@ func (s *SessionService) forkUnderSourceLock(ctx context.Context, session model.
 	if err != nil {
 		return fmt.Errorf("open the lock of session %s: %w", source, err)
 	}
-	_, err = withSessionLock(ctx, locker, model.SessionLockOperationSessionFork,
+	_, err = workflow.WithSessionLock(ctx, locker, model.SessionLockOperationSessionFork,
 		func(ctx context.Context, grantedLock model.GrantedSessionLock) (struct{}, error) {
 			// The source may have been removed while the fork waited for its lock.
-			if _, err := readSessionRef(ctx, s.sessions, source); err != nil {
+			if _, err := workflow.ReadSessionRef(ctx, s.sessions, source); err != nil {
 				return struct{}{}, err
 			}
 			return struct{}{}, s.forkSession(ctx, grantedLock, session)
@@ -744,7 +745,7 @@ func abandonFork(ctx context.Context, beat operationHeartbeat, id model.SessionI
 
 // logForkAbandoned logs an uncommitted fork's tree, the only pointer left to it.
 func logForkAbandoned(ctx context.Context, id model.SessionID) {
-	logInterrupt(ctx, "fork interrupted: the partial session is not committed")
+	workflow.LogInterrupt(ctx, "fork interrupted: the partial session is not committed")
 	zerolog.Ctx(ctx).Error().Str("session", id.String()).Str("tree", "sessions/"+id.String()).
 		Msg("the fork did not commit; its tree is left in the store")
 }

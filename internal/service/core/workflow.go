@@ -46,14 +46,6 @@ func releaseHeld(ctx context.Context, plan provider.CapturePlan, waitTimeout tim
 	return plan.Release(revertCtx, waitTimeout)
 }
 
-// logInterrupt tells the user what arcave does about an interrupt, when ctx was interrupted.
-func logInterrupt(ctx context.Context, action string) {
-	if ctx.Err() == nil {
-		return
-	}
-	zerolog.Ctx(ctx).Info().Msg(action)
-}
-
 // preferInterrupt returns the interrupt that cancelled ctx in place of err, the symptom
 // it caused somewhere downstream, and logs err.
 func preferInterrupt(ctx context.Context, err error) error {

@@ -25,6 +25,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -69,7 +70,7 @@ func (s *Service) createSavepoint(
 
 	plan, err := s.prepare(ctx)
 	if err != nil {
-		logInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
+		workflow.LogInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
 		return model.Savepoint{}, preferInterrupt(ctx, err)
 	}
 
@@ -102,18 +103,18 @@ func (s *Service) captureHeld(
 		beforeErr, captureErr, afterErr error
 	)
 	if beatCtx, beat, err = s.startSavepointHeartbeat(ctx, req.ID); err != nil {
-		logInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
+		workflow.LogInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
 		return model.Savepoint{}, fmt.Errorf("capturing the savepoint: %w", preferInterrupt(ctx, err))
 	}
 	if held, beforeErr = plan.Hold(beatCtx); beforeErr != nil {
 		// A hold that failed or was interrupted partway may have held some services.
 		beforeErr = beat.abandon(ctx, beatCtx, beforeErr)
-		logInterrupt(ctx, "savepoint interrupted while holding the services: resuming them, nothing captured")
+		workflow.LogInterrupt(ctx, "savepoint interrupted while holding the services: resuming them, nothing captured")
 	} else if savepoint, captureErr = captureAndCommit(ctx, beatCtx, beat, grantedLock, held, req); captureErr != nil {
-		logInterrupt(ctx, "savepoint interrupted during capture: resuming the services, nothing committed")
+		workflow.LogInterrupt(ctx, "savepoint interrupted during capture: resuming the services, nothing committed")
 		captureErr = preferInterrupt(ctx, captureErr)
 	} else {
-		logInterrupt(ctx, "savepoint committed before the interrupt: resuming the services")
+		workflow.LogInterrupt(ctx, "savepoint committed before the interrupt: resuming the services")
 	}
 	afterErr = releaseHeld(ctx, plan, waitTimeout)
 

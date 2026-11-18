@@ -29,6 +29,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -1123,42 +1124,6 @@ func TestService_Rollback_ColdStartFailure(t *testing.T) {
 	}
 }
 
-// With no safety snapshot to go back to, the hint names the same rollback again.
-func TestRecoveryHint_NoSafetySnapshot(t *testing.T) {
-	// Arrange
-	marker := model.InflightMarker{
-		Phase:          model.InflightRestoring,
-		Session:        model.DefaultSession,
-		ComposeProject: "demo",
-		Target:         demoRecord().ID,
-	}
-
-	// Act
-	hint := recoveryHint(marker)
-
-	// Assert
-	assert.Contains(t, hint, "a rollback that took no safety snapshot was interrupted; volumes may be half-restored")
-	assert.Contains(t, hint, "-p demo "+demoRecord().ID.String())
-}
-
-// What the hint says of a rollback that took no safety snapshot follows how far it got.
-func TestInterruptedState_NoSafetySnapshot(t *testing.T) {
-	tests := []struct {
-		phase model.InflightPhase
-		want  string
-	}{
-		{phase: model.InflightRecreating, want: "before it wrote any volume"},
-		{phase: model.InflightRestoring, want: "volumes may be half-restored"},
-		// A failed cold start stands here too, what it restored into removed.
-		{phase: model.InflightRestoreDone, want: "volumes may be half-restored"},
-	}
-	for _, tt := range tests {
-		t.Run(string(tt.phase), func(t *testing.T) {
-			assert.Contains(t, interruptedState(model.InflightMarker{Phase: tt.phase}), tt.want)
-		})
-	}
-}
-
 // Recovering from an interrupted rollback with no containers left prepares as a recovery, warns of
 // no leftover volume, and its marker never goes back to "nothing written": a failure keeps it.
 func TestService_Rollback_ColdStartRerun(t *testing.T) {
@@ -1243,7 +1208,7 @@ func TestService_Rollback_FailedRecoveryKeepsTheSafetySnapshot(t *testing.T) {
 	assert.Equal(t, record.ID, marker.Safety)
 	assert.Equal(t, model.InflightRestoring, marker.Phase)
 	assert.True(t, svc.isRecoveryRollback(marker, demoSafetySnapshot().ID), "another savepoint may recover now")
-	hint := recoveryHint(marker)
+	hint := workflow.RecoveryHint(marker)
 	assert.Contains(t, hint, "the recovery to the safety snapshot failed")
 	assert.Contains(t, hint, record.ID.String())
 	assert.Contains(t, hint, "or name another savepoint")

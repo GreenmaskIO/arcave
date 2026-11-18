@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
@@ -37,101 +36,6 @@ var (
 
 func newLockTestContext() context.Context {
 	return zerolog.Nop().WithContext(context.Background())
-}
-
-func TestWithSessionLock(t *testing.T) {
-	tests := []struct {
-		name string
-		// lockErr fails the Lock; lost cancels the context it returns with ErrSessionLockLost.
-		lockErr error
-		lost    bool
-		// fnErr fails the workflow; interrupted reports it as a workflow reports an interrupt.
-		fnErr       error
-		interrupted bool
-		freeErr     error
-		want        string
-		wantErr     error
-	}{
-		{
-			name: "the workflow runs under the lock and frees it",
-			want: "done",
-		},
-		{
-			name:    "a session held past the wait runs nothing",
-			lockErr: model.ErrSessionLocked,
-			wantErr: model.ErrSessionLocked,
-		},
-		{
-			name:        "a workflow interrupted by the lost lock reports the lost lock",
-			lost:        true,
-			fnErr:       errWorkflow,
-			interrupted: true,
-			wantErr:     model.ErrSessionLockLost,
-		},
-		{
-			name:    "a workflow failing on its own after the lock is lost reports its own failure",
-			lost:    true,
-			fnErr:   errWorkflow,
-			wantErr: errWorkflow,
-		},
-		{
-			name: "a workflow finishing after the lock is lost keeps its result",
-			lost: true,
-			want: "done",
-		},
-		{
-			name:    "a workflow failing on its own reports its own failure",
-			fnErr:   errWorkflow,
-			wantErr: errWorkflow,
-		},
-		{
-			name:    "a failed unlock is only logged",
-			freeErr: errors.New("store hiccup"),
-			want:    "done",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			locker := &mockSessionLocker{}
-			grantedLock := &mockGrantedSessionLock{}
-			if tt.lost {
-				grantedLock.lostCause = model.ErrSessionLockLost
-			}
-			var ranWith model.GrantedSessionLock
-			lock := locker.On("Lock", mock.Anything, model.SessionLockOperationSavepointCreate).
-				Return(grantedLock, tt.lockErr).Once()
-			if tt.lockErr == nil {
-				unlock := grantedLock.On("Unlock", mock.Anything).Return(tt.freeErr).Once().
-					Run(func(mock.Arguments) { assert.Same(t, grantedLock, ranWith, "the workflow ran before the unlock") })
-				mock.InOrder(lock, unlock)
-			}
-
-			// Act
-			got, err := withSessionLock(newLockTestContext(), locker, model.SessionLockOperationSavepointCreate,
-				func(ctx context.Context, grantedLock model.GrantedSessionLock) (string, error) {
-					ranWith = grantedLock
-					if tt.interrupted {
-						return "", preferInterrupt(ctx, tt.fnErr)
-					}
-					if tt.fnErr != nil {
-						return "", tt.fnErr
-					}
-					return "done", nil
-				})
-
-			// Assert
-			if tt.wantErr != nil {
-				require.ErrorIs(t, err, tt.wantErr)
-			} else {
-				require.NoError(t, err)
-			}
-			assert.Equal(t, tt.want, got)
-			assert.Equal(t, tt.lockErr == nil, ranWith != nil, "the workflow runs only under the lock")
-			locker.AssertExpectations(t)
-			grantedLock.AssertExpectations(t)
-		})
-	}
 }
 
 // Every workflow takes the project lock, then the session's lock under its own kind, and frees

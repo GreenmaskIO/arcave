@@ -17,16 +17,13 @@ package core
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/greenmaskio/storages"
-	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
-	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 type projectLocker interface {
@@ -116,85 +113,4 @@ func New(deps Deps) *Service {
 		heartbeatInterval:   cmp.Or(deps.HeartbeatInterval, heartbeat.DefaultInterval),
 		heartbeatStaleAfter: cmp.Or(deps.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
 	}
-}
-
-// withSessionLock runs fn holding the session's lock in the store, and unlocks it however fn
-// ends; a failed unlock is logged. fn runs on the lock's context: a lost lock cancels it with
-// model.ErrSessionLockLost as its cause, which fn reports as any interrupt.
-func withSessionLock[T any](
-	ctx context.Context,
-	locker model.SessionLocker,
-	operation model.SessionLockOperation,
-	fn func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error),
-) (T, error) {
-	// The wait is a step of its own, shown only once another holds the lock; the workflow goes on
-	// under the step ctx carries.
-	waitCtx, wait := progress.Begin(ctx, progress.Step{Kind: kindSessionLock})
-	lockCtx, grantedLock, err := locker.Lock(waitCtx, operation)
-	wait.End(err)
-	if err != nil {
-		var zero T
-		return zero, fmt.Errorf("lock session: %w", err)
-	}
-	defer func() {
-		if err := grantedLock.Unlock(ctx); err != nil {
-			zerolog.Ctx(ctx).Error().Err(err).Msg("unlock session")
-		}
-	}()
-	return fn(progress.WithStep(lockCtx, progress.Current(ctx)), grantedLock)
-}
-
-// withUnlock runs fn with the project lock held, and releases it however fn ends.
-// Releasing is best-effort: a failed release is logged, never returned.
-//
-// A function rather than a method, because Go has no generic methods: every
-// workflow returns its own result type, and the lock must not decide it.
-func withUnlock[T any](ctx context.Context, locker projectLocker, fn func() (T, error)) (T, error) {
-	release, err := locker.Acquire(ctx)
-	if err != nil {
-		var zero T
-		return zero, err
-	}
-	defer func() {
-		if err := release(); err != nil {
-			zerolog.Ctx(ctx).Error().Err(err).Msg("release project lock")
-		}
-	}()
-	return fn()
-}
-
-// withWriteUnlock is withUnlock for a workflow that writes the store: its writes are admitted
-// under the lock, before fn's first.
-func withWriteUnlock[T any](
-	ctx context.Context, locker projectLocker, admission writeAdmission, fn func() (T, error),
-) (T, error) {
-	return withUnlock(ctx, locker, func() (T, error) {
-		if err := admission.AdmitWrite(ctx); err != nil {
-			var zero T
-			return zero, fmt.Errorf("admit the write: %w", err)
-		}
-		return fn()
-	})
-}
-
-// readSessionRef names session id as its record does, refusing one other than the default that
-// has no record: one resolved outside the lock may have been removed since.
-func readSessionRef(ctx context.Context, sessions sessionLookup, id model.SessionID) (model.SessionRef, error) {
-	if id == model.DefaultSession {
-		return model.SessionRef{
-			ID:   model.DefaultSession,
-			Name: model.DefaultSessionName,
-		}, nil
-	}
-	session, found, err := sessions.LoadSession(ctx, id)
-	if err != nil {
-		return model.SessionRef{}, fmt.Errorf("checking session %s: %w", id, err)
-	}
-	if !found {
-		return model.SessionRef{}, fmt.Errorf("%w: %s", model.ErrSessionNotFound, id)
-	}
-	return model.SessionRef{
-		ID:   session.ID,
-		Name: session.Name,
-	}, nil
 }

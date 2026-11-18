@@ -284,19 +284,6 @@ func TestService_requireNoInflight(t *testing.T) {
 	}
 }
 
-func TestRecoveryHint_NamesSessionAndComposeProject(t *testing.T) {
-	// Arrange
-	marker := demoMarker(model.InflightRestoring)
-	marker.Session = demoSession
-	marker.ComposeProject = "demo"
-
-	// Act
-	hint := recoveryHint(marker)
-
-	// Assert
-	assert.Contains(t, hint, "arcave rollback --session "+demoSession.String()+" -p demo "+marker.Safety.String())
-}
-
 func TestService_CreateSavepoint_RefusesADeletedSession(t *testing.T) {
 	// Arrange: --session resolved, then the session was deleted before the lock was taken.
 	locker := &mockLocker{}
