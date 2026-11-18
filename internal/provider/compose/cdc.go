@@ -24,7 +24,6 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/collector/resticrepo"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/eraser"
@@ -143,10 +142,6 @@ func shutdownResticServer(ctx context.Context, server *echo.Echo) {
 // resticDaemon is what a gc's restic openers ask of the daemon. It is the client itself, with no
 // runtime profile: a call added here must depend on nothing podman.API changes.
 type resticDaemon interface {
-	Ping(ctx context.Context) error
-	ListLayerImages(ctx context.Context) ([]composemodel.TaggedImage, error)
-	ListContainerImages(ctx context.Context) ([]composemodel.ContainerImage, error)
-	RemoveImageRef(ctx context.Context, ref model.ImageRef) error
 	RunOneShot(ctx context.Context, spec composemodel.OneShotSpec) error
 	HostLoopbackShared(ctx context.Context) (bool, error)
 }
