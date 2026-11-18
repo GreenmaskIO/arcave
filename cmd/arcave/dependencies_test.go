@@ -39,7 +39,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
-	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/service/core/session"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
@@ -394,19 +394,19 @@ func TestOpenedArcaveProject_writeAdmission(t *testing.T) {
 func TestOpenSessionService_WriteAdmission(t *testing.T) {
 	tests := []struct {
 		name       string
-		run        func(ctx context.Context, svc *core.SessionService) error
+		run        func(ctx context.Context, svc *session.Service) error
 		wantMarked bool
 	}{
 		{
 			name: "a listing marks nothing",
-			run: func(ctx context.Context, svc *core.SessionService) error {
+			run: func(ctx context.Context, svc *session.Service) error {
 				_, err := svc.ListSessions(ctx, model.ListSessionsRequest{})
 				return err
 			},
 		},
 		{
 			name: "a session create marks the project",
-			run: func(ctx context.Context, svc *core.SessionService) error {
+			run: func(ctx context.Context, svc *session.Service) error {
 				_, err := svc.CreateSession(ctx, model.CreateSessionRequest{Name: "exp"})
 				return err
 			},

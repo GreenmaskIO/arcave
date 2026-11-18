@@ -42,6 +42,7 @@ import (
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/service/core/session"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
@@ -56,7 +57,7 @@ type sessionEnv struct {
 	ctx         context.Context
 	projectRoot string
 	storage     config.Storage
-	sessions    *core.SessionService
+	sessions    *session.Service
 	inflight    *inflightrepo.Repository
 	daemon      *client.Client
 	project     string
@@ -81,7 +82,7 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 		ctx:         zerolog.New(io.Discard).WithContext(context.Background()),
 		projectRoot: projectRoot,
 		storage:     storage,
-		sessions: core.NewSessionService(core.SessionDeps{
+		sessions: session.New(session.Deps{
 			Sessions:         sessionrepo.New(arcaveProjectStore),
 			Locker:           lock.New(projectRoot),
 			Inflight:         inflight,

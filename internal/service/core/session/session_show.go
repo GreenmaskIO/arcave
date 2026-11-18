@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package core
+package session
 
 import (
 	"context"
@@ -28,7 +28,7 @@ import (
 
 // ShowSession reports the savepoints of the session req.Session names, by compose project, newest
 // first, marking it current as ListSessions does; shown as the current session, it must resolve.
-func (s *SessionService) ShowSession(ctx context.Context, req model.ShowSessionRequest) (model.SessionDetail, error) {
+func (s *Service) ShowSession(ctx context.Context, req model.ShowSessionRequest) (model.SessionDetail, error) {
 	var (
 		sessions        []model.Session
 		session         model.Session

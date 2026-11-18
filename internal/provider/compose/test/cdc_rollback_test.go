@@ -51,6 +51,7 @@ import (
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/service/core/session"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
@@ -230,7 +231,7 @@ func TestCDCBackend_RollbackInAClonedSession(t *testing.T) {
 	require.NoError(t, err)
 	sourceRepo := objectNames(t, env.composeProjectStore, cdc.NamespaceRepos)
 	arcaveProjectStore := env.arcaveProjectStore(t)
-	sessions := core.NewSessionService(core.SessionDeps{
+	sessions := session.New(session.Deps{
 		Sessions:         sessionrepo.New(arcaveProjectStore),
 		Locker:           lock.New(env.projectRoot),
 		Inflight:         inflightrepo.New(env.projectRoot),

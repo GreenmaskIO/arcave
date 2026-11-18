@@ -33,6 +33,7 @@ import (
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/core/gc"
+	"github.com/greenmaskio/arcave/internal/service/core/session"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/sessionlock"
@@ -201,7 +202,7 @@ func openStatusService(
 // reaches the daemon.
 func openSessionService(
 	ctx context.Context, projectPath string, cfg config.Config, opened *utils.Closers,
-) (*core.SessionService, error) {
+) (*session.Service, error) {
 	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath, opened)
 	if err != nil {
 		return nil, err
@@ -212,8 +213,8 @@ func openSessionService(
 // newSessionService wires the session commands over the arcave project's store.
 func newSessionService(
 	projectPath string, arcaveProject openedArcaveProject, sessions *sessionrepo.Repository,
-) *core.SessionService {
-	return core.NewSessionService(core.SessionDeps{
+) *session.Service {
+	return session.New(session.Deps{
 		Sessions:       sessions,
 		Locker:         lock.New(projectPath),
 		WriteAdmission: arcaveProject.writeAdmission,

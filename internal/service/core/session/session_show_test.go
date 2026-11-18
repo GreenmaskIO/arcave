@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package core
+package session
 
 import (
 	"context"
@@ -263,12 +263,12 @@ func TestSessionService_ShowSession(t *testing.T) {
 			if tt.savepointsOf != (model.SessionID{}) {
 				repo.On("ListSessionSavepoints", mock.Anything, tt.savepointsOf).Return(tt.groups, tt.listErr).Once()
 			}
-			deps := SessionDeps{
+			deps := Deps{
 				NewSessionLocker: newFakeSessionLocker,
 				Current:          &fakePointer{id: tt.current, err: tt.pointerErr},
 				Sessions:         repo,
 			}
-			svc := NewSessionService(deps)
+			svc := New(deps)
 			svc.sessionSavepoints = repo.ListSessionSavepoints
 			req := model.ShowSessionRequest{Session: tt.ref}
 			if tt.currentRef != "" {

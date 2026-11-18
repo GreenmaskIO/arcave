@@ -288,7 +288,7 @@ func TestService_CreateSavepoint_RefusesADeletedSession(t *testing.T) {
 	// Arrange: --session resolved, then the session was deleted before the lock was taken.
 	locker := &mockLocker{}
 	expectLock(locker)
-	sessions := &mockSessionRepo{}
+	sessions := &mockSessionLookup{}
 	sessions.On("LoadSession", mock.Anything, demoSession).Return(model.Session{}, false, nil).Once()
 	svc := New(Deps{SessionLocker: fakeSessionLocker{}, WriteAdmission: fakeWriteAdmission{}, ProjectLocker: locker, Session: demoSession, Sessions: sessions, Inflight: &fakeInflight{}})
 	ctx := zerolog.Nop().WithContext(context.Background())

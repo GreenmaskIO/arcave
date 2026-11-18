@@ -65,11 +65,6 @@ func (fakeSessionLocker) Lock(
 	return ctx, fakeGrantedSessionLock{}, nil
 }
 
-// newFakeSessionLocker opens a fakeSessionLocker for any session.
-func newFakeSessionLocker(model.SessionID) (model.SessionLocker, error) {
-	return fakeSessionLocker{}, nil
-}
-
 // fakeGrantedSessionLock is a session lock that always holds.
 type fakeGrantedSessionLock struct{}
 
@@ -141,52 +136,12 @@ func (f *fakeInflight) Clear(_ context.Context) error {
 	return nil
 }
 
-// fakePointer is a stateful stand-in for .arcave/current_session; the zero value holds none.
-type fakePointer struct {
-	mu       sync.Mutex
-	id       *model.SessionID
-	err      error // returned by every call when set
-	clearErr error // returned by Clear alone when set
-}
+// mockSessionLookup doubles sessionLookup.
+type mockSessionLookup struct{ mock.Mock }
 
-func (f *fakePointer) Get(_ context.Context) (model.SessionID, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.err != nil {
-		return model.SessionID{}, false, f.err
-	}
-	if f.id == nil {
-		return model.SessionID{}, false, nil
-	}
-	return *f.id, true, nil
-}
-
-func (f *fakePointer) Put(_ context.Context, id model.SessionID) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.err != nil {
-		return f.err
-	}
-	f.id = &id
-	return nil
-}
-
-func (f *fakePointer) Clear(_ context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.err != nil {
-		return f.err
-	}
-	if f.clearErr != nil {
-		return f.clearErr
-	}
-	f.id = nil
-	return nil
-}
-
-// pointerAt is a fakePointer holding id.
-func pointerAt(id model.SessionID) *fakePointer {
-	return &fakePointer{id: &id}
+func (m *mockSessionLookup) LoadSession(ctx context.Context, id model.SessionID) (model.Session, bool, error) {
+	args := m.Called(ctx, id)
+	return args.Get(0).(model.Session), args.Bool(1), args.Error(2)
 }
 
 type mockInflight struct{ mock.Mock }
@@ -222,32 +177,6 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
-}
-
-// mockSession doubles provider.Session.
-type mockSession struct {
-	mock.Mock
-	// id answers ID unmocked.
-	id model.SessionID
-}
-
-func (m *mockSession) ID() model.SessionID { return m.id }
-
-func (m *mockSession) Workloads(ctx context.Context) ([]provider.WorkloadName, error) {
-	args := m.Called(ctx)
-	workloads, _ := args.Get(0).([]provider.WorkloadName)
-	return workloads, args.Error(1)
-}
-
-func (m *mockSession) Savepoints(workload provider.WorkloadName) (provider.Savepoints, error) {
-	args := m.Called(workload)
-	savepoints, _ := args.Get(0).(provider.Savepoints)
-	return savepoints, args.Error(1)
-}
-
-func (m *mockSession) FindGarbage(ctx context.Context, dataKinds []model.GarbageDataKind) []provider.Garbage {
-	found, _ := m.Called(ctx, dataKinds).Get(0).([]provider.Garbage)
-	return found
 }
 
 // mockSavepoints doubles provider.Savepoints.

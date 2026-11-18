@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package core
+// Package session runs the session commands of an arcave project: create, fork, list, show, set,
+// unset and remove.
+package session
 
 import (
 	"cmp"
@@ -33,6 +35,21 @@ import (
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
+
+type projectLocker interface {
+	Acquire(ctx context.Context) (release func() error, err error)
+}
+
+// writeAdmission admits a command's writes to the arcave project's store, under the project lock
+// and before the first.
+type writeAdmission interface {
+	AdmitWrite(ctx context.Context) error
+}
+
+// inflightMarkers reads the interrupted-rollback marker, which refuses removing its session.
+type inflightMarkers interface {
+	Get(ctx context.Context) (marker model.InflightMarker, found bool, err error)
+}
 
 type sessionRepository interface {
 	SaveSession(ctx context.Context, session model.Session) error
@@ -61,8 +78,8 @@ type heartbeatReader interface {
 	Read(ctx context.Context) (heartbeat.Heartbeat, error)
 }
 
-// SessionDeps are SessionService's collaborators.
-type SessionDeps struct {
+// Deps are Service's collaborators.
+type Deps struct {
 	Sessions sessionRepository
 	Locker   projectLocker
 	// WriteAdmission admits a workflow's writes to the arcave project's store, before the first.
@@ -84,9 +101,9 @@ type SessionDeps struct {
 	HeartbeatStaleAfter time.Duration
 }
 
-// SessionService manages an arcave project's sessions. It touches no daemon and names
+// Service manages an arcave project's sessions. It touches no daemon and names
 // no compose project.
-type SessionService struct {
+type Service struct {
 	sessions   sessionRepository
 	locker     projectLocker
 	admission  writeAdmission
@@ -105,9 +122,9 @@ type SessionService struct {
 	sessionSavepoints func(ctx context.Context, id model.SessionID) ([]model.ComposeProjectSavepoints, error)
 }
 
-func NewSessionService(deps SessionDeps) *SessionService {
+func New(deps Deps) *Service {
 	staleAfter := cmp.Or(deps.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter)
-	return &SessionService{
+	return &Service{
 		sessions:            deps.Sessions,
 		locker:              deps.Locker,
 		admission:           deps.WriteAdmission,
@@ -138,13 +155,13 @@ func NewSessionService(deps SessionDeps) *SessionService {
 }
 
 // ResolveSession finds the session ref names, as sessionref.Resolve does.
-func (s *SessionService) ResolveSession(ctx context.Context, ref string) (model.Session, error) {
+func (s *Service) ResolveSession(ctx context.Context, ref string) (model.Session, error) {
 	return sessionref.Resolve(ctx, s.sessions, s.current, ref)
 }
 
 // CurrentSession finds the session a command works in when it names none, as ResolveSession does
 // for ref, and where it was named.
-func (s *SessionService) CurrentSession(ctx context.Context, ref model.CurrentSessionRef) (model.CurrentSession, error) {
+func (s *Service) CurrentSession(ctx context.Context, ref model.CurrentSessionRef) (model.CurrentSession, error) {
 	session, source, err := sessionref.ResolveCurrent(ctx, s.sessions, s.current, ref)
 	if err != nil {
 		return model.CurrentSession{}, err
@@ -156,7 +173,7 @@ func (s *SessionService) CurrentSession(ctx context.Context, ref model.CurrentSe
 }
 
 // SetSession makes the session ref names the current one.
-func (s *SessionService) SetSession(ctx context.Context, ref string) (model.Session, error) {
+func (s *Service) SetSession(ctx context.Context, ref string) (model.Session, error) {
 	if ref == "" {
 		return model.Session{}, model.ErrNoSessionRef
 	}
@@ -180,7 +197,7 @@ func (s *SessionService) SetSession(ctx context.Context, ref string) (model.Sess
 
 // UnsetSession clears the current-session pointer, so commands that name no session work in
 // the default one.
-func (s *SessionService) UnsetSession(ctx context.Context) (model.Session, error) {
+func (s *Service) UnsetSession(ctx context.Context) (model.Session, error) {
 	return workflow.WithUnlock(ctx, s.locker, func() (model.Session, error) {
 		if err := s.current.Clear(ctx); err != nil {
 			return model.Session{}, err
@@ -192,7 +209,7 @@ func (s *SessionService) UnsetSession(ctx context.Context) (model.Session, error
 
 // ListSessions returns every session in req.Sort's order, the default the oldest, the one req.Current
 // names marked current; req.All adds the trees without a record, with their heartbeat's status.
-func (s *SessionService) ListSessions(ctx context.Context, req model.ListSessionsRequest) ([]model.SessionSummary, error) {
+func (s *Service) ListSessions(ctx context.Context, req model.ListSessionsRequest) ([]model.SessionSummary, error) {
 	sessions, err := s.sessions.ListSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions: %w", err)
@@ -231,7 +248,7 @@ func (s *SessionService) ListSessions(ctx context.Context, req model.ListSession
 
 // CreateSession commits a session, empty or a clone of req.From: every compose project and
 // savepoint copied, the record written last. The daemon is never touched.
-func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSessionRequest) (model.Session, error) {
+func (s *Service) CreateSession(ctx context.Context, req model.CreateSessionRequest) (model.Session, error) {
 	if err := req.Validate(); err != nil {
 		return model.Session{}, err
 	}
@@ -277,7 +294,7 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 // one an inflight marker names; the default session, the current or pinned one, and a tree still
 // cloning or unknown, only unless forced. Forcing the current one clears the pointer; forcing the
 // default one empties its tree, and it goes on existing.
-func (s *SessionService) RemoveSession(
+func (s *Service) RemoveSession(
 	ctx context.Context, req model.RemoveSessionRequest,
 ) (_ model.RemoveSessionResponse, err error) {
 	ctx, step := progress.Begin(ctx, progress.Step{
@@ -345,7 +362,7 @@ func (s *SessionService) RemoveSession(
 }
 
 // deleteSession measures and deletes the session id, once its lock is still held.
-func (s *SessionService) deleteSession(ctx context.Context, grantedLock model.GrantedSessionLock, id model.SessionID) (int64, error) {
+func (s *Service) deleteSession(ctx context.Context, grantedLock model.GrantedSessionLock, id model.SessionID) (int64, error) {
 	size, err := s.sessions.SessionSize(ctx, id)
 	if err != nil {
 		return 0, err
@@ -365,7 +382,7 @@ func (s *SessionService) deleteSession(ctx context.Context, grantedLock model.Gr
 
 // findRemovable resolves req.Session to a session, or by id to a tree without a record; a tree
 // still cloning or of unknown status is refused unless req.Force.
-func (s *SessionService) findRemovable(ctx context.Context, req model.RemoveSessionRequest) (model.SessionID, error) {
+func (s *Service) findRemovable(ctx context.Context, req model.RemoveSessionRequest) (model.SessionID, error) {
 	session, err := s.ResolveSession(ctx, req.Session)
 	if !errors.Is(err, model.ErrSessionNotFound) {
 		return session.ID, err
@@ -400,7 +417,7 @@ func (s *SessionService) findRemovable(ctx context.Context, req model.RemoveSess
 
 // requireNotInUse refuses id when it is the current or the pinned session, unless req.Force; it
 // reports whether id is the current one. An unreadable pointer names no session.
-func (s *SessionService) requireNotInUse(
+func (s *Service) requireNotInUse(
 	ctx context.Context, id model.SessionID, req model.RemoveSessionRequest,
 ) (bool, error) {
 	pointer, found := s.readCurrentOrNone(ctx)
@@ -423,7 +440,7 @@ func (s *SessionService) requireNotInUse(
 
 // findForkSource is the session req.From names among sessions: RefCurrent the one req.Current
 // names, RefLatest the newest.
-func (s *SessionService) findForkSource(
+func (s *Service) findForkSource(
 	ctx context.Context, sessions []model.Session, req model.CreateSessionRequest,
 ) (model.Session, error) {
 	switch req.From {
@@ -436,7 +453,7 @@ func (s *SessionService) findForkSource(
 
 // readCurrentOrNone reads the pointer for a command it only informs: an unreadable one is
 // logged and read as none.
-func (s *SessionService) readCurrentOrNone(ctx context.Context) (model.SessionID, bool) {
+func (s *Service) readCurrentOrNone(ctx context.Context) (model.SessionID, bool) {
 	id, found, err := sessionref.ReadCurrent(ctx, s.current)
 	if err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("reading the current session")
@@ -448,7 +465,7 @@ func (s *SessionService) readCurrentOrNone(ctx context.Context) (model.SessionID
 // findCurrent is the session ref names among sessions, or the current session for an empty ref, and
 // where it was named. A keyword is refused; a ref naming no session, or a pointer that cannot be read
 // or followed, marks none, with a warning.
-func (s *SessionService) findCurrent(
+func (s *Service) findCurrent(
 	ctx context.Context, sessions []model.Session, ref model.CurrentSessionRef,
 ) (model.SessionID, *model.CurrentSessionSource, error) {
 	session, source, err := sessionref.ResolveCurrent(ctx, sessionref.Listed(sessions), s.current, ref)
@@ -472,7 +489,7 @@ type sessionMark struct {
 }
 
 // summarize counts what the session holds, safety snapshots excluded, and measures its tree.
-func (s *SessionService) summarize(
+func (s *Service) summarize(
 	ctx context.Context, session model.Session, mark sessionMark,
 ) (model.SessionSummary, error) {
 	groups, err := s.sessionSavepoints(ctx, session.ID)
@@ -549,7 +566,7 @@ func readSessionSavepoints(
 }
 
 // listUncommitted summarizes every tree without a record, with what its heartbeat says of it.
-func (s *SessionService) listUncommitted(ctx context.Context) ([]model.SessionSummary, error) {
+func (s *Service) listUncommitted(ctx context.Context) ([]model.SessionSummary, error) {
 	ids, err := s.sessions.ListUncommittedSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions: %w", err)
@@ -584,7 +601,7 @@ func (s *SessionService) listUncommitted(ctx context.Context) ([]model.SessionSu
 
 // readTreeStatus derives a recordless tree's status from its heartbeat; an unknown status comes
 // with the reason.
-func (s *SessionService) readTreeStatus(
+func (s *Service) readTreeStatus(
 	ctx context.Context, id model.SessionID,
 ) (model.SessionStatus, heartbeat.Heartbeat, error) {
 	reader, err := s.heartbeatReader(id)
@@ -643,7 +660,7 @@ func requireFreeName(sessions []model.Session, name string) error {
 
 // forkUnderSourceLock forks session from its source under the source's lock: a gc there must not
 // delete what the copy reads. The new session is no one's to touch until its record lands.
-func (s *SessionService) forkUnderSourceLock(ctx context.Context, session model.Session) (err error) {
+func (s *Service) forkUnderSourceLock(ctx context.Context, session model.Session) (err error) {
 	// Outside the source's lock, and the heartbeat's cancellation: the root says why either ended it.
 	ctx, step := progress.Begin(ctx, progress.Step{
 		Kind: kindSessionFork,
@@ -669,7 +686,7 @@ func (s *SessionService) forkUnderSourceLock(ctx context.Context, session model.
 // forkSession copies session.From's tree under session.ID and commits session once the source's
 // lock is still held, a heartbeat kept beside the tree throughout. A failure leaves the tree to a
 // gc, its heartbeat marked failed.
-func (s *SessionService) forkSession(ctx context.Context, grantedLock model.GrantedSessionLock, session model.Session) error {
+func (s *Service) forkSession(ctx context.Context, grantedLock model.GrantedSessionLock, session model.Session) error {
 	source := session.From.Session
 	if err := s.requireEmptyForkTree(ctx, session.ID); err != nil {
 		return fmt.Errorf("cloning session %s: %w", source, err)
@@ -717,7 +734,7 @@ func (s *SessionService) forkSession(ctx context.Context, grantedLock model.Gran
 }
 
 // requireEmptyForkTree refuses a fork's tree that holds anything, a heartbeat included.
-func (s *SessionService) requireEmptyForkTree(ctx context.Context, id model.SessionID) error {
+func (s *Service) requireEmptyForkTree(ctx context.Context, id model.SessionID) error {
 	empty, err := s.sessions.IsSessionTreeEmpty(ctx, id)
 	if err != nil {
 		return fmt.Errorf("checking the tree of session %s: %w", id, err)
