@@ -27,6 +27,7 @@ Take a savepoint without restarting a service, prepare the application for it wi
 - **gc deletes retired safety snapshots last.** It picks the ones past `gc.safety_snapshots.retain_recent` in a new `gc.retain` step, after every collector has looked, and deletes them after every compose project's other kinds. Shared data only a retired one used is collected by the next run. See [arcave gc](https://www.greenmask.io/docs/arcave/reference/cli/gc/).
 - **Under the hood, arcave now runs its workflows over a provider contract**, with docker compose as the one provider behind it. Savepoint records and command results are unchanged.
 - **`github.com/greenmaskio/storages` 0.5.1**, with the AWS SDK of the `s3` storage at `aws-sdk-go-v2` 1.48.0 and `service/s3` 1.114.10.
+- **Dependencies:** docker compose 5.7.1, `docker/cli` 29.10.0, `moby/moby/api` 1.57.0 and `moby/moby/client` 0.6.3, `lipgloss` 2.1.1, `klauspost/compress` 1.20.4, `labstack/echo` 4.16.5 and the OpenTelemetry SDK 1.47.0.
 
 ### Fixes
 
