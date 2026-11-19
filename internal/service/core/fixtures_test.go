@@ -16,6 +16,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -33,28 +34,24 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 )
 
+// The provider's own refusals, which core passes through without matching.
+var (
+	errUnsupportedDaemon = errors.New("unsupported docker daemon")
+	errLeftoverVolumes   = errors.New("compose project is not running but its volumes survive")
+)
+
 // The project every workflow test runs against: one service mounting one named
 // volume.
 // demoArcaveProject is the arcave project the deployment labels name.
 const demoArcaveProject model.ArcaveProjectName = "demo-arcave"
 
 const (
-	demoProject    = "demo"
-	demoService    = "db"
-	demoTarget     = "/data"
-	demoVolumeName = "demo_db"
+	demoProject = "demo"
+	demoService = "db"
+	demoTarget  = "/data"
 	// demoVolumeSize is the size demoRecord's capture reported.
 	demoVolumeSize = 4096
 )
-
-// demoVolume is the unit, in the form the mock tests address it by.
-func demoVolume() model.Volume {
-	return model.Volume{
-		ObjectID: "volume-named-" + demoVolumeName,
-		Backend:  model.SnapshotBackendFullCopy,
-		Named:    &model.VolumePropertiesNamed{VolumeName: demoVolumeName},
-	}
-}
 
 // demoRecord is a committed savepoint of demoVolume.
 func demoRecord() model.Savepoint {
@@ -62,19 +59,19 @@ func demoRecord() model.Savepoint {
 		ID:        "019e843e-1650-7000-8000-000000000000",
 		Name:      "sp",
 		CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC),
-		Stats: []model.SnapshotStat{{
-			Volume:    demoVolume(),
-			Type:      model.SnapshotBackendFullCopy,
-			SizeBytes: demoVolumeSize,
-			Payload:   "sp-payload",
-		}},
-		Spec: demoSpecRef(),
+		Provider:  demoProviderName,
+		Summary:   demoSavepointSummary(),
 	}
 }
 
-// demoSpecRef names the artifact every committed fixture carries, digest included.
-func demoSpecRef() *model.SpecRef {
-	return &model.SpecRef{Format: model.SpecFormatComposeYAML}
+// demoProviderName is the provider every committed fixture names; core reads nothing by it.
+const demoProviderName = "fake"
+
+// demoSavepointSummary is what the provider sums every committed fixture up as: demoVolume alone.
+func demoSavepointSummary() model.SavepointSummary {
+	return model.SavepointSummary{
+		Units: []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: demoVolumeSize}},
+	}
 }
 
 // demoSafetySnapshot is a committed safety snapshot of demoVolume: an ordinary
@@ -86,8 +83,8 @@ func demoSafetySnapshot() model.Savepoint {
 		Labels:                safetySnapshotLabels(),
 		TakenBeforeRollbackTo: &model.SavepointRef{ID: demoRecord().ID, Name: demoRecord().Name},
 		CreatedAt:             time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),
-		Stats:                 []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}},
-		Spec:                  demoSpecRef(),
+		Provider:              demoProviderName,
+		Summary:               demoSavepointSummary(),
 	}
 }
 
@@ -187,7 +184,10 @@ func emptySavepoints() *mockSavepoints {
 
 // demoSummary is what building demoRecord restores.
 func demoSummary() provider.PreparedSummary {
-	return provider.PreparedSummary{Volumes: []model.Volume{demoVolume()}}
+	return provider.PreparedSummary{
+		Restored: model.RestoreSummary{Units: []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1}}},
+		Detail:   json.RawMessage(`{"volumes":[{"object_id":"volume-named-demo_db"}]}`),
+	}
 }
 
 // newDeploymentOf is the deployment core hands the provider for a build of savepoint in the

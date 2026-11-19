@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package model
+package config
 
 // ParseVolumeBackend validates a volume backend token, as config and labels spell it.
 func ParseVolumeBackend(token string) (SnapshotBackendKind, bool) {
@@ -23,17 +23,6 @@ func ParseVolumeBackend(token string) (SnapshotBackendKind, bool) {
 		return SnapshotBackendUnknown, false
 	}
 }
-
-// ImageBackendKind names the layout a writable layer is stored in. It travels in
-// the savepoint record, so its values are the wire contract.
-type ImageBackendKind string
-
-const (
-	// ImageBackendDedupCopy splits the archive into the shared blob store.
-	ImageBackendDedupCopy ImageBackendKind = "dedupcopy"
-	// ImageBackendFullCopy stores the archive whole.
-	ImageBackendFullCopy ImageBackendKind = "fullcopy"
-)
 
 // ParseImageBackend validates an image backend token.
 func ParseImageBackend(token string) (ImageBackendKind, bool) {
@@ -66,3 +55,49 @@ func ParseCaptureMode(token string) (CaptureMode, bool) {
 		return "", false
 	}
 }
+
+// SnapshotBackendKind names the mechanism that captures a volume, assigned where a savepoint's
+// units are decided, never by introspection.
+type SnapshotBackendKind string
+
+// The tokens snapshot.backend accepts, and the kind of a token it does not.
+const (
+	// SnapshotBackendFullCopy stores each mount's tar stream whole, in the format
+	// backends.fullcopy.compression names.
+	SnapshotBackendFullCopy SnapshotBackendKind = "fullcopy"
+	// SnapshotBackendCDC captures into a restic repository that outlives any one
+	// savepoint, writing only the chunks that changed.
+	SnapshotBackendCDC     SnapshotBackendKind = "cdc"
+	SnapshotBackendUnknown SnapshotBackendKind = "unknown"
+)
+
+// HookOnError is what a failed hook does to the capture.
+type HookOnError string
+
+const (
+	// HookOnErrorFail fails the workflow.
+	HookOnErrorFail HookOnError = "fail"
+	// HookOnErrorContinue warns and goes on.
+	HookOnErrorContinue HookOnError = "continue"
+)
+
+// ParseHookOnError validates an on-error token, as config and labels spell it.
+func ParseHookOnError(token string) (HookOnError, bool) {
+	switch onError := HookOnError(token); onError {
+	case HookOnErrorFail, HookOnErrorContinue:
+		return onError, true
+	default:
+		return "", false
+	}
+}
+
+// ImageBackendKind names the layout a writable layer is stored in. It travels in
+// the savepoint record, so its values are the wire contract.
+type ImageBackendKind string
+
+const (
+	// ImageBackendDedupCopy splits the archive into the shared blob store.
+	ImageBackendDedupCopy ImageBackendKind = "dedupcopy"
+	// ImageBackendFullCopy stores the archive whole.
+	ImageBackendFullCopy ImageBackendKind = "fullcopy"
+)

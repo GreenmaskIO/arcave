@@ -15,16 +15,8 @@
 package model
 
 import (
-	"strings"
-
 	"github.com/distribution/reference"
 )
-
-// RestoredLayerTagNamespace opens every tag a rollback puts on a restored layer.
-const RestoredLayerTagNamespace = "arcave"
-
-// RestoredLayerTagPrefix opens the tag half of a restored layer's tag; the savepoint id follows.
-const RestoredLayerTagPrefix = "sp-"
 
 // ImageRef is an image reference as the daemon reports it.
 type ImageRef string
@@ -37,29 +29,4 @@ func (m ImageRef) Familiar() ImageRef {
 		return m
 	}
 	return ImageRef(reference.FamiliarString(named))
-}
-
-// IsRestoredLayerTag reports whether m is the tag a rollback put on a restored layer:
-// arcave/…:sp-<savepoint id>.
-func (m ImageRef) IsRestoredLayerTag() bool {
-	_, ok := m.RestoredLayerSavepoint()
-	return ok
-}
-
-// RestoredLayerSavepoint is the savepoint a restored layer's tag was put on for; ok is false
-// for any other ref.
-func (m ImageRef) RestoredLayerSavepoint() (SavepointID, bool) {
-	ref := string(m.Familiar())
-	if !strings.HasPrefix(ref, RestoredLayerTagNamespace+"/") {
-		return "", false
-	}
-	idx := strings.LastIndex(ref, ":")
-	if idx < 0 {
-		return "", false
-	}
-	id, ok := strings.CutPrefix(ref[idx+1:], RestoredLayerTagPrefix)
-	if !ok || SavepointID(id).Validate() != nil {
-		return "", false
-	}
-	return SavepointID(id), true
 }

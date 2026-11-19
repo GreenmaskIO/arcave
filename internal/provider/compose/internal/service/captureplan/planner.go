@@ -30,6 +30,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend"
@@ -54,7 +55,7 @@ type specCodec interface {
 type Deps struct {
 	ProjectAssembler projectAssembler
 	SpecCodec        specCodec
-	BackendRegistry  model.SnapshotBackendRegistry
+	BackendRegistry  composemodel.SnapshotBackendRegistry
 	// CaptureDefaults are the backends a unit no arcave.* label names is captured by.
 	CaptureDefaults capturepolicy.CaptureDefaults
 	// Store is the compose project's store, every backend's root.
@@ -65,7 +66,7 @@ type Deps struct {
 type Planner struct {
 	projectAssembler projectAssembler
 	specCodec        specCodec
-	backendRegistry  model.SnapshotBackendRegistry
+	backendRegistry  composemodel.SnapshotBackendRegistry
 	captureDefaults  capturepolicy.CaptureDefaults
 	store            storages.Storager
 }
@@ -88,8 +89,8 @@ type imageSet struct {
 	writableLayers []composemodel.WritableLayerCaptureRequest
 	// upstreams are the distinct images the captured services' compose file named.
 	upstreams             []composemodel.ImageCaptureRequest
-	skippedWritableLayers []model.SkippedWritableLayer
-	skippedImages         []model.SkippedImage
+	skippedWritableLayers []composemodel.SkippedWritableLayer
+	skippedImages         []composemodel.SkippedImage
 }
 
 // Plan decides, off introspection, what a capture of the live compose project takes and leaves
@@ -97,7 +98,7 @@ type imageSet struct {
 // replacement's policy, which follows the config past a bad label; any other capture refuses one, a
 // provider.CapturePolicyError.
 func (s *Planner) Plan(
-	ctx context.Context, introspection composemodel.IntrospectionResult, restoring *model.Savepoint,
+	ctx context.Context, introspection composemodel.IntrospectionResult, restoring *composemodel.Savepoint,
 ) (composemodel.Plan, error) {
 	var (
 		capturePolicy composemodel.CapturePolicy
@@ -126,7 +127,7 @@ func (s *Planner) Plan(
 // labels' decisions, every unit the restore overwrites kept, every service stopped and no hook run.
 // A label it cannot read leaves the decisions to the config and is returned, labelsIgnored.
 func (s *Planner) newReplacementPolicy(
-	ctx context.Context, introspection composemodel.IntrospectionResult, restoring model.Savepoint,
+	ctx context.Context, introspection composemodel.IntrospectionResult, restoring composemodel.Savepoint,
 ) (composemodel.CapturePolicy, error) {
 	labelled, labelsIgnored := capturepolicy.Resolve(ctx, introspection, s.captureDefaults)
 	if labelsIgnored != nil {
@@ -136,7 +137,7 @@ func (s *Planner) newReplacementPolicy(
 	return composemodel.CapturePolicy{
 		VolumeBackend:        labelled.VolumeBackend,
 		WritableLayerBackend: labelled.WritableLayerBackend,
-		Mode:                 model.CaptureModeStop,
+		Mode:                 composeconfig.CaptureModeStop,
 		Services:             newStoppedServices(labelled.Services),
 		NamedVolumes:         newKeptNamedVolumes(labelled, introspection, restored),
 		Mounts:               newKeptMounts(labelled, introspection, restored),
@@ -153,7 +154,7 @@ func warnLabelsIgnored(ctx context.Context, labelsIgnored error) {
 }
 
 // newRestoredObjectIDs are the volumes savepoint restores into, by object id.
-func newRestoredObjectIDs(savepoint model.Savepoint) map[string]bool {
+func newRestoredObjectIDs(savepoint composemodel.Savepoint) map[string]bool {
 	restored := map[string]bool{}
 	for _, volume := range composemodel.VolumesOf(savepoint) {
 		restored[volume.ObjectID] = true
@@ -166,7 +167,7 @@ func newRestoredObjectIDs(savepoint model.Savepoint) map[string]bool {
 func newStoppedServices(decisions map[string]composemodel.ServiceDecision) map[string]composemodel.ServiceDecision {
 	services := make(map[string]composemodel.ServiceDecision, len(decisions))
 	for name, decision := range decisions {
-		decision.Mode = model.CaptureModeStop
+		decision.Mode = composeconfig.CaptureModeStop
 		decision.PreCapture = nil
 		decision.PostCapture = nil
 		services[name] = decision
@@ -204,7 +205,7 @@ func newKeptMounts(
 		for _, mount := range svc.Volumes {
 			ref := composemodel.MountRef{Service: svc.Name, Replica: mount.Replica, Target: mount.Target}
 			decision := capturePolicy.DecideMount(ref)
-			if mount.Type != model.VolumeTypeNamed && restored[mount.ObjectID(svc.Name)] && !decision.Capture {
+			if mount.Type != composemodel.VolumeTypeNamed && restored[mount.ObjectID(svc.Name)] && !decision.Capture {
 				mounts[ref] = newKeptDecision(decision)
 			}
 		}
@@ -271,7 +272,7 @@ func (s *Planner) newPlan(
 		WritableLayers: images.writableLayers,
 		Services:       newServiceHolds(introspection, capturePolicy),
 		Containers:     containers,
-		NotCovered: model.NotCovered{
+		NotCovered: composemodel.NotCovered{
 			Mounts:                 notCovered.Mounts,
 			ServicesWithoutVolumes: notCovered.ServicesWithoutVolumes,
 			ReplicaGaps:            newReplicaGaps(ctx, introspection),
@@ -346,7 +347,7 @@ func newServiceHolds(introspection composemodel.IntrospectionResult, capturePoli
 		decision := capturePolicy.DecideService(svc.Name)
 		holds = append(holds, composemodel.ServiceHold{
 			Service:     svc.Name,
-			Mode:        cmp.Or(decision.Mode, model.CaptureModeStop),
+			Mode:        cmp.Or(decision.Mode, composeconfig.CaptureModeStop),
 			Running:     running,
 			Idle:        idle,
 			PreCapture:  decision.PreCapture,
@@ -357,8 +358,8 @@ func newServiceHolds(introspection composemodel.IntrospectionResult, capturePoli
 }
 
 // newReplicaGaps warns of and returns each service missing a replica below its highest one.
-func newReplicaGaps(ctx context.Context, introspection composemodel.IntrospectionResult) []model.ReplicaGap {
-	var gaps []model.ReplicaGap
+func newReplicaGaps(ctx context.Context, introspection composemodel.IntrospectionResult) []composemodel.ReplicaGap {
+	var gaps []composemodel.ReplicaGap
 	for _, svc := range introspection.Project.Services {
 		numbers := make([]int, 0, len(svc.Containers))
 		for _, container := range svc.Containers {
@@ -372,7 +373,7 @@ func newReplicaGaps(ctx context.Context, introspection composemodel.Introspectio
 		zerolog.Ctx(ctx).Warn().Str("service", svc.Name).Ints("replicas", numbers).Ints("missing", missing).
 			Msg("some replicas of this service are gone (removed, or exited and cleaned up); " +
 				"only the remaining ones are captured, and a rollback brings back exactly these, under the same names")
-		gaps = append(gaps, model.ReplicaGap{
+		gaps = append(gaps, composemodel.ReplicaGap{
 			Service:  svc.Name,
 			Replicas: numbers,
 			Missing:  missing,

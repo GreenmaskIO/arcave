@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 func newTestInflightMarkerVolume(safety model.SavepointID) inflightMarkerVolume {
@@ -69,7 +70,7 @@ func TestParseInflightMarkerVolume(t *testing.T) {
 	valid := newTestInflightMarkerVolume("019e843e-1650-7000-8000-000000000002")
 	tests := []struct {
 		name    string
-		label   model.SystemLabel
+		label   composemodel.SystemLabel
 		value   string
 		want    inflightMarkerVolume
 		wantErr string

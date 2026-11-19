@@ -15,7 +15,6 @@
 package status
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/greenmaskio/storages"
@@ -34,30 +33,6 @@ const (
 	demoService    = "db"
 	demoVolumeName = "demo_db"
 )
-
-// demoVolume is a named volume of demoService.
-func demoVolume() model.Volume {
-	return model.Volume{
-		ObjectID: "volume-named-" + demoVolumeName,
-		Backend:  model.SnapshotBackendFullCopy,
-		Named:    &model.VolumePropertiesNamed{VolumeName: demoVolumeName},
-	}
-}
-
-// demoWritableLayer is the writable layer of demoService's one replica.
-func demoWritableLayer() model.WritableLayer {
-	return model.WritableLayer{
-		Service:          demoService,
-		Replica:          1,
-		ContainerID:      "c0ffee",
-		ContainerName:    fmt.Sprintf("%s-%s-%d", demoProject, demoService, 1),
-		CommittedImageID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		ImageBackend:     model.ImageBackendDedupCopy,
-		UpstreamImageID:  "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-		UpstreamImageRef: "postgres:16",
-		SizeBytes:        4096,
-	}
-}
 
 func newDirStore(t *testing.T) storages.Storager {
 	t.Helper()

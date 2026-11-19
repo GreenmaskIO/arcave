@@ -19,6 +19,7 @@ import (
 	"context"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend"
 	"github.com/greenmaskio/arcave/internal/utils"
@@ -30,11 +31,11 @@ type Collector struct{}
 func New() *Collector { return &Collector{} }
 
 func (s *Collector) Kind() model.GarbageCollectorKind {
-	return model.GarbageCollectorKindOCIImages
+	return composemodel.GarbageCollectorKindOCIImages
 }
 
 func (s *Collector) DataKind() model.GarbageDataKind {
-	return model.GarbageDataKindUpstreamImages
+	return composemodel.GarbageDataKindUpstreamImages
 }
 
 // Find names every stored image no record names.
@@ -51,14 +52,14 @@ func (s *Collector) Find(_ context.Context, scope garbage.ComposeProjectScope) (
 			continue
 		}
 		ops = append(ops, model.GarbageOp{
-			Action:       model.GarbageActionDeleteImage,
+			Action:       composemodel.GarbageActionDeleteImage,
 			Target:       image.Key,
 			Bytes:        utils.New(image.Bytes),
-			Reason:       model.GarbageReasonUnreferenced,
+			Reason:       composemodel.GarbageReasonUnreferenced,
 			LastModified: image.LastModified,
 		})
 	}
-	return model.OCIImageStat{
+	return composemodel.OCIImageStat{
 		GarbageFindings: model.GarbageFindings{Ops: ops},
 		Live:            liveCount,
 	}, nil

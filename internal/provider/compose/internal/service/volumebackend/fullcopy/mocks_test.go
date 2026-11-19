@@ -20,7 +20,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // Every mock forwards all of its seam's arguments to Called, ctx included;
@@ -29,22 +29,22 @@ import (
 type mockVolumeStreamer struct{ mock.Mock }
 
 func (m *mockVolumeStreamer) ResolveMountSource(
-	ctx context.Context, v model.Volume,
-) (model.MountSource, error) {
+	ctx context.Context, v composemodel.Volume,
+) (composemodel.MountSource, error) {
 	args := m.Called(ctx, v)
-	src, _ := args.Get(0).(model.MountSource)
+	src, _ := args.Get(0).(composemodel.MountSource)
 	return src, args.Error(1)
 }
 
 func (m *mockVolumeStreamer) OpenVolume(
-	ctx context.Context, src model.MountSource,
+	ctx context.Context, src composemodel.MountSource,
 ) (io.ReadCloser, error) {
 	args := m.Called(ctx, src)
 	rc, _ := args.Get(0).(io.ReadCloser)
 	return rc, args.Error(1)
 }
 
-func (m *mockVolumeStreamer) WriteVolume(ctx context.Context, src model.MountSource, r io.Reader) error {
+func (m *mockVolumeStreamer) WriteVolume(ctx context.Context, src composemodel.MountSource, r io.Reader) error {
 	return m.Called(ctx, src, r).Error(0)
 }
 

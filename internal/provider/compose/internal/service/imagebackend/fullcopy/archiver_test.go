@@ -17,10 +17,11 @@ package fullcopy_test
 import (
 	"bytes"
 	"context"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
@@ -28,13 +29,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend/fullcopy"
 )
 
 const (
-	imageID = model.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	imageID = composemodel.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	archive = "a save archive, verbatim"
 )
 
@@ -78,7 +78,7 @@ func TestArchiver_Load_RefusesWhatIsNotItsOwn(t *testing.T) {
 	tests := []struct {
 		name     string
 		manifest *imagebackend.Manifest
-		imageID  model.ImageDigestID
+		imageID  composemodel.ImageDigestID
 		wantErr  error
 	}{
 		{

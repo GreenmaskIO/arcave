@@ -88,7 +88,7 @@ func newBinaryEnv(t *testing.T, env *composeProject) *hooksEnv {
 
 	root := t.TempDir()
 	runArcave(t, root, nil, "init", "--name", env.project)
-	writeStorageConfig(t, root, startDirectoryStorage(t).file, composeconfig.SnapshotBackendFullCopy)
+	writeStorageConfig(t, root, startDirectoryStorage(t).file, string(composeconfig.SnapshotBackendFullCopy))
 	return &hooksEnv{
 		composeProject: env,
 		root:           root,
@@ -256,16 +256,17 @@ func TestSavepoint_PreHookContinue(t *testing.T) {
 	})
 	require.GreaterOrEqual(t, i, 0, "warned: %v", stream.warnedMsgs())
 	assert.True(t, stream.warned[i].InResult)
-	require.NotNil(t, stream.savepoint.NotCovered)
-	require.Len(t, stream.savepoint.NotCovered.FailedHooks, 1)
-	assert.Equal(t, model.FailedHook{
+	notCovered := detailOf(t, stream.savepoint).NotCovered
+	require.NotNil(t, notCovered)
+	require.Len(t, notCovered.FailedHooks, 1)
+	assert.Equal(t, detailFailedHook{
 		Service:   "app",
 		Replica:   1,
 		Container: env.project + "-app-1",
-		Hook:      model.HookPhasePreCapture,
+		Hook:      "pre-capture",
 		ExitCode:  new(3),
 		Error:     "exit 3: boom",
-	}, stream.savepoint.NotCovered.FailedHooks[0])
+	}, notCovered.FailedHooks[0])
 }
 
 // The failure let through is in the result, as JSON and as text, and in the list.
@@ -287,16 +288,18 @@ func TestSavepoint_PreHookContinueInResult(t *testing.T) {
 	require.Zero(t, asJSON.exitCode, "%s", asJSON.stderr)
 	var savepoint model.Savepoint
 	require.NoError(t, json.Unmarshal(asJSON.stdout, &savepoint))
-	require.NotNil(t, savepoint.NotCovered)
-	require.Len(t, savepoint.NotCovered.FailedHooks, 1)
-	assert.Equal(t, new(3), savepoint.NotCovered.FailedHooks[0].ExitCode)
+	notCovered := detailOf(t, savepoint).NotCovered
+	require.NotNil(t, notCovered)
+	require.Len(t, notCovered.FailedHooks, 1)
+	assert.Equal(t, new(3), notCovered.FailedHooks[0].ExitCode)
 	require.Zero(t, asText.exitCode, "%s", asText.stderr)
 	assert.Contains(t, string(asText.stdout), "app-1: pre-capture hook failed (exit 3: boom), captured anyway")
 	assert.Contains(t, string(asText.stdout), "fix the hook, or set arcave.hook.pre-capture.on-error: fail")
 	require.Len(t, listed, 2)
 	for _, sp := range listed {
-		require.NotNil(t, sp.NotCovered, sp.Name)
-		assert.Len(t, sp.NotCovered.FailedHooks, 1, sp.Name)
+		listedNotCovered := detailOf(t, sp).NotCovered
+		require.NotNil(t, listedNotCovered, sp.Name)
+		assert.Len(t, listedNotCovered.FailedHooks, 1, sp.Name)
 	}
 }
 
@@ -340,7 +343,8 @@ func TestSavepoint_PostHookContinueWarns(t *testing.T) {
 	assert.Contains(t, string(run.stderr), "post-capture hook of app-1 failed: exit 1: lock held")
 	var savepoint model.Savepoint
 	require.NoError(t, json.Unmarshal(run.stdout, &savepoint))
-	assert.True(t, savepoint.NotCovered == nil || len(savepoint.NotCovered.FailedHooks) == 0,
+	notCovered := detailOf(t, savepoint).NotCovered
+	assert.True(t, notCovered == nil || len(notCovered.FailedHooks) == 0,
 		"a post-capture failure is not in the record")
 }
 

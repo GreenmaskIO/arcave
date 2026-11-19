@@ -17,6 +17,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -39,11 +40,10 @@ var featSession = model.SessionRef{
 // demoOwnDeployment is a build of demoRecord in the default session of demoArcaveProject.
 func demoOwnDeployment() model.SavepointDeployment {
 	return model.SavepointDeployment{
-		DeployedAt:      time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC),
-		ArcaveProject:   demoArcaveProject,
-		Session:         defaultSessionRef,
-		Savepoint:       model.DeployedSavepoint{ID: demoRecord().ID, Name: demoRecord().Name, CreatedAt: demoRecord().CreatedAt},
-		ServiceReplicas: map[string][]int{"db": {1}},
+		DeployedAt:    time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC),
+		ArcaveProject: demoArcaveProject,
+		Session:       defaultSessionRef,
+		Savepoint:     model.DeployedSavepoint{ID: demoRecord().ID, Name: demoRecord().Name, CreatedAt: demoRecord().CreatedAt},
 	}
 }
 
@@ -110,7 +110,7 @@ func TestDownService_Down_ChecksTheOwnerFirst(t *testing.T) {
 		err        error
 	}{
 		{name: "another session's", deployment: &foreign, err: &model.DeployedElsewhereError{ArcaveProject: demoArcaveProject, Deployment: foreign}},
-		{name: "compose's own", err: &model.NotDeployedByArcaveError{Replicas: []string{"db-1"}}},
+		{name: "compose's own", err: fmt.Errorf("%w: no deployment labels on db-1", model.ErrNotDeployedByArcave)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -195,7 +195,7 @@ func TestDownService_Down_UnderAMarker(t *testing.T) {
 		mock.InOrder(
 			inflight.On("Get", mock.Anything).Return(*standing, true, nil).Once(),
 			stages.expectSurvey(demoPresent(), true, nil),
-			stages.expectOwner(nil, &model.NotDeployedByArcaveError{Replicas: []string{"db-1"}}),
+			stages.expectOwner(nil, fmt.Errorf("%w: no deployment labels on db-1", model.ErrNotDeployedByArcave)),
 			stages.expectDrop(nil),
 			inflight.On("Clear", mock.Anything).Return(nil).Once(),
 			stages.expectRemoveRestoredLayers([]model.ImageRef{}, nil),
@@ -222,7 +222,7 @@ func TestDownService_Down_DropFailure(t *testing.T) {
 	stages := newMockStages(false)
 	stages.expectSurvey(demoPresent(), true, nil)
 	stages.expectOwner(nil, nil)
-	left := &model.ComposeProjectLeftError{Volumes: []string{"demo_db"}, Cause: errors.New("volume is in use")}
+	left := fmt.Errorf("%w: volumes demo_db: volume is in use", model.ErrComposeProjectLeft)
 	stages.expectDrop(left)
 	standing := &model.InflightMarker{Phase: model.InflightRestoring, ComposeProject: demoProject, Target: demoRecord().ID}
 	inflight := &fakeInflight{marker: standing}

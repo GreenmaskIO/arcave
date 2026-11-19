@@ -28,11 +28,23 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
+// The provider's garbage vocabulary, as a fake provider spells it.
+const (
+	dataKindSavepointData  model.GarbageDataKind = "savepoint-data"
+	dataKindImageLayers    model.GarbageDataKind = "image-layers"
+	dataKindUpstreamImages model.GarbageDataKind = "upstream-images"
+	actionDeleteObject     model.GarbageAction   = "delete-object"
+	reasonUnreferenced     model.GarbageReason   = "unreferenced"
+)
+
+// fakeGarbageStat is a provider's stat with nothing of its own beside the findings.
+type fakeGarbageStat struct{ model.GarbageFindings }
+
 func TestGCHandler_GarbageCollect(t *testing.T) {
-	req := model.GarbageCollectRequest{DryRun: true, DataKinds: []model.GarbageDataKind{model.GarbageDataKindUpstreamImages}}
+	req := model.GarbageCollectRequest{DryRun: true, DataKinds: []model.GarbageDataKind{dataKindUpstreamImages}}
 	res := model.GarbageCollectResult{DryRun: true, Session: model.DefaultSession}
 	deleted := model.GarbageCollectResult{Session: model.DefaultSession, Reports: []model.GarbageReport{{
-		DataKind: model.GarbageDataKindSavepointData,
+		DataKind: dataKindSavepointData,
 		Deletion: &model.GarbageDeletion{NotRun: 1},
 	}}}
 	svcErr := errors.New("store unreachable")
@@ -90,10 +102,10 @@ func TestGCOutputSchema_AcceptsADetail(t *testing.T) {
 	require.NoError(t, err)
 	size := int64(3)
 	result := model.GarbageCollectResult{Session: model.DefaultSession, Reports: []model.GarbageReport{{
-		DataKind: model.GarbageDataKindImageLayers, ComposeProject: "demo", Summary: model.GarbageSummary{Found: 1, Bytes: &size},
-		Detail: model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{{
-			Action: model.GarbageActionDeleteObject, Target: "shared/oci/blobs/sha256/ab", Bytes: &size,
-			Reason: model.GarbageReasonUnreferenced, LastModified: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
+		DataKind: dataKindImageLayers, ComposeProject: "demo", Summary: model.GarbageSummary{Found: 1, Bytes: &size},
+		Detail: fakeGarbageStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{{
+			Action: actionDeleteObject, Target: "shared/oci/blobs/sha256/ab", Bytes: &size,
+			Reason: reasonUnreferenced, LastModified: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
 		}}}},
 		Deletion: &model.GarbageDeletion{
 			Deleted: []model.GarbageDeleted{{Target: "shared/oci/blobs/sha256/ab", Bytes: &size}},
@@ -110,37 +122,4 @@ func TestGCOutputSchema_AcceptsADetail(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-}
-
-// A request the service would refuse is refused before anything is opened.
-func TestValidateGarbageCollectRequest(t *testing.T) {
-
-	tests := []struct {
-		name    string
-		req     model.GarbageCollectRequest
-		wantErr error
-		wantMsg string
-	}{
-		{name: "a dry run", req: model.GarbageCollectRequest{DryRun: true}},
-		{name: "one that deletes", req: model.GarbageCollectRequest{}},
-		{
-			name:    "an unknown kind",
-			req:     model.GarbageCollectRequest{DryRun: true, DataKinds: []model.GarbageDataKind{"restic"}},
-			wantErr: model.ErrInvalidGarbageCollectRequest,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			err := ValidateGarbageCollectRequest(tt.req)
-
-			// Assert
-			if tt.wantErr == nil {
-				require.NoError(t, err)
-				return
-			}
-			require.ErrorIs(t, err, tt.wantErr)
-			assert.Contains(t, err.Error(), tt.wantMsg)
-		})
-	}
 }

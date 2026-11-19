@@ -18,6 +18,7 @@ import (
 	"github.com/greenmaskio/storages"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // DaemonScope is what a daemon-level collector judges: the daemon, against every compose
@@ -35,7 +36,7 @@ type ComposeProjectScope struct {
 	// Deps.UnlistedNamespaces is left out.
 	Objects []storages.ObjectStat
 	// Savepoints are every committed record of the compose project: the mark.
-	Savepoints []model.Savepoint
+	Savepoints []composemodel.Savepoint
 	// Dead are the savepoint trees no record commits, each left by a run that died.
 	Dead []model.SavepointID
 }

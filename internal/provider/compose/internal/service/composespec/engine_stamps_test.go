@@ -15,10 +15,11 @@
 package composespec
 
 import (
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"strings"
 	"testing"
 	"time"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
@@ -27,8 +28,6 @@ import (
 	"github.com/moby/moby/api/types/system"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 func TestNewDockerStamps(t *testing.T) {
@@ -237,8 +236,8 @@ func TestAssembly_dropEngineStamps(t *testing.T) {
 				Image:  imageID,
 				Config: &container.Config{Hostname: "db", Image: "app:1"},
 			}}
-			introspection := composemodel.IntrospectionResult{Images: map[model.ImageDigestID]image.InspectResponse{
-				model.ImageDigestID(imageID): {ID: imageID, Config: &tt.image},
+			introspection := composemodel.IntrospectionResult{Images: map[composemodel.ImageDigestID]image.InspectResponse{
+				composemodel.ImageDigestID(imageID): {ID: imageID, Config: &tt.image},
 			}}
 			cfg := tt.cfg
 

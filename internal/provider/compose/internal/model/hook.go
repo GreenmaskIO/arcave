@@ -17,7 +17,7 @@ package model
 import (
 	"time"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 // Hook is one command run in each replica of a service, its defaults applied.
@@ -27,5 +27,15 @@ type Hook struct {
 	// User runs it; empty is the container's user.
 	User    string
 	Timeout time.Duration
-	OnError model.HookOnError
+	OnError composeconfig.HookOnError
 }
+
+// HookPhase names a hook by when it runs, as its labels and its messages spell it.
+type HookPhase string
+
+const (
+	// HookPhasePreCapture runs before a capture holds the project still.
+	HookPhasePreCapture HookPhase = "pre-capture"
+	// HookPhasePostCapture runs once the project is brought back.
+	HookPhasePostCapture HookPhase = "post-capture"
+)

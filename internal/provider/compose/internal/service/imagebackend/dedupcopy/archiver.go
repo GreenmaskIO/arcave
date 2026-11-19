@@ -19,13 +19,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -54,7 +54,7 @@ func New(blobStore storages.Storager) *Archiver {
 // member name is the key, and that is what makes one pass enough. The OCI layout is
 // therefore the gate — see requiredMetadata.
 func (s *Archiver) Store(
-	ctx context.Context, dst storages.Writer, imageID model.ImageDigestID, archive io.Reader,
+	ctx context.Context, dst storages.Writer, imageID composemodel.ImageDigestID, archive io.Reader,
 ) (imagebackend.StoredSize, error) {
 	var size imagebackend.StoredSize
 	manifest := imagebackend.Manifest{ImageID: imageID, Format: imagebackend.FormatBlobs}
@@ -137,7 +137,7 @@ func (s *Archiver) storeMember(
 // verbatim: an image's id is the digest of those, never of the tar headers, which are
 // written anew and which a load ignores.
 func (s *Archiver) Load(
-	ctx context.Context, src storages.Storager, imageID model.ImageDigestID, archive io.Writer,
+	ctx context.Context, src storages.Storager, imageID composemodel.ImageDigestID, archive io.Writer,
 ) error {
 	manifest, err := imagebackend.ReadManifest(ctx, src, imagebackend.FormatBlobs)
 	if err != nil {

@@ -14,11 +14,67 @@
 
 package model
 
-import (
-	"github.com/greenmaskio/arcave/internal/model"
+// SystemLabelPrefix opens every label arcave writes itself and never reads as policy.
+const SystemLabelPrefix = "io.arcave."
+
+// CaptureStampLabelPrefix opens every capture stamp.
+const CaptureStampLabelPrefix = SystemLabelPrefix + "capture."
+
+// DeploymentLabelPrefix opens every label a rollback puts on the containers it builds.
+const DeploymentLabelPrefix = SystemLabelPrefix + "deployment."
+
+// SystemLabel is a label arcave writes itself: a capture stamp on a service of a savepoint's
+// spec, or a label on an image it committed.
+type SystemLabel string
+
+const (
+	// SystemLabelWritableLayerStamp is the capture stamp of a service's writable layers.
+	SystemLabelWritableLayerStamp SystemLabel = CaptureStampLabelPrefix + "writable-layer"
+	// SystemLabelImageStamp is the capture stamp of the image a service's image: names.
+	SystemLabelImageStamp SystemLabel = CaptureStampLabelPrefix + "image"
+	// SystemLabelBaseImageID names, on an image arcave committed, the id of the image the
+	// user's compose file named: after a rollback the container runs on an
+	// arcave/…:sp-<savepoint> tag, and this label still points past it to the true base.
+	SystemLabelBaseImageID SystemLabel = SystemLabelPrefix + "base-image-id"
+	// SystemLabelBaseImageRef names, beside SystemLabelBaseImageID, the reference the user's
+	// compose file named that image by.
+	SystemLabelBaseImageRef SystemLabel = SystemLabelPrefix + "base-image-ref"
+	// SystemLabelArcaveProject names, on an image arcave committed, the arcave project it was
+	// committed under; SystemLabelComposeProject the compose project. A fork copies a layer
+	// within both, so neither names a session.
+	SystemLabelArcaveProject  SystemLabel = SystemLabelPrefix + "arcave-project"
+	SystemLabelComposeProject SystemLabel = SystemLabelPrefix + "compose-project"
 )
 
+// The labels a rollback puts on every container it builds, SavepointDeployment spelled out.
+const (
+	SystemLabelDeploymentDeployedAt                SystemLabel = DeploymentLabelPrefix + "deployed-at"
+	SystemLabelDeploymentArcaveProject             SystemLabel = DeploymentLabelPrefix + "arcave-project"
+	SystemLabelDeploymentSessionID                 SystemLabel = DeploymentLabelPrefix + "session-id"
+	SystemLabelDeploymentSessionName               SystemLabel = DeploymentLabelPrefix + "session-name"
+	SystemLabelDeploymentSavepointID               SystemLabel = DeploymentLabelPrefix + "savepoint-id"
+	SystemLabelDeploymentSavepointName             SystemLabel = DeploymentLabelPrefix + "savepoint-name"
+	SystemLabelDeploymentSavepointCreatedAt        SystemLabel = DeploymentLabelPrefix + "savepoint-created-at"
+	SystemLabelDeploymentSavepointIsSafetySnapshot SystemLabel = DeploymentLabelPrefix + "savepoint-is-safety-snapshot"
+	SystemLabelDeploymentServiceReplicas           SystemLabel = DeploymentLabelPrefix + "service-replicas"
+)
+
+// deploymentLabels are every label NewDeploymentLabels writes.
+var deploymentLabels = []SystemLabel{
+	SystemLabelDeploymentDeployedAt,
+	SystemLabelDeploymentArcaveProject,
+	SystemLabelDeploymentSessionID,
+	SystemLabelDeploymentSessionName,
+	SystemLabelDeploymentSavepointID,
+	SystemLabelDeploymentSavepointName,
+	SystemLabelDeploymentSavepointCreatedAt,
+	SystemLabelDeploymentSavepointIsSafetySnapshot,
+	SystemLabelDeploymentServiceReplicas,
+}
+
+func (m SystemLabel) String() string { return string(m) }
+
 // NewMountStampLabel is the capture stamp of the volume or bind a service mounts at target.
-func NewMountStampLabel(target string) model.SystemLabel {
-	return model.SystemLabel(model.CaptureStampLabelPrefix + "mount." + target)
+func NewMountStampLabel(target string) SystemLabel {
+	return SystemLabel(CaptureStampLabelPrefix + "mount." + target)
 }

@@ -19,13 +19,15 @@ package prepare
 import (
 	"context"
 	"fmt"
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/fanout"
 	"strings"
+
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/fanout"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/storages"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend"
 )
@@ -42,7 +44,7 @@ type specParser interface {
 
 // layerRestorer loads a writable layer out of the store under a tag of its own.
 type layerRestorer interface {
-	RestoreWritableLayer(ctx context.Context, req composemodel.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error)
+	RestoreWritableLayer(ctx context.Context, req composemodel.WritableLayerRestoreRequest) (composemodel.WritableLayerRestoreResult, error)
 }
 
 // imageLookup tells whether the daemon holds an image under a reference.
@@ -56,12 +58,12 @@ type Deps struct {
 	SpecParser      specParser
 	LayerRestorer   layerRestorer
 	ImageLookup     imageLookup
-	BackendRegistry model.SnapshotBackendRegistry
+	BackendRegistry composemodel.SnapshotBackendRegistry
 	// Store is the compose project's store, every backend's root.
 	Store storages.Storager
 	// LeftoverVolumes is what preparing over an absent compose project does with a volume that
-	// outlived it and the build overwrites; empty is model.LeftoverVolumesOverwrite.
-	LeftoverVolumes model.LeftoverVolumesPolicy
+	// outlived it and the build overwrites; empty is composeconfig.LeftoverVolumesOverwrite.
+	LeftoverVolumes composeconfig.LeftoverVolumesPolicy
 	// Concurrency caps the layers loaded at once; 0 leaves it unbounded.
 	Concurrency int
 }
@@ -72,9 +74,9 @@ type Preparer struct {
 	specParser              specParser
 	layerRestorer           layerRestorer
 	imageLookup             imageLookup
-	backendRegistry         model.SnapshotBackendRegistry
+	backendRegistry         composemodel.SnapshotBackendRegistry
 	store                   storages.Storager
-	leftoverVolumes         model.LeftoverVolumesPolicy
+	leftoverVolumes         composeconfig.LeftoverVolumesPolicy
 	maxConcurrentOperations int
 }
 
@@ -95,7 +97,7 @@ func New(deps Deps) *Preparer {
 // Prepare builds the savepoint's backends, loads its spec and layers into the daemon and
 // points the spec at them. It writes nothing a rollback restores into.
 func (s *Preparer) Prepare(
-	ctx context.Context, savepoint model.Savepoint, deployment model.SavepointDeployment, overwritten []string,
+	ctx context.Context, savepoint composemodel.Savepoint, deployment model.SavepointDeployment, overwritten []string,
 ) (composemodel.Target, error) {
 	// Their own set, not the live one's: a volume may have been added or dropped since.
 	backends, err := volumebackend.NewBackends(s.backendRegistry, s.store, composemodel.VolumesOf(savepoint))
@@ -131,7 +133,7 @@ func (s *Preparer) Prepare(
 // daemon and points that project at them, over the backends that captured it: it reads no spec and
 // refuses no image.
 func (s *Preparer) PrepareHeld(
-	ctx context.Context, savepoint model.Savepoint, plan composemodel.Plan, deployment model.SavepointDeployment,
+	ctx context.Context, savepoint composemodel.Savepoint, plan composemodel.Plan, deployment model.SavepointDeployment,
 ) (composemodel.Target, error) {
 	restored, err := s.restoreWritableLayers(ctx, savepoint, plan.Project.Name)
 	if err != nil {
@@ -147,19 +149,19 @@ func (s *Preparer) PrepareHeld(
 }
 
 // NewOverwritten names the leftover volumes savepoint overwrites; under
-// model.LeftoverVolumesRefuse any is model.ErrLeftoverVolumes, unless recovering.
+// composeconfig.LeftoverVolumesRefuse any is composemodel.ErrLeftoverVolumes, unless recovering.
 func (s *Preparer) NewOverwritten(
-	introspection composemodel.IntrospectionResult, savepoint model.Savepoint, recovering bool,
+	introspection composemodel.IntrospectionResult, savepoint composemodel.Savepoint, recovering bool,
 ) ([]string, error) {
 	leftover := leftoverVolumes(composemodel.OwnedVolumes(introspection), savepoint)
-	if len(leftover) > 0 && s.leftoverVolumes == model.LeftoverVolumesRefuse && !recovering {
-		return nil, fmt.Errorf("%w: %s", model.ErrLeftoverVolumes, strings.Join(leftover, ", "))
+	if len(leftover) > 0 && s.leftoverVolumes == composeconfig.LeftoverVolumesRefuse && !recovering {
+		return nil, fmt.Errorf("%w: %s", composemodel.ErrLeftoverVolumes, strings.Join(leftover, ", "))
 	}
 	return leftover, nil
 }
 
 // leftoverVolumes names the volumes that outlived the project's containers and savepoint overwrites.
-func leftoverVolumes(owned map[string]bool, savepoint model.Savepoint) []string {
+func leftoverVolumes(owned map[string]bool, savepoint composemodel.Savepoint) []string {
 	var names []string
 	for _, v := range composemodel.VolumesOf(savepoint) {
 		if v.Named != nil && owned[v.Named.VolumeName] {
@@ -171,22 +173,22 @@ func leftoverVolumes(owned map[string]bool, savepoint model.Savepoint) []string 
 
 // loadSavepointSpec reads the compose project a savepoint was taken of. Every failure here
 // happens before anything is stopped.
-func (s *Preparer) loadSavepointSpec(ctx context.Context, savepoint model.Savepoint) (*types.Project, error) {
-	if savepoint.Spec == nil {
-		return nil, fmt.Errorf("%w: %s", composemodel.ErrSavepointNoSpec, savepoint.ID)
+func (s *Preparer) loadSavepointSpec(ctx context.Context, savepoint composemodel.Savepoint) (*types.Project, error) {
+	if savepoint.Detail.Spec == nil {
+		return nil, fmt.Errorf("%w: %s", composemodel.ErrSavepointNoSpec, savepoint.Header.ID)
 	}
-	if savepoint.Spec.Format != model.SpecFormatComposeYAML {
-		return nil, fmt.Errorf("savepoint %s carries a compose spec in unknown format %q", savepoint.ID, savepoint.Spec.Format)
+	if savepoint.Detail.Spec.Format != composemodel.SpecFormatComposeYAML {
+		return nil, fmt.Errorf("savepoint %s carries a compose spec in unknown format %q", savepoint.Header.ID, savepoint.Detail.Spec.Format)
 	}
 
-	spec, err := s.specReader.LoadSpec(ctx, savepoint.ID)
+	spec, err := s.specReader.LoadSpec(ctx, savepoint.Header.ID)
 	if err != nil {
 		return nil, err
 	}
 
 	project, err := s.specParser.Parse(ctx, spec)
 	if err != nil {
-		return nil, fmt.Errorf("parsing the compose spec of savepoint %s: %w", savepoint.ID, err)
+		return nil, fmt.Errorf("parsing the compose spec of savepoint %s: %w", savepoint.Header.ID, err)
 	}
 	return project, nil
 }

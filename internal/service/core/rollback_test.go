@@ -16,6 +16,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path"
 	"strings"
@@ -103,8 +104,11 @@ func TestService_Rollback_RestoresAndKeepsTheSafetySnapshot(t *testing.T) {
 	savepoints, locker := demoResolution(record)
 	stages := newMockStages(false)
 	summary := provider.PreparedSummary{
-		Volumes:        []model.Volume{demoVolume()},
-		WritableLayers: []model.WritableLayerRestoreResult{{Service: "db", Replica: 1, Tag: "arcave/demo-db-1:sp"}},
+		Restored: model.RestoreSummary{
+			Units:   []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1}, {Kind: model.UnitKindLayers, Count: 1}},
+			Notices: []model.Notice{{Message: "the containers run on the savepoint's writable layers"}},
+		},
+		Detail: json.RawMessage(`{"writable_layers":[{"tag":"arcave/demo-db-1:sp"}]}`),
 	}
 	stages.target.prepared.summary = summary
 	inflight := &mockInflight{}
@@ -137,8 +141,8 @@ func TestService_Rollback_RestoresAndKeepsTheSafetySnapshot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, model.RollbackResult{
 		RolledBackTo:   record,
-		Restored:       summary.Volumes,
-		WritableLayers: summary.WritableLayers,
+		Restored:       summary.Restored,
+		Detail:         summary.Detail,
 		SafetySnapshot: safetySnapshot.ID,
 	}, res)
 	savepoints.AssertExpectations(t)
@@ -225,7 +229,7 @@ func TestService_Rollback_AnInspectionFailureTouchesNothing(t *testing.T) {
 	record := demoRecord()
 	savepoints, locker := demoResolution(record)
 	stages := newMockStages(false)
-	stages.expectInspect(model.ErrUnsupportedDaemon)
+	stages.expectInspect(errUnsupportedDaemon)
 	svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -233,7 +237,7 @@ func TestService_Rollback_AnInspectionFailureTouchesNothing(t *testing.T) {
 	_, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: time.Second})
 
 	// Assert
-	require.ErrorIs(t, err, model.ErrUnsupportedDaemon)
+	require.ErrorIs(t, err, errUnsupportedDaemon)
 	assert.ErrorContains(t, err, "prepare: ")
 	savepoints.AssertExpectations(t)
 	locker.AssertExpectations(t)

@@ -17,13 +17,12 @@ package cdc
 import (
 	"context"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"sync"
 
-	"github.com/stretchr/testify/mock"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/stretchr/testify/mock"
 )
 
 // Every mock forwards all of its seam's arguments to Called, ctx included;
@@ -46,13 +45,13 @@ func (m *mockRunner) RunOneShot(ctx context.Context, spec composemodel.OneShotSp
 	return m.Called(ctx, spec).Error(0)
 }
 
-func (m *mockRunner) ResolveMountSource(ctx context.Context, v model.Volume) (model.MountSource, error) {
+func (m *mockRunner) ResolveMountSource(ctx context.Context, v composemodel.Volume) (composemodel.MountSource, error) {
 	args := m.Called(ctx, v)
-	src, _ := args.Get(0).(model.MountSource)
+	src, _ := args.Get(0).(composemodel.MountSource)
 	return src, args.Error(1)
 }
 
-func (m *mockRunner) WipeVolume(ctx context.Context, src model.MountSource) error {
+func (m *mockRunner) WipeVolume(ctx context.Context, src composemodel.MountSource) error {
 	return m.Called(ctx, src).Error(0)
 }
 

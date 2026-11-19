@@ -24,7 +24,6 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
@@ -34,7 +33,7 @@ var errSpecRecordMismatch = errors.New("the savepoint's spec names a capture its
 
 // checkCaptureStamps logs what the rollback puts back, as the savepoint's capture stamps
 // say, and refuses a capture a stamp names and the record does not hold.
-func checkCaptureStamps(ctx context.Context, savepoint model.Savepoint, project *types.Project) error {
+func checkCaptureStamps(ctx context.Context, savepoint composemodel.Savepoint, project *types.Project) error {
 	for _, name := range slices.Sorted(maps.Keys(project.Services)) {
 		svc := project.Services[name]
 		if err := checkLayerStamp(ctx, savepoint, name, svc); err != nil {
@@ -64,8 +63,8 @@ func checkCaptureStamps(ctx context.Context, savepoint model.Savepoint, project 
 
 // checkLayerStamp logs what the rollback puts back of a service's writable layers, and
 // refuses a layer its stamp names and the record does not hold.
-func checkLayerStamp(ctx context.Context, savepoint model.Savepoint, name string, svc types.ServiceConfig) error {
-	stamp, ok, err := readStamp(svc, model.SystemLabelWritableLayerStamp)
+func checkLayerStamp(ctx context.Context, savepoint composemodel.Savepoint, name string, svc types.ServiceConfig) error {
+	stamp, ok, err := readStamp(svc, composemodel.SystemLabelWritableLayerStamp)
 	if err != nil || !ok {
 		return err
 	}
@@ -74,7 +73,7 @@ func checkLayerStamp(ctx context.Context, savepoint model.Savepoint, name string
 		event.Str("image", svc.Image).Msg("writable layer not in the savepoint: created fresh from its image")
 		return nil
 	}
-	if !slices.ContainsFunc(savepoint.WritableLayers, func(c model.WritableLayer) bool { return c.Service == name }) {
+	if !slices.ContainsFunc(savepoint.Detail.WritableLayers, func(c composemodel.WritableLayer) bool { return c.Service == name }) {
 		return fmt.Errorf("%w: the writable layer of service %s", errSpecRecordMismatch, name)
 	}
 	event.Msg("writable layer restored from the savepoint")
@@ -82,7 +81,7 @@ func checkLayerStamp(ctx context.Context, savepoint model.Savepoint, name string
 }
 
 // readStamp reads one capture stamp of a service; ok is false when it carries none.
-func readStamp(svc types.ServiceConfig, key model.SystemLabel) (composemodel.CaptureStamp, bool, error) {
+func readStamp(svc types.ServiceConfig, key composemodel.SystemLabel) (composemodel.CaptureStamp, bool, error) {
 	value, ok := svc.Labels[string(key)]
 	if !ok {
 		return composemodel.CaptureStamp{}, false, nil
@@ -115,15 +114,15 @@ func notRestoredMessage(mount types.ServiceVolumeConfig) string {
 }
 
 // recordHolds reports whether savepoint captured the volume or bind service mounts at target.
-func recordHolds(savepoint model.Savepoint, service, target string) bool {
-	return slices.ContainsFunc(composemodel.VolumesOf(savepoint), func(volume model.Volume) bool {
+func recordHolds(savepoint composemodel.Savepoint, service, target string) bool {
+	return slices.ContainsFunc(composemodel.VolumesOf(savepoint), func(volume composemodel.Volume) bool {
 		switch {
 		case volume.Bind != nil:
 			return volume.Bind.Service == service && volume.Bind.Target == target
 		case volume.Anon != nil:
 			return volume.Anon.Service == service && volume.Anon.Target == target
 		case volume.Named != nil:
-			return slices.ContainsFunc(volume.Named.UsedBy, func(ref model.ServiceReference) bool {
+			return slices.ContainsFunc(volume.Named.UsedBy, func(ref composemodel.ServiceReference) bool {
 				return ref.Service == service && ref.Target == target
 			})
 		}

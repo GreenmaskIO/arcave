@@ -94,13 +94,28 @@ Warnings (1)
     "created_at": "2026-06-01T19:41:12.123456789Z",
     …
   },
-  "restored": [
-    { "object_id": "volume-named-myapp_pgdata", "compose_project": "myapp", "type": "named", … }
-  ],
-  "writable_layers": [
-    { "service": "app", "replica": 1, "container_name": "myapp-app-1", "image_id": "sha256:aaaa…",
-      "tag": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000" }
-  ],
+  "restored": {
+    "units": [
+      { "kind": "volumes", "count": 1, "size_bytes": 0, "stored_bytes": 0 },
+      { "kind": "layers", "count": 2, "size_bytes": 0, "stored_bytes": 0 }
+    ],
+    "notices": [
+      {
+        "message": "the containers run on the savepoint's writable layers",
+        "hint": "`docker compose up` of your compose file recreates them on its images and drops those layers"
+      }
+    ]
+  },
+  "detail": {
+    "volumes": [
+      { "object_id": "volume-named-myapp_pgdata", "compose_project": "myapp", "type": "named", … }
+    ],
+    "writable_layers": [
+      { "service": "app", "replica": 1, "container_name": "myapp-app-1", "image_id": "sha256:aaaa…",
+        "tag": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000" },
+      …
+    ]
+  },
   "discarded": {
     "containers": ["myapp-app-1", "myapp-db-1"],
     "volumes": ["myapp_pgdata"],
@@ -115,8 +130,9 @@ Warnings (1)
 | Field | Meaning |
 |---|---|
 | `rolled_back_to` | The savepoint record that was built, whole. |
-| `restored` | One entry per volume written, as in [`rollback`](rollback.md#output). |
-| `writable_layers` | One entry per container layer put back, with the `tag` it now answers to. Omitted when the savepoint held no layer. |
+| `restored` | What was put back — `units` and `notices` — as in [`rollback`](rollback.md#output). |
+| `detail` | The compose provider's own body: `volumes`, one entry per volume written, and `writable_layers`, as in [`rollback`](rollback.md#output). |
+| `detail.writable_layers` | One entry per container layer put back, with the `tag` it now answers to. Omitted when the savepoint held no layer. |
 | `discarded` | What a forced `up` dropped first, by docker name, as read before the drop. An anonymous volume goes with its container and is not listed. Omitted when the daemon held nothing of the compose project. |
 
 There is no `safety_snapshot`: `up` takes none.

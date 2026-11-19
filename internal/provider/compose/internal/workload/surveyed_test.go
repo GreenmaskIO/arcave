@@ -43,12 +43,14 @@ var (
 const demoNetwork = composetest.DemoProject + "_default"
 
 // deploymentOf is a build of demoRecord from session of arcaveProject.
-func deploymentOf(arcaveProject model.ArcaveProjectName, session model.SessionRef, at time.Time) model.SavepointDeployment {
-	return model.SavepointDeployment{
-		DeployedAt:      at,
-		ArcaveProject:   arcaveProject,
-		Session:         session,
-		Savepoint:       model.DeployedSavepoint{ID: composetest.DemoRecord().ID, Name: composetest.DemoRecord().Name, CreatedAt: composetest.DemoRecord().CreatedAt},
+func deploymentOf(arcaveProject model.ArcaveProjectName, session model.SessionRef, at time.Time) composemodel.Deployment {
+	return composemodel.Deployment{
+		SavepointDeployment: model.SavepointDeployment{
+			DeployedAt:    at,
+			ArcaveProject: arcaveProject,
+			Session:       session,
+			Savepoint:     model.DeployedSavepoint{ID: composetest.DemoRecord().Header.ID, Name: composetest.DemoRecord().Header.Name, CreatedAt: composetest.DemoRecord().Header.CreatedAt},
+		},
 		ServiceReplicas: map[string][]int{composetest.DemoService: {1}},
 	}
 }
@@ -137,41 +139,41 @@ func TestSurveyed_Owner(t *testing.T) {
 	newer := deploymentOf(composetest.DemoArcaveProject, demoSession, at.Add(time.Minute))
 	foreignSession := deploymentOf(composetest.DemoArcaveProject, demoOtherSession, at)
 	foreignProject := deploymentOf("blog", demoSession, at)
-	broken := own.Labels()
-	broken[string(model.SystemLabelDeploymentDeployedAt)] = "yesterday"
+	broken := composemodel.NewDeploymentLabels(own)
+	broken[string(composemodel.SystemLabelDeploymentDeployedAt)] = "yesterday"
 	tests := []struct {
 		name      string
 		resources composemodel.ComposeProjectResources
 		want      *model.SavepointDeployment
 		wantErr   error
 	}{
-		{name: "every replica is the session's", resources: resourcesOf(own.Labels(), newer.Labels()), want: &newer},
-		{name: "another session's", resources: resourcesOf(foreignSession.Labels()), want: &foreignSession, wantErr: &model.DeployedElsewhereError{
-			ArcaveProject: composetest.DemoArcaveProject, Deployment: foreignSession,
+		{name: "every replica is the session's", resources: resourcesOf(composemodel.NewDeploymentLabels(own), composemodel.NewDeploymentLabels(newer)), want: &newer.SavepointDeployment},
+		{name: "another session's", resources: resourcesOf(composemodel.NewDeploymentLabels(foreignSession)), want: &foreignSession.SavepointDeployment, wantErr: &model.DeployedElsewhereError{
+			ArcaveProject: composetest.DemoArcaveProject, Deployment: foreignSession.SavepointDeployment,
 		}},
-		{name: "another arcave project's", resources: resourcesOf(foreignProject.Labels()), want: &foreignProject, wantErr: &model.DeployedElsewhereError{
-			ArcaveProject: composetest.DemoArcaveProject, Deployment: foreignProject,
+		{name: "another arcave project's", resources: resourcesOf(composemodel.NewDeploymentLabels(foreignProject)), want: &foreignProject.SavepointDeployment, wantErr: &model.DeployedElsewhereError{
+			ArcaveProject: composetest.DemoArcaveProject, Deployment: foreignProject.SavepointDeployment,
 		}},
 		{
-			name: "one replica without labels", resources: resourcesOf(own.Labels(), map[string]string{}), want: &own,
-			wantErr: &model.NotDeployedByArcaveError{Replicas: []string{composetest.DemoService + "-2"}},
+			name: "one replica without labels", resources: resourcesOf(composemodel.NewDeploymentLabels(own), map[string]string{}), want: &own.SavepointDeployment,
+			wantErr: &composemodel.NotDeployedByArcaveError{Replicas: []string{composetest.DemoService + "-2"}},
 		},
 		{
-			name: "unreadable labels", resources: resourcesOf(broken), wantErr: &model.NotDeployedByArcaveError{Replicas: []string{composetest.DemoService + "-1"}},
+			name: "unreadable labels", resources: resourcesOf(broken), wantErr: &composemodel.NotDeployedByArcaveError{Replicas: []string{composetest.DemoService + "-1"}},
 		},
 		{
-			name: "no labels beats another session", resources: resourcesOf(foreignSession.Labels(), map[string]string{}), want: &foreignSession,
-			wantErr: &model.NotDeployedByArcaveError{Replicas: []string{composetest.DemoService + "-2"}},
+			name: "no labels beats another session", resources: resourcesOf(composemodel.NewDeploymentLabels(foreignSession), map[string]string{}), want: &foreignSession.SavepointDeployment,
+			wantErr: &composemodel.NotDeployedByArcaveError{Replicas: []string{composetest.DemoService + "-2"}},
 		},
 		{
 			name:      "no replica, a lone one-off",
 			resources: composemodel.ComposeProjectResources{Containers: []string{"demo-db-run-1"}},
-			wantErr:   &model.NotDeployedByArcaveError{Containers: []string{"demo-db-run-1"}},
+			wantErr:   &composemodel.NotDeployedByArcaveError{Containers: []string{"demo-db-run-1"}},
 		},
 		{
 			name:      "no replica, a volume and a network left",
 			resources: composemodel.ComposeProjectResources{Volumes: []string{composetest.DemoVolumeName}, Networks: []string{demoNetwork}},
-			wantErr:   &model.NotDeployedByArcaveError{Volumes: []string{composetest.DemoVolumeName}, Networks: []string{demoNetwork}},
+			wantErr:   &composemodel.NotDeployedByArcaveError{Volumes: []string{composetest.DemoVolumeName}, Networks: []string{demoNetwork}},
 		},
 		{name: "nothing at all"},
 	}
@@ -313,7 +315,7 @@ func TestSurveyed_Drop(t *testing.T) {
 
 		// Assert
 		require.ErrorIs(t, err, model.ErrComposeProjectLeft)
-		var leftErr *model.ComposeProjectLeftError
+		var leftErr *composemodel.ComposeProjectLeftError
 		require.ErrorAs(t, err, &leftErr)
 		assert.Equal(t, []string{composetest.DemoVolumeName}, leftErr.Volumes)
 		assert.ErrorIs(t, err, busy, "the daemon's refusal says what holds it")
@@ -364,9 +366,9 @@ func TestSurveyed_PrepareSavepoint_RefusesAnOldDaemon(t *testing.T) {
 	surveyed := survey(t, svc, doubles, resourcesOf(map[string]string{}))
 
 	// Act
-	_, err := surveyed.PrepareSavepoint(zerolog.Nop().WithContext(context.Background()), composetest.DemoRecord().ID,
+	_, err := surveyed.PrepareSavepoint(zerolog.Nop().WithContext(context.Background()), composetest.DemoRecord().Header.ID,
 		provider.PrepareOptions{Deployment: composetest.DemoDeployment(composetest.DemoRecord())})
 
 	// Assert
-	require.ErrorIs(t, err, model.ErrUnsupportedDaemon)
+	require.ErrorIs(t, err, composemodel.ErrUnsupportedDaemon)
 }

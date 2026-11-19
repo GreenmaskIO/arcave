@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // S1: the first capture initialises the repository and ships the volume whole,
@@ -134,7 +135,7 @@ func TestSnapshotter_Snapshot_RefusesAnInvalidID(t *testing.T) {
 			backend := env.backend(t, vol)
 
 			// Act
-			_, err := backend.Snapshot(env.ctx, model.BackendSnapshotRequest{SnapshotID: tt.id})
+			_, err := backend.Snapshot(env.ctx, composemodel.BackendSnapshotRequest{SnapshotID: tt.id})
 
 			// Assert
 			require.ErrorIs(t, err, model.ErrInvalidSavepointID)

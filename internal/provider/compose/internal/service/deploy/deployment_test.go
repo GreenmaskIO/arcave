@@ -20,7 +20,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
@@ -64,10 +64,10 @@ func TestWithDeploymentLabels(t *testing.T) {
 	}
 
 	// Act
-	labeled := withDeploymentLabels(project, map[string]string{string(model.SystemLabelDeploymentSavepointID): "id"})
+	labeled := withDeploymentLabels(project, map[string]string{string(composemodel.SystemLabelDeploymentSavepointID): "id"})
 
 	// Assert
-	assert.Equal(t, types.Labels{"keep": "me", string(model.SystemLabelDeploymentSavepointID): "id"},
+	assert.Equal(t, types.Labels{"keep": "me", string(composemodel.SystemLabelDeploymentSavepointID): "id"},
 		labeled.Services[composetest.DemoService].Labels)
 	assert.Equal(t, types.Labels{"keep": "me"}, project.Services[composetest.DemoService].Labels, "the project handed in is left as it is")
 	assert.Nil(t, labeled.Volumes["db"].Labels, "a volume's labels are in compose's config hash")

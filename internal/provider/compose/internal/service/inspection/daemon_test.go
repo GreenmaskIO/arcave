@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 func TestRequireDaemon(t *testing.T) {
@@ -32,8 +32,8 @@ func TestRequireDaemon(t *testing.T) {
 		minMajor int
 		wantErr  error
 	}{
-		{name: "docker 24 is refused", version: "24.0.7", minMajor: 25, wantErr: model.ErrUnsupportedDaemon},
-		{name: "docker 20.10 is refused", version: "20.10.24", minMajor: 25, wantErr: model.ErrUnsupportedDaemon},
+		{name: "docker 24 is refused", version: "24.0.7", minMajor: 25, wantErr: composemodel.ErrUnsupportedDaemon},
+		{name: "docker 20.10 is refused", version: "20.10.24", minMajor: 25, wantErr: composemodel.ErrUnsupportedDaemon},
 		{name: "docker 25 is accepted", version: "25.0.0", minMajor: 25},
 		{name: "a docker 25 release candidate is accepted", version: "25.0.0-rc.1", minMajor: 25},
 		{name: "docker 29 is accepted", version: "29.8.2", minMajor: 25},

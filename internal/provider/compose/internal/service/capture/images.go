@@ -17,8 +17,9 @@ package capture
 import (
 	"context"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"time"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
@@ -31,12 +32,12 @@ import (
 // inResult marks the warning of an image not stored as InResult.
 func (s *Capturer) captureImages(
 	ctx context.Context, snapshotID model.SavepointID, reqs []composemodel.ImageCaptureRequest, inResult bool,
-) ([]model.Image, error) {
+) ([]composemodel.Image, error) {
 	if len(reqs) == 0 {
 		return nil, nil
 	}
 
-	images := make([]model.Image, len(reqs))
+	images := make([]composemodel.Image, len(reqs))
 	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindImageCapture}, len(reqs))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.maxConcurrentOperations)
@@ -79,7 +80,7 @@ func (s *Capturer) captureImages(
 }
 
 // newImageStep names an image's step by its first reference, else its id.
-func newImageStep(image model.Image) progress.Step {
+func newImageStep(image composemodel.Image) progress.Step {
 	var name string
 	if len(image.Refs) > 0 {
 		name = image.Refs[0]
@@ -95,7 +96,7 @@ func newImageStep(image model.Image) progress.Step {
 // concurrently, and returns one capture per request in input order.
 func (s *Capturer) captureWritableLayers(
 	ctx context.Context, snapshotID model.SavepointID, reqs []composemodel.WritableLayerCaptureRequest,
-) ([]model.WritableLayer, error) {
+) ([]composemodel.WritableLayer, error) {
 	if len(reqs) == 0 {
 		return nil, nil
 	}
@@ -103,7 +104,7 @@ func (s *Capturer) captureWritableLayers(
 		return nil, fmt.Errorf("validate savepoint id: %w", err)
 	}
 
-	captures := make([]model.WritableLayer, len(reqs))
+	captures := make([]composemodel.WritableLayer, len(reqs))
 	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindLayerCapture}, len(reqs))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.maxConcurrentOperations)

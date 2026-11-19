@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/gctest"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
@@ -39,10 +40,17 @@ func TestCollector_Find(t *testing.T) {
 	gctest.WriteObject(t, root, image2+"/image.json", "{}", gctest.Old)
 	gctest.WriteObject(t, root, image2+"/index.json", "{}", gctest.Old)
 	gctest.WriteObject(t, root, image3+"/image.json", "{}", gctest.Recent)
-	savepoint := model.Savepoint{ID: gctest.LiveSavepoint, Images: []model.Image{
-		{ID: gctest.LiveImage, Stored: true},
-		{ID: gctest.DeadImage, Stored: false}, // only its identity is recorded: it keeps nothing alive
-	}}
+	savepoint := composemodel.Savepoint{
+		Header: model.Savepoint{
+			ID: gctest.LiveSavepoint,
+		},
+		Detail: composemodel.SavepointDetail{
+			Images: []composemodel.Image{
+				{ID: gctest.LiveImage, Stored: true},
+				{ID: gctest.DeadImage, Stored: false}, // only its identity is recorded: it keeps nothing alive
+			},
+		},
+	}
 	scope := gctest.NewScope(t, store, savepoint)
 	scope.Dead = []model.SavepointID{gctest.DeadSavepoint}
 
@@ -51,11 +59,11 @@ func TestCollector_Find(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	got := stat.(model.OCIImageStat)
+	got := stat.(composemodel.OCIImageStat)
 	require.Len(t, got.Ops, 2)
 	assert.Equal(t, []string{image2, image3}, gctest.Targets(got.Ops))
 	for _, op := range got.Ops {
-		assert.Equal(t, model.GarbageActionDeleteImage, op.Action, op.Target)
+		assert.Equal(t, composemodel.GarbageActionDeleteImage, op.Action, op.Target)
 	}
 	assert.Equal(t, utils.New(int64(4)), got.Ops[0].Bytes)
 	assert.Empty(t, got.Skipped)

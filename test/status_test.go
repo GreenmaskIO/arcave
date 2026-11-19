@@ -101,7 +101,7 @@ func newStatusEnv(t *testing.T, env ...string) *statusEnv {
 	}
 	runArcave(t, statusEnv.projectRoot, env, "init", "--name", statusEnv.arcaveProject)
 	writeStorageConfigWith(t, statusEnv.projectRoot, storage,
-		storageE2EBackend{name: composeconfig.SnapshotBackendFullCopy, backend: composeconfig.SnapshotBackendFullCopy}, len(env) > 0)
+		storageE2EBackend{name: string(composeconfig.SnapshotBackendFullCopy), backend: string(composeconfig.SnapshotBackendFullCopy)}, len(env) > 0)
 	compose.upDocument(t, statusEnv.document)
 	return statusEnv
 }
@@ -112,10 +112,58 @@ func (e *statusEnv) run(t *testing.T, args ...string) []byte {
 	return runArcave(t, e.projectRoot, e.env, append([]string{"-p", e.project}, args...)...)
 }
 
-func (e *statusEnv) status(t *testing.T) model.ComposeProjectStatus {
+func (e *statusEnv) status(t *testing.T) statusOnWire {
 	t.Helper()
 
-	return decode[model.ComposeProjectStatus](t, e.run(t, "status", "--format", "json"))
+	return decode[statusOnWire](t, e.run(t, "status", "--format", "json"))
+}
+
+// statusOnWire is the JSON of arcave status as a client reads it, its detail the compose
+// provider's.
+type statusOnWire struct {
+	State            string                   `json:"state"`
+	Session          *model.SessionRef        `json:"session"`
+	Deployment       *model.DeploymentStatus  `json:"deployment"`
+	RollbackInFlight *model.RollbackInFlight  `json:"rollback_in_flight"`
+	Unreadable       []model.StatusUnreadable `json:"unreadable"`
+	Notices          []model.Notice           `json:"notices"`
+	Detail           composeStatusDetail      `json:"detail"`
+}
+
+// composeStatusDetail is the compose provider's detail of a status.
+type composeStatusDetail struct {
+	Source   string          `json:"source"`
+	Replaced int             `json:"replaced"`
+	Services []serviceOnWire `json:"services"`
+}
+
+type serviceOnWire struct {
+	Name             string          `json:"name"`
+	State            string          `json:"state"`
+	Health           string          `json:"health"`
+	ReplicasExpected int             `json:"replicas_expected"`
+	ReplicasUp       int             `json:"replicas_up"`
+	Replicas         []replicaOnWire `json:"replicas"`
+}
+
+type replicaOnWire struct {
+	Number       int          `json:"number"`
+	Container    string       `json:"container"`
+	ContainerID  string       `json:"container_id"`
+	State        string       `json:"state"`
+	Health       string       `json:"health"`
+	ExitCode     int          `json:"exit_code"`
+	Replaces     string       `json:"replaces"`
+	InDeployment bool         `json:"in_deployment"`
+	InSavepoint  bool         `json:"in_savepoint"`
+	Ports        []portOnWire `json:"ports"`
+}
+
+type portOnWire struct {
+	ContainerPort int    `json:"container_port"`
+	Protocol      string `json:"protocol"`
+	HostIP        string `json:"host_ip"`
+	HostPort      int    `json:"host_port"`
 }
 
 func TestStatus_AfterRollback(t *testing.T) {
@@ -130,19 +178,15 @@ func TestStatus_AfterRollback(t *testing.T) {
 	status := env.status(t)
 
 	// Assert
-	assert.Equal(t, model.ComposeProjectStateRunning, status.State, "notices: %+v", status.Notices)
+	assert.Equal(t, "running", status.State, "notices: %+v", status.Notices)
 	require.NotNil(t, status.Deployment)
-	assert.Equal(t, model.DeploymentSourceSavepoint, status.Deployment.Source)
+	assert.Equal(t, "savepoint", status.Detail.Source)
 	assert.Equal(t, model.DeploymentRecordFound, status.Deployment.Record)
 	require.NotNil(t, status.Deployment.Savepoint)
 	assert.Equal(t, savepoint.ID, status.Deployment.Savepoint.ID)
 	assert.Equal(t, "sp1", status.Deployment.Savepoint.Name)
-	assert.Equal(t, &model.RestoredCounts{
-		Volumes:        len(savepoint.Stats),
-		WritableLayers: len(savepoint.WritableLayers),
-	}, status.Deployment.Savepoint.Restored, "the record says what was restored")
-	byName := map[string]model.ServiceStatus{}
-	for _, service := range status.Services {
+	byName := map[string]serviceOnWire{}
+	for _, service := range status.Detail.Services {
 		byName[service.Name] = service
 		for _, replica := range service.Replicas {
 			assert.True(t, replica.InDeployment, "%s-%d is the rollback's", service.Name, replica.Number)
@@ -150,14 +194,14 @@ func TestStatus_AfterRollback(t *testing.T) {
 		}
 	}
 	require.Len(t, byName["migrate"].Replicas, 1)
-	assert.Equal(t, model.ReplicaStateCompleted, byName["migrate"].State, "a job another waits on completed")
+	assert.Equal(t, "completed", byName["migrate"].State, "a job another waits on completed")
 	assert.Equal(t, 0, byName["migrate"].Replicas[0].ExitCode)
 	assert.Equal(t, 1, byName["migrate"].ReplicasUp)
 	assert.Equal(t, 2, byName["web"].ReplicasExpected)
 	assert.Equal(t, 2, byName["web"].ReplicasUp)
 	require.Len(t, byName["db"].Replicas, 1)
 	db := byName["db"].Replicas[0]
-	assert.Equal(t, model.ReplicaHealthHealthy, db.Health)
+	assert.Equal(t, "healthy", db.Health)
 	inspected, err := env.daemon.ContainerInspect(env.ctx, db.ContainerID, client.ContainerInspectOptions{})
 	require.NoError(t, err)
 	var published []string
@@ -176,11 +220,11 @@ func TestStatus_AfterRollback(t *testing.T) {
 
 // assertDeploymentLabelsOnContainersAlone pins where a rollback puts its labels: on every replica,
 // on no network or volume.
-func assertDeploymentLabelsOnContainersAlone(t *testing.T, env *statusEnv, status model.ComposeProjectStatus) {
+func assertDeploymentLabelsOnContainersAlone(t *testing.T, env *statusEnv, status statusOnWire) {
 	t.Helper()
 
-	key := string(model.SystemLabelDeploymentSavepointID)
-	for _, service := range status.Services {
+	key := "io.arcave.deployment.savepoint-id"
+	for _, service := range status.Detail.Services {
 		for _, replica := range service.Replicas {
 			inspected, err := env.daemon.ContainerInspect(env.ctx, replica.ContainerID, client.ContainerInspectOptions{})
 			require.NoError(t, err)
@@ -220,18 +264,19 @@ func TestStatus_DetectsDrift(t *testing.T) {
 	recreated := env.status(t)
 
 	// Assert
-	assert.Equal(t, model.ComposeProjectStateDegraded, stopped.State)
-	assert.Equal(t, model.ReplicaStateExited, findReplica(t, stopped, "web", 1).State)
+	assert.Equal(t, "degraded", stopped.State)
+	assert.Equal(t, "exited", findReplica(t, stopped, "web", 1).State)
 	assert.True(t, slices.ContainsFunc(stopped.Notices, func(notice model.Notice) bool {
-		return notice.Code == model.NoticeCodeReplicaExited && notice.Severe && strings.HasPrefix(notice.Message, "web-1 ")
+		return notice.Code == "replica-exited" && notice.Severe && strings.HasPrefix(notice.Message, "web-1 ")
 	}), "the killed replica is warned of: %+v", stopped.Notices)
-	assert.Equal(t, model.DeploymentSourceMixed, recreated.Deployment.Source)
+	assert.Equal(t, "mixed", recreated.Detail.Source)
+	assert.Equal(t, 1, recreated.Detail.Replaced)
 	db := findReplica(t, recreated, "db", 1)
 	assert.False(t, db.InDeployment)
 	assert.True(t, db.InSavepoint)
 	assert.NotEmpty(t, db.Replaces, "compose's label says what it replaced")
 	assert.True(t, slices.ContainsFunc(recreated.Notices, func(notice model.Notice) bool {
-		return notice.Code == model.NoticeCodeReplicaRecreated && strings.HasPrefix(notice.Message, "db-1 was recreated") &&
+		return notice.Code == "replica-recreated" && strings.HasPrefix(notice.Message, "db-1 was recreated") &&
 			strings.Contains(notice.Message, "(compose replaced "+db.Replaces+")") &&
 			strings.Contains(notice.Message, "the writable layer the rollback restored is gone")
 	}), "the replacement is warned of: %+v", recreated.Notices)
@@ -249,7 +294,7 @@ func recreateAsCompose(t *testing.T, env *statusEnv, id string) {
 	config := *old.Config
 	config.Labels = map[string]string{api.ContainerReplaceLabel: name}
 	for key, value := range old.Config.Labels {
-		if !strings.HasPrefix(key, model.DeploymentLabelPrefix) {
+		if !strings.HasPrefix(key, "io.arcave.deployment.") {
 			config.Labels[key] = value
 		}
 	}
@@ -283,11 +328,11 @@ func TestStatus_Absent(t *testing.T) {
 	text := string(runArcave(t, env.projectRoot, nil, "-p", env.project, "status", "--format", "text"))
 
 	// Assert
-	assert.Equal(t, model.ComposeProjectStateAbsent, status.State)
+	assert.Equal(t, "absent", status.State)
 	assert.Nil(t, status.Deployment)
-	assert.Empty(t, status.Services)
+	assert.Empty(t, status.Detail.Services)
 	assert.Equal(t, &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName}, status.Session)
-	assert.Contains(t, text, env.project+" · not running")
+	assert.Contains(t, text, env.project+" · absent")
 	assert.Contains(t, text, "session    "+model.DefaultSessionName)
 	assert.NotContains(t, text, "arcave ", "a status prints no command to run")
 }
@@ -332,28 +377,28 @@ func TestStatus_StoreUnreadable(t *testing.T) {
 	var exitErr *exec.ExitError
 	require.True(t, errors.As(err, &exitErr), "a partial status exits non-zero: %v", err)
 	assert.Equal(t, 1, exitErr.ExitCode())
-	status := decode[model.ComposeProjectStatus](t, out)
+	status := decode[statusOnWire](t, out)
 	require.Len(t, status.Unreadable, 1)
 	assert.Equal(t, model.StatusUnreadableStore, status.Unreadable[0].Source)
 	assert.Contains(t, status.Unreadable[0].Error, model.ErrWrongStoreKey.Error())
-	assert.Equal(t, model.ComposeProjectStateRunning, status.State, "the daemon's part is whole")
+	assert.Equal(t, "running", status.State, "the daemon's part is whole")
 	assert.Equal(t, "sp1", status.Deployment.Savepoint.Name, "and the labels name the savepoint")
-	assert.Len(t, status.Services, 4)
+	assert.Len(t, status.Detail.Services, 4)
 	assert.Equal(t, markerBefore, readEncryptionMarker(t, env), "the marker is read, never written")
 }
 
-func findReplica(t *testing.T, status model.ComposeProjectStatus, service string, number int) model.ReplicaStatus {
+func findReplica(t *testing.T, status statusOnWire, service string, number int) replicaOnWire {
 	t.Helper()
 
-	for _, candidate := range status.Services {
+	for _, candidate := range status.Detail.Services {
 		for _, replica := range candidate.Replicas {
 			if candidate.Name == service && replica.Number == number {
 				return replica
 			}
 		}
 	}
-	require.Failf(t, "replica not found", "%s-%d in %+v", service, number, status.Services)
-	return model.ReplicaStatus{}
+	require.Failf(t, "replica not found", "%s-%d in %+v", service, number, status.Detail.Services)
+	return replicaOnWire{}
 }
 
 // readEncryptionMarker reads the arcave project's encryption marker, and when it was last written.

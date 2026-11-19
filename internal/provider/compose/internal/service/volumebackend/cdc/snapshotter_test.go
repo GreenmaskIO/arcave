@@ -26,7 +26,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // The plan a capture runs depends on the state of the repository, and every
@@ -73,11 +74,11 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 				Run(respondWith(backupStatusLine, backupSummaryLine)).Return(nil).Once()
 
 			// Act
-			stat, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
+			stat, err := h.snapshotter.Snapshot(ctx, composemodel.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 
 			// Assert
 			require.NoError(t, err)
-			assert.Equal(t, model.SnapshotBackendCDC, stat.Type)
+			assert.Equal(t, composeconfig.SnapshotBackendCDC, stat.Type)
 			assert.Equal(t, Payload{SnapshotObjectID: "3f8a1c0d9b"}, stat.Payload)
 			assert.Equal(t, int64(10485760), stat.SizeBytes, "the volume's logical size")
 			assert.Equal(t, int64(524288), stat.StoredBytes, "what the repository grew by, packed")
@@ -105,7 +106,7 @@ func TestSnapshotter_Snapshot_CommandLine(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{
+	_, err := h.snapshotter.Snapshot(ctx, composemodel.BackendSnapshotRequest{
 		SnapshotID: "019e843e-1650-7000-8000-000000000000",
 		Labels:     map[string]string{"team": "payments", "arcave-safety-snapshot": "true"},
 	})
@@ -153,7 +154,7 @@ func TestSnapshotter_Snapshot_HostNetwork(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
+	_, err := h.snapshotter.Snapshot(ctx, composemodel.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 
 	// Assert
 	require.NoError(t, err)
@@ -182,9 +183,9 @@ func TestSnapshotter_Snapshot_SafetySnapshotDiffersOnlyByItsLabel(t *testing.T) 
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	_, err := savepoint.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
+	_, err := savepoint.snapshotter.Snapshot(ctx, composemodel.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 	require.NoError(t, err)
-	_, err = safety.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{
+	_, err = safety.snapshotter.Snapshot(ctx, composemodel.BackendSnapshotRequest{
 		SnapshotID: "019e843e-1a38-7000-8000-000000000000",
 		Labels:     map[string]string{"arcave-safety-snapshot": "true"},
 	})
@@ -211,7 +212,7 @@ func TestSnapshotter_Snapshot_SafetySnapshotDiffersOnlyByItsLabel(t *testing.T) 
 func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 	// Arrange
 	vol := demoVolume()
-	vol.Named.UsedBy = []model.ServiceReference{
+	vol.Named.UsedBy = []composemodel.ServiceReference{
 		{Service: demoService, Target: demoTarget, Subpath: "pgdata"},
 	}
 	runner := &mockRunner{}
@@ -223,12 +224,12 @@ func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 	snapshotter, err := NewFactory(Dependencies{
 		Runner: runner, Transport: demoTCPTransport,
 		RepositoryRoot: newStore(t), Options: defaultOptions(),
-	}).New(model.BackendSpec{Volume: vol})
+	}).New(composemodel.BackendSpec{Volume: vol})
 	require.NoError(t, err)
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	_, err = snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
+	_, err = snapshotter.Snapshot(ctx, composemodel.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 
 	// Assert
 	require.NoError(t, err)
@@ -250,7 +251,7 @@ func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 func TestSnapshotter_newRunner(t *testing.T) {
 	// Arrange
 	backend, err := NewFactory(Dependencies{Transport: demoTCPTransport, RepositoryRoot: newStore(t)}).
-		New(model.BackendSpec{Volume: demoVolume()})
+		New(composemodel.BackendSpec{Volume: demoVolume()})
 	require.NoError(t, err)
 	snapshotter, ok := backend.(*Snapshotter)
 	require.True(t, ok)
@@ -309,7 +310,7 @@ func TestSnapshotter_Restore(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			err := h.snapshotter.Restore(ctx, model.BackendRestoreRequest{
+			err := h.snapshotter.Restore(ctx, composemodel.BackendRestoreRequest{
 				SnapshotID: "019e843e-1650-7000-8000-000000000000",
 				Payload:    Payload{SnapshotObjectID: "3f8a1c0d9b"},
 			})
@@ -339,7 +340,7 @@ func TestSnapshotter_Restore_ReadsARoundTrippedPayload(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	err := h.snapshotter.Restore(ctx, model.BackendRestoreRequest{
+	err := h.snapshotter.Restore(ctx, composemodel.BackendRestoreRequest{
 		SnapshotID: "019e843e-1650-7000-8000-000000000000",
 		Payload:    map[string]any{"restic_snapshot_id": "3f8a1c0d9b"},
 	})
@@ -369,7 +370,7 @@ func TestSnapshotter_ReportsRunFailures(t *testing.T) {
 					Return(errors.New("backup boom")).Once()
 			},
 			act: func(ctx context.Context, h *harness) error {
-				_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
+				_, err := h.snapshotter.Snapshot(ctx, composemodel.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 				return err
 			},
 			wantErr: "backup boom",
@@ -382,7 +383,7 @@ func TestSnapshotter_ReportsRunFailures(t *testing.T) {
 					Run(respondWith(backupStatusLine)).Return(nil).Once()
 			},
 			act: func(ctx context.Context, h *harness) error {
-				_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
+				_, err := h.snapshotter.Snapshot(ctx, composemodel.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 				return err
 			},
 			wantErr: "no restic snapshot id",
@@ -395,7 +396,7 @@ func TestSnapshotter_ReportsRunFailures(t *testing.T) {
 					Return(errors.New("restore boom")).Once()
 			},
 			act: func(ctx context.Context, h *harness) error {
-				return h.snapshotter.Restore(ctx, model.BackendRestoreRequest{
+				return h.snapshotter.Restore(ctx, composemodel.BackendRestoreRequest{
 					SnapshotID: "019e843e-1650-7000-8000-000000000000",
 					Payload:    Payload{SnapshotObjectID: "3f8a1c0d9b"},
 				})
@@ -432,14 +433,14 @@ func TestSnapshotter_RejectsUnusableIDs(t *testing.T) {
 		{
 			name: "a savepoint id that is not digits never reaches a capture",
 			act: func(ctx context.Context, h *harness) error {
-				_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "../../etc"})
+				_, err := h.snapshotter.Snapshot(ctx, composemodel.BackendSnapshotRequest{SnapshotID: "../../etc"})
 				return err
 			},
 		},
 		{
 			name: "a payload naming no snapshot never reaches a restore",
 			act: func(ctx context.Context, h *harness) error {
-				return h.snapshotter.Restore(ctx, model.BackendRestoreRequest{
+				return h.snapshotter.Restore(ctx, composemodel.BackendRestoreRequest{
 					SnapshotID: "019e843e-1650-7000-8000-000000000000",
 					Payload:    Payload{SnapshotObjectID: ""},
 				})

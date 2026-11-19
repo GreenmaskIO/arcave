@@ -26,12 +26,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
-	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 	"os"
 	"sort"
 	"sync"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/inmemory"
@@ -208,35 +209,35 @@ func incrementalOptions() cdc.Options {
 }
 
 // newVolume creates a filled named volume plus the labelled container that mounts
-// it. The model.Volume is assembled by hand: this layer sits below the introspector.
-func (e *env) newVolume(t *testing.T, service, target string) model.Volume {
+// it. The composemodel.Volume is assembled by hand: this layer sits below the introspector.
+func (e *env) newVolume(t *testing.T, service, target string) composemodel.Volume {
 	t.Helper()
 
 	name := e.newFilledVolume(t, service)
 	createLabelledContainer(t, e.cli, service, name, target)
-	return namedVolume(name, model.ServiceReference{Service: service, Target: target})
+	return namedVolume(name, composemodel.ServiceReference{Service: service, Target: target})
 }
 
 // newBareVolume creates a filled named volume with no container mounting it at
 // all — what a `docker compose down` leaves behind, and what a backend
 // addressing the volume by name still reaches.
-func (e *env) newBareVolume(t *testing.T, service, target string) model.Volume {
+func (e *env) newBareVolume(t *testing.T, service, target string) composemodel.Volume {
 	t.Helper()
 
 	name := e.newFilledVolume(t, service)
-	return namedVolume(name, model.ServiceReference{Service: service, Target: target})
+	return namedVolume(name, composemodel.ServiceReference{Service: service, Target: target})
 }
 
 // newSubpathVolume creates a filled named volume whose only container sees a
 // subdirectory of it. The subdirectory has to exist before the container is
 // created — the daemon refuses a subpath that is not there — so the fill runs
 // first.
-func (e *env) newSubpathVolume(t *testing.T, service, target, subpath string) model.Volume {
+func (e *env) newSubpathVolume(t *testing.T, service, target, subpath string) composemodel.Volume {
 	t.Helper()
 
 	name := e.newFilledVolume(t, service)
 	createSubpathContainer(t, e.cli, service, name, target, subpath)
-	return namedVolume(name, model.ServiceReference{Service: service, Target: target, Subpath: subpath})
+	return namedVolume(name, composemodel.ServiceReference{Service: service, Target: target, Subpath: subpath})
 }
 
 // newFilledVolume creates one named volume and seeds it.
@@ -250,30 +251,30 @@ func (e *env) newFilledVolume(t *testing.T, service string) string {
 }
 
 // namedVolume is the unit the backend is built for, assembled by hand.
-func namedVolume(name string, usedBy ...model.ServiceReference) model.Volume {
-	return model.Volume{
+func namedVolume(name string, usedBy ...composemodel.ServiceReference) composemodel.Volume {
+	return composemodel.Volume{
 		ObjectID:       "volume-named-" + name,
 		ComposeProject: itProject,
-		Type:           model.VolumeTypeNamed,
-		Backend:        model.SnapshotBackendCDC,
-		Named:          &model.VolumePropertiesNamed{VolumeName: name, UsedBy: usedBy},
+		Type:           composemodel.VolumeTypeNamed,
+		Backend:        composeconfig.SnapshotBackendCDC,
+		Named:          &composemodel.VolumePropertiesNamed{VolumeName: name, UsedBy: usedBy},
 	}
 }
 
 // backend builds the instance under test, as the registry does. The spec carries
 // no store on purpose: a cdc repository lives outside whatever tree a workflow
 // hands over, so a backend that starts reading spec.Store fails here loudly.
-func (e *env) backend(t *testing.T, vol model.Volume) model.VolumeSnapshotBackend {
+func (e *env) backend(t *testing.T, vol composemodel.Volume) composemodel.VolumeSnapshotBackend {
 	t.Helper()
 
-	backend, err := e.factory.New(model.BackendSpec{Volume: vol})
+	backend, err := e.factory.New(composemodel.BackendSpec{Volume: vol})
 	require.NoError(t, err)
 	return backend
 }
 
 // snapshot captures the volume and returns the payload the backend reported.
 func (e *env) snapshot(
-	t *testing.T, backend model.VolumeSnapshotBackend, id model.SavepointID, labels map[string]string,
+	t *testing.T, backend composemodel.VolumeSnapshotBackend, id model.SavepointID, labels map[string]string,
 ) cdc.Payload {
 	t.Helper()
 
@@ -282,18 +283,18 @@ func (e *env) snapshot(
 
 // snapshotStat captures the volume and returns the stat the backend reported.
 func (e *env) snapshotStat(
-	t *testing.T, backend model.VolumeSnapshotBackend, id model.SavepointID, labels map[string]string,
-) model.SnapshotStat {
+	t *testing.T, backend composemodel.VolumeSnapshotBackend, id model.SavepointID, labels map[string]string,
+) composemodel.SnapshotStat {
 	t.Helper()
 
-	stat, err := backend.Snapshot(e.ctx, model.BackendSnapshotRequest{SnapshotID: id, Labels: labels})
+	stat, err := backend.Snapshot(e.ctx, composemodel.BackendSnapshotRequest{SnapshotID: id, Labels: labels})
 	require.NoError(t, err)
-	require.Equal(t, model.SnapshotBackendCDC, stat.Type)
+	require.Equal(t, composeconfig.SnapshotBackendCDC, stat.Type)
 	return stat
 }
 
 // snapshotPayload reads the cdc payload off a stat the backend reported in memory.
-func snapshotPayload(t *testing.T, stat model.SnapshotStat) cdc.Payload {
+func snapshotPayload(t *testing.T, stat composemodel.SnapshotStat) cdc.Payload {
 	t.Helper()
 
 	payload, ok := stat.Payload.(cdc.Payload)
@@ -303,7 +304,7 @@ func snapshotPayload(t *testing.T, stat model.SnapshotStat) cdc.Payload {
 
 // repoStore re-roots the repository root at one volume's repository, as the
 // factory does — and as the server resolves a name on the wire.
-func (e *env) repoStore(t *testing.T, vol model.Volume) storages.Storager {
+func (e *env) repoStore(t *testing.T, vol composemodel.Volume) storages.Storager {
 	t.Helper()
 
 	store, err := e.resticRoot.SubStorage(vol.ObjectID, true)
@@ -312,14 +313,14 @@ func (e *env) repoStore(t *testing.T, vol model.Volume) storages.Storager {
 }
 
 // repoKeys lists a repository's whole tree, relative to its root.
-func (e *env) repoKeys(t *testing.T, vol model.Volume) []string {
+func (e *env) repoKeys(t *testing.T, vol composemodel.Volume) []string {
 	t.Helper()
 
 	return objectNames(t, e.repoStore(t, vol), "")
 }
 
 // snapshotObjectIDs is the snapshot objects the repository holds, one per capture.
-func (e *env) snapshotObjectIDs(t *testing.T, vol model.Volume) []string {
+func (e *env) snapshotObjectIDs(t *testing.T, vol composemodel.Volume) []string {
 	t.Helper()
 
 	return objectNames(t, e.repoStore(t, vol), snapshotsPath)
@@ -338,7 +339,7 @@ type oracleSnapshot struct {
 // independent reader of what arcave believes it wrote. It addresses the very
 // name the backend does: with no registration to make, "reachable" is a
 // property of the tree the server was given.
-func (e *env) oracleSnapshots(t *testing.T, vol model.Volume) []oracleSnapshot {
+func (e *env) oracleSnapshots(t *testing.T, vol composemodel.Volume) []oracleSnapshot {
 	t.Helper()
 
 	var stdout, stderr bytes.Buffer
@@ -363,7 +364,7 @@ func (e *env) oracleSnapshots(t *testing.T, vol model.Volume) []oracleSnapshot {
 
 // hash is a sorted sha256 listing of every file in the volume: content and file
 // set in one string, so a leftover file changes it.
-func (e *env) hash(t *testing.T, vol model.Volume) string {
+func (e *env) hash(t *testing.T, vol composemodel.Volume) string {
 	t.Helper()
 
 	out := composetest.Busybox(t, e.engine, vol.Named.VolumeName, "find /data -type f -exec sha256sum {} + | sort")
@@ -382,7 +383,7 @@ func (e *env) fill(t *testing.T, name string) {
 }
 
 // mutate overwrites mutateKiB mid-blob, leaving its size alone.
-func (e *env) mutate(t *testing.T, vol model.Volume) {
+func (e *env) mutate(t *testing.T, vol composemodel.Volume) {
 	t.Helper()
 
 	composetest.Busybox(t, e.engine, vol.Named.VolumeName, fmt.Sprintf(
@@ -390,7 +391,7 @@ func (e *env) mutate(t *testing.T, vol model.Volume) {
 }
 
 // addFile writes a file no snapshot carries — what a restore has to take away.
-func (e *env) addFile(t *testing.T, vol model.Volume, name string) {
+func (e *env) addFile(t *testing.T, vol composemodel.Volume, name string) {
 	t.Helper()
 
 	composetest.Busybox(t, e.engine, vol.Named.VolumeName, fmt.Sprintf(

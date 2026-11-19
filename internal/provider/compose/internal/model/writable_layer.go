@@ -16,6 +16,7 @@ package model
 
 import (
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 // LayerOrigin is the arcave project and compose project a writable layer was committed under.
@@ -27,16 +28,16 @@ type LayerOrigin struct {
 // Labels spells the origin out as the labels a commit stamps.
 func (m LayerOrigin) Labels() map[string]string {
 	return map[string]string{
-		string(model.SystemLabelArcaveProject):  m.ArcaveProject.String(),
-		string(model.SystemLabelComposeProject): m.ComposeProject.String(),
+		string(SystemLabelArcaveProject):  m.ArcaveProject.String(),
+		string(SystemLabelComposeProject): m.ComposeProject.String(),
 	}
 }
 
 // ParseLayerOrigin reads the origin an image's labels name; ok is false unless both are set.
 func ParseLayerOrigin(labels map[string]string) (LayerOrigin, bool) {
 	origin := LayerOrigin{
-		ArcaveProject:  model.ArcaveProjectName(labels[string(model.SystemLabelArcaveProject)]),
-		ComposeProject: model.DockerComposeProjectName(labels[string(model.SystemLabelComposeProject)]),
+		ArcaveProject:  model.ArcaveProjectName(labels[string(SystemLabelArcaveProject)]),
+		ComposeProject: model.DockerComposeProjectName(labels[string(SystemLabelComposeProject)]),
 	}
 	if origin.ArcaveProject == "" || origin.ComposeProject == "" {
 		return LayerOrigin{}, false
@@ -53,15 +54,15 @@ type ContainerRef struct {
 	Name    string // container name, without the leading slash
 	// The upstream: the image the compose file named; empty when it can no longer
 	// be traced.
-	UpstreamImageID  model.ImageDigestID // sha256 digest of the upstream's config
-	UpstreamImageRef string              // the upstream's name, e.g. postgres:16; never a digest
+	UpstreamImageID  ImageDigestID // sha256 digest of the upstream's config
+	UpstreamImageRef string        // the upstream's name, e.g. postgres:16; never a digest
 }
 
 // WritableLayerCaptureRequest is one commit-and-store, addressed by savepoint and container.
 type WritableLayerCaptureRequest struct {
 	SnapshotID model.SavepointID
 	Container  ContainerRef
-	Backend    model.ImageBackendKind
+	Backend    composeconfig.ImageBackendKind
 }
 
 // WritableLayerRestoreRequest is one load-and-tag, addressed by the savepoint that holds
@@ -69,7 +70,7 @@ type WritableLayerCaptureRequest struct {
 // local daemon.
 type WritableLayerRestoreRequest struct {
 	SnapshotID model.SavepointID
-	Layer      model.WritableLayer
+	Layer      WritableLayer
 	Tag        string
 }
 
@@ -78,4 +79,38 @@ type WritableLayerRestoreRequest struct {
 type ReplicaIdentity struct {
 	Name   string
 	Number int
+}
+
+// WritableLayer is one container's writable layer, committed and stored. It
+// travels in the savepoint record, so its json tags are the wire contract.
+type WritableLayer struct {
+	Service     string `json:"service"`      // compose service name
+	Replica     int    `json:"replica"`      // replica number, from 1
+	ContainerID string `json:"container_id"` // the container committed
+	// ContainerName is the committed container's name: what a rollback rebuilds
+	// the replica under when compose numbered it otherwise. Kept, not derived from
+	// the number: compose's naming depends on the project and its separator.
+	ContainerName string `json:"container_name"`
+	// CommittedImageID is the image `docker commit` made: the upstream plus the
+	// writable layer. sha256 digest; what a rollback loads and tags.
+	CommittedImageID ImageDigestID `json:"committed_image_id"`
+	// ImageBackend is the layout the archive is stored in, and what a restore reads it by.
+	ImageBackend     composeconfig.ImageBackendKind `json:"imagebackend"`
+	UpstreamImageID  ImageDigestID                  `json:"upstream_image_id,omitempty"`  // sha256 digest of the upstream's config
+	UpstreamImageRef string                         `json:"upstream_image_ref,omitempty"` // the upstream's name, e.g. postgres:16; never a digest
+	SizeBytes        int64                          `json:"size_bytes"`                   // the committed image's archive size
+	// StoredBytes is what this capture added to the store, below SizeBytes when deduplicated. A
+	// blob shared by parallel replicas counts toward the first writer: only the total is stable.
+	StoredBytes int64 `json:"stored_bytes,omitempty"`
+}
+
+// WritableLayerRestoreResult is what a writable-layer restore put back into the daemon:
+// ImageID is the committed image, Tag the docker reference the rebuilt compose project names
+// it by. It travels in the rollback response, so its json tags are the wire contract.
+type WritableLayerRestoreResult struct {
+	Service       string        `json:"service"`
+	Replica       int           `json:"replica"`
+	ContainerName string        `json:"container_name"`
+	ImageID       ImageDigestID `json:"image_id"`
+	Tag           string        `json:"tag"`
 }

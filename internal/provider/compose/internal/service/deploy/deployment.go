@@ -22,18 +22,20 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
-// newSavepointDeployment is deployment, as core names it, built now of project with the recorded
-// replicas.
-func newSavepointDeployment(
+// newDeployment is deployment, as core names it, built now of project with the recorded replicas.
+func newDeployment(
 	deployment model.SavepointDeployment, project *types.Project, recorded []recordedReplica,
-) model.SavepointDeployment {
-	return model.SavepointDeployment{
-		DeployedAt:      time.Now(),
-		ArcaveProject:   deployment.ArcaveProject,
-		Session:         deployment.Session,
-		Savepoint:       deployment.Savepoint,
+) composemodel.Deployment {
+	return composemodel.Deployment{
+		SavepointDeployment: model.SavepointDeployment{
+			DeployedAt:    time.Now(),
+			ArcaveProject: deployment.ArcaveProject,
+			Session:       deployment.Session,
+			Savepoint:     deployment.Savepoint,
+		},
 		ServiceReplicas: newDeployedReplicas(project, recorded),
 	}
 }

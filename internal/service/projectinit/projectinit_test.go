@@ -66,14 +66,14 @@ func TestService_Init(t *testing.T) {
 				Project: config.Project{Name: "demo"},
 				ComposeProvider: composeconfig.Config{
 					Docker:   composeconfig.Docker{Host: "tcp://remote:2375"},
-					Snapshot: composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendFullCopy},
+					Snapshot: composeconfig.Snapshot{Backend: string(composeconfig.SnapshotBackendFullCopy)},
 				},
 			},
 			override: true,
 			exists:   true,
 			verify: func(t *testing.T, saved config.Config) {
 				assert.Equal(t, "tcp://remote:2375", saved.ComposeProvider.Docker.Host)
-				assert.Equal(t, composeconfig.SnapshotBackendFullCopy, saved.ComposeProvider.Snapshot.Backend)
+				assert.Equal(t, string(composeconfig.SnapshotBackendFullCopy), saved.ComposeProvider.Snapshot.Backend)
 			},
 		},
 	}

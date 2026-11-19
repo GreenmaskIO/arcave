@@ -18,16 +18,15 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"maps"
 	"slices"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/pkg/progress"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // replicaPair is one recorded replica and the replica compose created in its place.
@@ -107,7 +106,7 @@ func (s *Deployer) rebuildReplica(ctx context.Context, rebuild replicaRebuild) e
 // image. A restore resolves an anonymous volume by recorded number, so a gap in the
 // numbering is rebuilt without a layer too.
 func newRecordedReplicas(
-	savepoint model.Savepoint, project *types.Project, restored []model.WritableLayerRestoreResult,
+	savepoint composemodel.Savepoint, project *types.Project, restored []composemodel.WritableLayerRestoreResult,
 ) []recordedReplica {
 	replicas := make([]recordedReplica, 0, len(restored))
 	for _, layer := range restored {
@@ -118,10 +117,10 @@ func newRecordedReplicas(
 			image:         layer.Tag,
 		})
 	}
-	if savepoint.NotCovered == nil {
+	if savepoint.Detail.NotCovered == nil {
 		return replicas
 	}
-	for _, skipped := range savepoint.NotCovered.WritableLayers {
+	for _, skipped := range savepoint.Detail.NotCovered.WritableLayers {
 		svc, ok := project.Services[skipped.Service]
 		if !ok {
 			continue

@@ -49,7 +49,7 @@ func TestEncryption_ReadersNeverMark(t *testing.T) {
 		var exitErr *exec.ExitError
 		require.True(t, errors.As(err, &exitErr), "status over plain data is partial: %v", err)
 		assert.Equal(t, 1, exitErr.ExitCode())
-		status := decode[model.ComposeProjectStatus](t, out)
+		status := decode[statusOnWire](t, out)
 		require.Len(t, status.Unreadable, 1)
 		assert.Contains(t, status.Unreadable[0].Error, model.ErrStoreHoldsPlainData.Error())
 		assert.Equal(t, before, readProjectTree(t, env), "status writes nothing")

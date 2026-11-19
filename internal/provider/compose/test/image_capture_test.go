@@ -70,8 +70,8 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	require.Len(t, savepoint.WritableLayers, 1, "one container, one capture")
-	capture := savepoint.WritableLayers[0]
+	require.Len(t, detailOf(t, savepoint).WritableLayers, 1, "one container, one capture")
+	capture := detailOf(t, savepoint).WritableLayers[0]
 	assert.Equal(t, "app", capture.Service)
 	assert.Equal(t, 1, capture.Replica)
 	assert.NotEmpty(t, capture.CommittedImageID)
@@ -104,8 +104,8 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 	assert.Positive(t, shared, "the archive's blobs went to the shared store")
 
 	// The upstream is kept once, by content, beside the blobs it shares with the layer.
-	require.Len(t, savepoint.Images, 1)
-	upstream := savepoint.Images[0]
+	require.Len(t, detailOf(t, savepoint).Images, 1)
+	upstream := detailOf(t, savepoint).Images[0]
 	assert.Equal(t, capture.UpstreamImageID, upstream.ID)
 	assertNamesImage(t, upstream.Refs, "busybox")
 	assert.True(t, upstream.Stored)

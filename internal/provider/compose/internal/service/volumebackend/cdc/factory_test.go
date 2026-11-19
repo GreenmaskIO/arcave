@@ -20,11 +20,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 func TestFactory_Kind(t *testing.T) {
-	assert.Equal(t, model.SnapshotBackendCDC, NewFactory(Dependencies{}).Kind())
+	assert.Equal(t, composeconfig.SnapshotBackendCDC, NewFactory(Dependencies{}).Kind())
 }
 
 // The repository is the volume's own directory, one segment under the
@@ -34,7 +35,7 @@ func TestFactory_Kind(t *testing.T) {
 func TestFactory_New(t *testing.T) {
 	tests := []struct {
 		name        string
-		volume      model.Volume
+		volume      composemodel.Volume
 		wantMounted string
 	}{
 		{
@@ -44,20 +45,20 @@ func TestFactory_New(t *testing.T) {
 		},
 		{
 			name: "a bind mount, whose target is flattened into the one segment",
-			volume: model.Volume{
+			volume: composemodel.Volume{
 				ObjectID:       "volume-service-app-etc-cfg",
 				ComposeProject: demoProject,
-				Type:           model.VolumeTypeBind,
-				Bind:           &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg"},
+				Type:           composemodel.VolumeTypeBind,
+				Bind:           &composemodel.VolumePropertiesBind{Service: "app", Target: "/etc/cfg"},
 			},
 			wantMounted: "/m/volume-service-app-etc-cfg",
 		},
 		{
 			name: "a named volume no service mounts is built like any other",
-			volume: model.Volume{
+			volume: composemodel.Volume{
 				ObjectID: "volume-named-orphan",
-				Type:     model.VolumeTypeNamed,
-				Named:    &model.VolumePropertiesNamed{VolumeName: "orphan"},
+				Type:     composemodel.VolumeTypeNamed,
+				Named:    &composemodel.VolumePropertiesNamed{VolumeName: "orphan"},
 			},
 			wantMounted: "/m/volume-named-orphan",
 		},
@@ -74,7 +75,7 @@ func TestFactory_New(t *testing.T) {
 			})
 
 			// Act
-			backend, err := factory.New(model.BackendSpec{Volume: tt.volume})
+			backend, err := factory.New(composemodel.BackendSpec{Volume: tt.volume})
 
 			// Assert
 			require.NoError(t, err)
@@ -102,9 +103,9 @@ func TestFactory_New_IgnoresTheSpecStore(t *testing.T) {
 	factory := NewFactory(Dependencies{RepositoryRoot: root, Options: defaultOptions()})
 
 	// Act
-	savepoint, err := factory.New(model.BackendSpec{Volume: demoVolume(), Store: newStore(t)})
+	savepoint, err := factory.New(composemodel.BackendSpec{Volume: demoVolume(), Store: newStore(t)})
 	require.NoError(t, err)
-	safety, err := factory.New(model.BackendSpec{Volume: demoVolume(), Store: newStore(t)})
+	safety, err := factory.New(composemodel.BackendSpec{Volume: demoVolume(), Store: newStore(t)})
 	require.NoError(t, err)
 
 	// Assert

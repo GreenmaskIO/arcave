@@ -60,11 +60,15 @@ before-migration  019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1     
     "name": "before-migration",
     "description": "before the v2 schema",
     "created_at": "2026-06-01T19:41:12.123456789Z",
-    "stats": [ … ],
-    "writable_layers": [ … ],
-    "images": [ … ],
-    "spec": { "format": "compose-yaml" },
-    "not_covered": { … }
+    "provider": "compose",
+    "summary": { "units": [ … ], "notices": [ … ] },
+    "detail": {
+      "stats": [ … ],
+      "writable_layers": [ … ],
+      "images": [ … ],
+      "spec": { "format": "compose-yaml" },
+      "not_covered": { … }
+    }
   }
 ]
 ```
@@ -72,7 +76,7 @@ before-migration  019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1     
 </TabItem>
 </Tabs>
 
-On a terminal, one row per savepoint: what it captured, what it added to the store, and how many things it does not cover — `not_covered` and images not stored, spelled out by [`savepoint create`](savepoint_create.md#output). In the JSON each element is the whole record, exactly as `savepoint create` printed it — `stats`, `writable_layers`, `images`, `spec` and `not_covered` included. An empty store prints `No savepoints.` on a terminal, `[]` in JSON.
+On a terminal, one row per savepoint: what it captured, what it added to the store, and how many things it does not cover — its `summary.notices`, spelled out by [`savepoint create`](savepoint_create.md#output). In the JSON each element is the whole record, exactly as `savepoint create` printed it — `summary` and the compose provider's `detail` included. An empty store prints `No savepoints.` on a terminal, `[]` in JSON.
 
 With `--include-safety-snapshots`, a safety snapshot is listed among the others, named on a terminal by the rollback it was taken before and marked `(safety)`; in the JSON it carries its label, an empty `name`, and `taken_before_rollback_to` — the savepoint that rollback went to, by id and by the name it had then:
 
@@ -140,7 +144,7 @@ arcave savepoint list --include-safety-snapshots \
 ```
 
 ```shell title="What the last savepoint cost the store"
-arcave savepoint list | jq '[.[0] | (.stats // [])[].stored_bytes, (.writable_layers // [])[].stored_bytes, (.images // [])[].stored_bytes] | map(. // 0) | add'
+arcave savepoint list | jq '[.[0].summary.units[].stored_bytes] | add'
 ```
 
 ## Next step

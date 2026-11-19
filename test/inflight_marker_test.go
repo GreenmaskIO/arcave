@@ -68,7 +68,7 @@ func newSiblingDirectory(t *testing.T, env *sessionEnv) string {
 	writeStorageConfig(t, projectRoot, config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(env.projectRoot, env.storage.Directory.Path)},
-	}, composeconfig.SnapshotBackendFullCopy)
+	}, string(composeconfig.SnapshotBackendFullCopy))
 	return projectRoot
 }
 
@@ -102,11 +102,11 @@ func TestInflightMarker_SeenFromAnyDirectory(t *testing.T) {
 
 			// Act
 			refused := runArcaveRefused(t, projectRoot, "-p", env.project, "savepoint", "create", "--name", "v2")
-			status := decode[model.ComposeProjectStatus](t, runArcave(t, projectRoot, nil, "-p", env.project, "status"))
+			status := decode[statusOnWire](t, runArcave(t, projectRoot, nil, "-p", env.project, "status"))
 
 			// Assert
 			assert.Contains(t, refused, "was interrupted")
-			assert.Equal(t, model.ComposeProjectStateRollbackPending, status.State)
+			assert.Equal(t, model.StatusStateRollbackPending, status.State)
 			require.NotNil(t, status.RollbackInFlight)
 			assert.Equal(t, v1.ID, status.RollbackInFlight.Target)
 		})

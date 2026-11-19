@@ -30,6 +30,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
@@ -41,18 +42,18 @@ var (
 	deadSavepoint = model.SavepointID("019e843e-1650-7000-8000-000000000002")
 
 	deadTreeOp = model.GarbageOp{
-		Action: model.GarbageActionDeleteTree, Target: deadSavepoint.String(), Bytes: utils.New(int64(10)),
+		Action: composemodel.GarbageActionDeleteTree, Target: deadSavepoint.String(), Bytes: utils.New(int64(10)),
 		Savepoint: deadSavepoint,
 	}
 	deadBlobOp = model.GarbageOp{
-		Action: model.GarbageActionDeleteObject, Target: "shared/oci/blobs/sha256/" + strings.Repeat("b", 64),
+		Action: composemodel.GarbageActionDeleteObject, Target: "shared/oci/blobs/sha256/" + strings.Repeat("b", 64),
 		Bytes: utils.New(int64(3)),
 	}
-	deadTagOp      = model.GarbageOp{Action: model.GarbageActionUntag, Target: "arcave/demo-db-1:sp-x"}
-	deadSnapshotOp = model.GarbageOp{Action: model.GarbageActionForget, Target: "restic/volume-named-db:abc"}
-	deadTreeStat   = model.GarbageStat(model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadTreeOp}}})
-	deadSnapStat   = model.GarbageStat(model.ResticRepositoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadSnapshotOp}}})
-	deadTagStat    = model.GarbageStat(model.DockerLayerTagStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadTagOp}}})
+	deadTagOp      = model.GarbageOp{Action: composemodel.GarbageActionUntag, Target: "arcave/demo-db-1:sp-x"}
+	deadSnapshotOp = model.GarbageOp{Action: composemodel.GarbageActionForget, Target: "restic/volume-named-db:abc"}
+	deadTreeStat   = model.GarbageStat(composemodel.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadTreeOp}}})
+	deadSnapStat   = model.GarbageStat(composemodel.ResticRepositoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadSnapshotOp}}})
+	deadTagStat    = model.GarbageStat(composemodel.DockerLayerTagStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadTagOp}}})
 )
 
 // newMockDaemonCollector is a daemon collector resolving dataKind, named after it.
@@ -161,7 +162,7 @@ func newSavepointsInOrder(t *testing.T, repos ...*mockSavepointReader) func(stor
 // asserted when the test ends.
 func newEmptySavepoints(t *testing.T) *mockSavepointReader {
 	savepoints := &mockSavepointReader{}
-	savepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint(nil), nil).Once()
+	savepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]composemodel.Savepoint(nil), nil).Once()
 	t.Cleanup(func() { savepoints.AssertExpectations(t) })
 	return savepoints
 }
@@ -202,11 +203,17 @@ func reportsOf(found []provider.Garbage) []model.GarbageReport {
 // its compose project's scope: its store, listing and records.
 func TestFinder_Find(t *testing.T) {
 	// Arrange
-	savepoints := []model.Savepoint{{ID: "019e843e-1650-7000-8000-000000000001"}}
+	savepoints := []composemodel.Savepoint{
+		{
+			Header: model.Savepoint{
+				ID: "019e843e-1650-7000-8000-000000000001",
+			},
+		},
+	}
 	demoSavepoints := &mockSavepointReader{}
 	demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return(savepoints, nil).Once()
-	blobs := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
-	blobStat := model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadBlobOp}}}
+	blobs := newMockComposeProjectCollector(composemodel.GarbageDataKindImageLayers)
+	blobStat := composemodel.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadBlobOp}}}
 	blobs.On("Find", mock.Anything, mock.MatchedBy(func(scope ComposeProjectScope) bool {
 		opened := scope.Store != nil
 		scope.Store, scope.Objects = nil, nil
@@ -214,9 +221,9 @@ func TestFinder_Find(t *testing.T) {
 			ComposeProject: "demo", Savepoints: savepoints,
 		}, scope)
 	})).Return(blobStat, nil).Once()
-	trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
+	trees := newMockComposeProjectCollector(composemodel.GarbageDataKindSavepointData)
 	trees.On("Find", mock.Anything, inComposeProject("demo")).Return(deadTreeStat, nil).Once()
-	tags := newMockDaemonCollector(model.GarbageDataKindRestoredLayers)
+	tags := newMockDaemonCollector(composemodel.GarbageDataKindRestoredLayers)
 	tags.On("Find", mock.Anything, forComposeProjects("demo")).Return(deadTagStat, nil).Once()
 	deps := newFinderDeps(newSessionStore(t, "demo"))
 	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
@@ -229,20 +236,20 @@ func TestFinder_Find(t *testing.T) {
 	// Assert
 	assert.Equal(t, []model.GarbageReport{
 		{
-			DataKind:  model.GarbageDataKindRestoredLayers,
+			DataKind:  composemodel.GarbageDataKindRestoredLayers,
 			Collector: "mock-restored-layers",
 			Summary:   deadTagStat.Summary(),
 			Detail:    deadTagStat,
 		},
 		{
-			DataKind:       model.GarbageDataKindImageLayers,
+			DataKind:       composemodel.GarbageDataKindImageLayers,
 			Collector:      "mock-image-layers",
 			ComposeProject: "demo",
 			Summary:        blobStat.Summary(),
 			Detail:         blobStat,
 		},
 		{
-			DataKind:       model.GarbageDataKindSavepointData,
+			DataKind:       composemodel.GarbageDataKindSavepointData,
 			Collector:      "mock-savepoint-data",
 			ComposeProject: "demo",
 			Summary:        deadTreeStat.Summary(),
@@ -259,12 +266,12 @@ func TestFinder_Find_FailuresStayInTheirReport(t *testing.T) {
 	// Arrange
 	brokenSavepoints := &mockSavepointReader{}
 	brokenSavepoints.On("LoadSavepoints", mock.Anything, noTrees).
-		Return([]model.Savepoint(nil), errors.New("corrupt record")).Once()
-	blobs := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
+		Return([]composemodel.Savepoint(nil), errors.New("corrupt record")).Once()
+	blobs := newMockComposeProjectCollector(composemodel.GarbageDataKindImageLayers)
 	blobs.On("Find", mock.Anything, inComposeProject("demo")).Return(nil, errors.New("listing failed")).Once()
-	images := newMockComposeProjectCollector(model.GarbageDataKindUpstreamImages)
+	images := newMockComposeProjectCollector(composemodel.GarbageDataKindUpstreamImages)
 	images.On("Find", mock.Anything, inComposeProject("demo")).
-		Return(model.OCIImageStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
+		Return(composemodel.OCIImageStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
 	deps := newFinderDeps(newSessionStore(t, "broken", "demo"))
 	deps.NewSavepointReader = newSavepointsInOrder(t, brokenSavepoints, newEmptySavepoints(t))
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{blobs, images}
@@ -279,7 +286,7 @@ func TestFinder_Find_FailuresStayInTheirReport(t *testing.T) {
 	assert.Contains(t, reports[1].Summary.Aborted, "corrupt record")
 	// the second's blob collector failed; the image collector after it still ran
 	assert.Equal(t, "listing failed", reports[2].Error)
-	assert.Equal(t, model.GarbageDataKindUpstreamImages, reports[3].DataKind)
+	assert.Equal(t, composemodel.GarbageDataKindUpstreamImages, reports[3].DataKind)
 	assert.Empty(t, reports[3].Error)
 	brokenSavepoints.AssertExpectations(t)
 	blobs.AssertExpectations(t)
@@ -290,8 +297,8 @@ func TestFinder_Find_FailuresStayInTheirReport(t *testing.T) {
 // judged against: the daemon kinds abort with the compose ones.
 func TestFinder_Find_UnlistedSessionAbortsTheDaemon(t *testing.T) {
 	// Arrange: neither collector expects Find, so one would fail the mock.
-	tags := newMockDaemonCollector(model.GarbageDataKindRestoredLayers)
-	blobs := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
+	tags := newMockDaemonCollector(composemodel.GarbageDataKindRestoredLayers)
+	blobs := newMockComposeProjectCollector(composemodel.GarbageDataKindImageLayers)
 	deps := newFinderDeps(&unlistableStore{Storager: inmemory.New("")})
 	deps.DaemonCollectors = []DaemonCollector{tags}
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{blobs}
@@ -301,7 +308,7 @@ func TestFinder_Find_UnlistedSessionAbortsTheDaemon(t *testing.T) {
 
 	// Assert
 	require.Len(t, reports, 2)
-	assert.Equal(t, model.GarbageDataKindRestoredLayers, reports[0].DataKind)
+	assert.Equal(t, composemodel.GarbageDataKindRestoredLayers, reports[0].DataKind)
 	assert.Contains(t, reports[0].Summary.Aborted, "access denied")
 	assert.Contains(t, reports[1].Summary.Aborted, "access denied")
 	tags.AssertExpectations(t)
@@ -311,7 +318,7 @@ func TestFinder_Find_UnlistedSessionAbortsTheDaemon(t *testing.T) {
 // A collector that returns neither a finding nor an error fails its own report.
 func TestFinder_Find_NoFinding(t *testing.T) {
 	// Arrange
-	tags := newMockDaemonCollector(model.GarbageDataKindRestoredLayers)
+	tags := newMockDaemonCollector(composemodel.GarbageDataKindRestoredLayers)
 	tags.On("Find", mock.Anything, forComposeProjects()).Return(nil, nil).Once()
 	deps := newFinderDeps(inmemory.New(""))
 	deps.DaemonCollectors = []DaemonCollector{tags}
@@ -368,16 +375,22 @@ func TestFinder_Find_UncommittedTreesAreDead(t *testing.T) {
 			if tt.raw != "" {
 				require.NoError(t, composeProjectStore.PutObject(ctx, tree.String()+"/"+heartbeat.FileName, strings.NewReader(tt.raw)))
 			}
-			var savepoints []model.Savepoint
+			var savepoints []composemodel.Savepoint
 			if tt.committed {
-				savepoints = []model.Savepoint{{ID: tree}}
+				savepoints = []composemodel.Savepoint{
+					{
+						Header: model.Savepoint{
+							ID: tree,
+						},
+					},
+				}
 			}
 			demoSavepoints := &mockSavepointReader{}
 			demoSavepoints.On("LoadSavepoints", mock.Anything, []model.SavepointID{tree}).Return(savepoints, nil).Once()
-			trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
+			trees := newMockComposeProjectCollector(composemodel.GarbageDataKindSavepointData)
 			trees.On("Find", mock.Anything, mock.MatchedBy(func(scope ComposeProjectScope) bool {
 				return scope.ComposeProject == "demo" && assert.ObjectsAreEqual(tt.wantDead, scope.Dead)
-			})).Return(model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
+			})).Return(composemodel.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
 			deps := newFinderDeps(store)
 			deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 			deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
@@ -404,23 +417,23 @@ func TestFinder_Find_SelectsDataKinds(t *testing.T) {
 		{
 			name: "every data kind by default",
 			wantKinds: []model.GarbageDataKind{
-				model.GarbageDataKindRestoredLayers, model.GarbageDataKindSavepointData, model.GarbageDataKindUpstreamImages,
-				model.GarbageDataKindImageLayers, model.GarbageDataKindDeduplicatedVolumes,
+				composemodel.GarbageDataKindRestoredLayers, composemodel.GarbageDataKindSavepointData, composemodel.GarbageDataKindUpstreamImages,
+				composemodel.GarbageDataKindImageLayers, composemodel.GarbageDataKindDeduplicatedVolumes,
 			},
 			readsScopes: true,
 		},
 		{
 			name:      "restored layers alone",
-			dataKinds: []model.GarbageDataKind{model.GarbageDataKindRestoredLayers},
-			wantKinds: []model.GarbageDataKind{model.GarbageDataKindRestoredLayers},
+			dataKinds: []model.GarbageDataKind{composemodel.GarbageDataKindRestoredLayers},
+			wantKinds: []model.GarbageDataKind{composemodel.GarbageDataKindRestoredLayers},
 		},
 		{
 			name: "two data kinds, in the collectors' order",
 			dataKinds: []model.GarbageDataKind{
-				model.GarbageDataKindDeduplicatedVolumes, model.GarbageDataKindSavepointData,
+				composemodel.GarbageDataKindDeduplicatedVolumes, composemodel.GarbageDataKindSavepointData,
 			},
 			wantKinds: []model.GarbageDataKind{
-				model.GarbageDataKindSavepointData, model.GarbageDataKindDeduplicatedVolumes,
+				composemodel.GarbageDataKindSavepointData, composemodel.GarbageDataKindDeduplicatedVolumes,
 			},
 			readsScopes: true,
 		},
@@ -433,20 +446,20 @@ func TestFinder_Find_SelectsDataKinds(t *testing.T) {
 				readers = append(readers, newEmptySavepoints(t))
 			}
 			runs := func(kind model.GarbageDataKind) bool { return slices.Contains(tt.wantKinds, kind) }
-			tags := newMockDaemonCollector(model.GarbageDataKindRestoredLayers)
-			if runs(model.GarbageDataKindRestoredLayers) {
+			tags := newMockDaemonCollector(composemodel.GarbageDataKindRestoredLayers)
+			if runs(composemodel.GarbageDataKindRestoredLayers) {
 				tags.On("Find", mock.Anything, forComposeProjects("demo")).
-					Return(model.DockerLayerTagStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
+					Return(composemodel.DockerLayerTagStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
 			}
 			composeProjectCollectors := []*mockComposeProjectCollector{
-				newEmptyCollector(model.GarbageDataKindSavepointData, model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}},
-					runs(model.GarbageDataKindSavepointData)),
-				newEmptyCollector(model.GarbageDataKindUpstreamImages, model.OCIImageStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}},
-					runs(model.GarbageDataKindUpstreamImages)),
-				newEmptyCollector(model.GarbageDataKindImageLayers, model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}},
-					runs(model.GarbageDataKindImageLayers)),
-				newEmptyCollector(model.GarbageDataKindDeduplicatedVolumes, model.ResticRepositoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}},
-					runs(model.GarbageDataKindDeduplicatedVolumes)),
+				newEmptyCollector(composemodel.GarbageDataKindSavepointData, composemodel.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}},
+					runs(composemodel.GarbageDataKindSavepointData)),
+				newEmptyCollector(composemodel.GarbageDataKindUpstreamImages, composemodel.OCIImageStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}},
+					runs(composemodel.GarbageDataKindUpstreamImages)),
+				newEmptyCollector(composemodel.GarbageDataKindImageLayers, composemodel.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}},
+					runs(composemodel.GarbageDataKindImageLayers)),
+				newEmptyCollector(composemodel.GarbageDataKindDeduplicatedVolumes, composemodel.ResticRepositoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}},
+					runs(composemodel.GarbageDataKindDeduplicatedVolumes)),
 			}
 			deps := newFinderDeps(newSessionStore(t, "demo"))
 			deps.NewSavepointReader = newSavepointsInOrder(t, readers...)
@@ -485,7 +498,7 @@ func TestFinder_Find_ProbeFails(t *testing.T) {
 		{
 			name: "the data kinds named",
 			dataKinds: []model.GarbageDataKind{
-				model.GarbageDataKindRestoredLayers, model.GarbageDataKindImageLayers, model.GarbageDataKindDeduplicatedVolumes,
+				composemodel.GarbageDataKindRestoredLayers, composemodel.GarbageDataKindImageLayers, composemodel.GarbageDataKindDeduplicatedVolumes,
 			},
 		},
 	}
@@ -494,16 +507,16 @@ func TestFinder_Find_ProbeFails(t *testing.T) {
 			// Arrange
 			demoSavepoints := newEmptySavepoints(t)
 			tags := &mockProbeCollector{}
-			tags.On("Kind").Return(model.GarbageCollectorKindDockerLayerTags).Maybe()
-			tags.On("DataKind").Return(model.GarbageDataKindRestoredLayers).Maybe()
+			tags.On("Kind").Return(composemodel.GarbageCollectorKindDockerLayerTags).Maybe()
+			tags.On("DataKind").Return(composemodel.GarbageDataKindRestoredLayers).Maybe()
 			tags.On("Probe", mock.Anything).Return(errors.New("connection refused")).Once()
 			restic := &mockComposeProjectProbeCollector{}
-			restic.On("Kind").Return(model.GarbageCollectorKindResticRepositories).Maybe()
-			restic.On("DataKind").Return(model.GarbageDataKindDeduplicatedVolumes).Maybe()
+			restic.On("Kind").Return(composemodel.GarbageCollectorKindResticRepositories).Maybe()
+			restic.On("DataKind").Return(composemodel.GarbageDataKindDeduplicatedVolumes).Maybe()
 			restic.On("Probe", mock.Anything).Return(errors.New("connection refused")).Once()
-			blobs := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
+			blobs := newMockComposeProjectCollector(composemodel.GarbageDataKindImageLayers)
 			blobs.On("Find", mock.Anything, inComposeProject("demo")).
-				Return(model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
+				Return(composemodel.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
 			deps := newFinderDeps(newSessionStore(t, "demo"))
 			deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 			deps.DaemonCollectors = []DaemonCollector{tags}
@@ -520,12 +533,12 @@ func TestFinder_Find_ProbeFails(t *testing.T) {
 				aborted[report.DataKind] = report.Summary.Aborted
 			}
 			assert.Equal(t, []model.GarbageDataKind{
-				model.GarbageDataKindRestoredLayers, model.GarbageDataKindImageLayers, model.GarbageDataKindDeduplicatedVolumes,
+				composemodel.GarbageDataKindRestoredLayers, composemodel.GarbageDataKindImageLayers, composemodel.GarbageDataKindDeduplicatedVolumes,
 			}, kinds)
 			assert.Equal(t, map[model.GarbageDataKind]string{
-				model.GarbageDataKindRestoredLayers:      "connection refused",
-				model.GarbageDataKindImageLayers:         "",
-				model.GarbageDataKindDeduplicatedVolumes: "connection refused",
+				composemodel.GarbageDataKindRestoredLayers:      "connection refused",
+				composemodel.GarbageDataKindImageLayers:         "",
+				composemodel.GarbageDataKindDeduplicatedVolumes: "connection refused",
 			}, aborted)
 			tags.AssertExpectations(t)
 			restic.AssertExpectations(t)
@@ -559,8 +572,8 @@ func TestFinder_Find_ListsAllButTheUnlistedNamespaces(t *testing.T) {
 		"shared/oci/blobs/sha256/" + strings.Repeat("a", 64),
 	}
 	demoSavepoints := &mockSavepointReader{}
-	demoSavepoints.On("LoadSavepoints", mock.Anything, []model.SavepointID{tree}).Return([]model.Savepoint(nil), nil).Once()
-	trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
+	demoSavepoints.On("LoadSavepoints", mock.Anything, []model.SavepointID{tree}).Return([]composemodel.Savepoint(nil), nil).Once()
+	trees := newMockComposeProjectCollector(composemodel.GarbageDataKindSavepointData)
 	trees.On("Find", mock.Anything, mock.MatchedBy(func(scope ComposeProjectScope) bool {
 		var names []string
 		for _, object := range scope.Objects {
@@ -570,7 +583,7 @@ func TestFinder_Find_ListsAllButTheUnlistedNamespaces(t *testing.T) {
 			names = append(names, object.Name)
 		}
 		return slices.Equal(wantNames, names)
-	})).Return(model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
+	})).Return(composemodel.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
 	deps := newFinderDeps(store)
 	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
@@ -595,13 +608,13 @@ func TestFound_Delete(t *testing.T) {
 			Reclaimed: []model.GarbageReclaimed{{Target: "restic/volume-named-db", Bytes: utils.New(int64(5))}},
 		}
 	)
-	tags := newMockDaemonCollector(model.GarbageDataKindRestoredLayers)
+	tags := newMockDaemonCollector(composemodel.GarbageDataKindRestoredLayers)
 	tags.On("Find", mock.Anything, forComposeProjects("demo", "other")).Return(deadTagStat, nil).Once()
-	trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
-	restic := newMockComposeProjectCollector(model.GarbageDataKindDeduplicatedVolumes)
-	treeEraser := newMockEraser(model.GarbageActionDeleteTree)
-	forgetEraser := newMockEraser(model.GarbageActionForget)
-	tagEraser := newMockDaemonEraser(model.GarbageActionUntag)
+	trees := newMockComposeProjectCollector(composemodel.GarbageDataKindSavepointData)
+	restic := newMockComposeProjectCollector(composemodel.GarbageDataKindDeduplicatedVolumes)
+	treeEraser := newMockEraser(composemodel.GarbageActionDeleteTree)
+	forgetEraser := newMockEraser(composemodel.GarbageActionForget)
+	tagEraser := newMockDaemonEraser(composemodel.GarbageActionUntag)
 	tagEraser.On("Erase", mock.Anything, []model.GarbageOp{deadTagOp}).Return(tagDeleted).Once()
 	for _, name := range []model.DockerComposeProjectName{"demo", "other"} {
 		trees.On("Find", mock.Anything, inComposeProject(name)).Return(deadTreeStat, nil).Once()
@@ -614,7 +627,7 @@ func TestFound_Delete(t *testing.T) {
 	deps.DaemonCollectors = []DaemonCollector{tags}
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees, restic}
 	deps.DaemonErasers = []DaemonEraser{tagEraser}
-	deps.ComposeProjectErasers = []ComposeProjectEraser{treeEraser, newMockEraser(model.GarbageActionDeleteImage), forgetEraser}
+	deps.ComposeProjectErasers = []ComposeProjectEraser{treeEraser, newMockEraser(composemodel.GarbageActionDeleteImage), forgetEraser}
 	found := New(deps.Deps).Find(context.Background(), deps.store, model.DefaultSession, nil)
 
 	// Act
@@ -651,7 +664,7 @@ func TestFound_Delete_NothingToErase(t *testing.T) {
 	}{
 		{
 			name: "no op",
-			stat: model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}},
+			stat: composemodel.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}},
 			want: model.GarbageDeletion{},
 		},
 		{
@@ -663,7 +676,7 @@ func TestFound_Delete_NothingToErase(t *testing.T) {
 		},
 		{
 			name: "ops of several actions",
-			stat: model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadBlobOp, deadTreeOp}}},
+			stat: composemodel.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadBlobOp, deadTreeOp}}},
 			want: model.GarbageDeletion{Failed: []model.GarbageDeleteFailure{
 				{Target: deadBlobOp.Target, Error: errNoEraser.Error()},
 				{Target: deadTreeOp.Target, Error: errNoEraser.Error()},
@@ -672,7 +685,7 @@ func TestFound_Delete_NothingToErase(t *testing.T) {
 		{
 			name:         "an action no daemon eraser carries out",
 			daemon:       true,
-			daemonAction: model.GarbageActionDeleteTree,
+			daemonAction: composemodel.GarbageActionDeleteTree,
 			stat:         deadTagStat,
 			want: model.GarbageDeletion{Failed: []model.GarbageDeleteFailure{
 				{Target: deadTagOp.Target, Error: errNoEraser.Error()},
@@ -681,8 +694,8 @@ func TestFound_Delete_NothingToErase(t *testing.T) {
 		{
 			name:         "daemon ops of several actions",
 			daemon:       true,
-			daemonAction: model.GarbageActionUntag,
-			stat:         model.DockerLayerTagStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadTagOp, deadTreeOp}}},
+			daemonAction: composemodel.GarbageActionUntag,
+			stat:         composemodel.DockerLayerTagStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadTagOp, deadTreeOp}}},
 			want: model.GarbageDeletion{Failed: []model.GarbageDeleteFailure{
 				{Target: deadTagOp.Target, Error: errNoEraser.Error()},
 				{Target: deadTreeOp.Target, Error: errNoEraser.Error()},
@@ -692,11 +705,11 @@ func TestFound_Delete_NothingToErase(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange: no eraser expects Erase, so one would fail the mock.
-			objectEraser := newMockEraser(model.GarbageActionDeleteObject)
-			treeEraser := newMockEraser(model.GarbageActionDeleteTree)
+			objectEraser := newMockEraser(composemodel.GarbageActionDeleteObject)
+			treeEraser := newMockEraser(composemodel.GarbageActionDeleteTree)
 			daemonEraser := newMockDaemonEraser(tt.daemonAction)
-			tags := newMockDaemonCollector(model.GarbageDataKindRestoredLayers)
-			collector := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
+			tags := newMockDaemonCollector(composemodel.GarbageDataKindRestoredLayers)
+			collector := newMockComposeProjectCollector(composemodel.GarbageDataKindImageLayers)
 			deps := newFinderDeps(newSessionStore(t, "demo"))
 			deps.ComposeProjectErasers = []ComposeProjectEraser{objectEraser, treeEraser}
 			deps.DaemonErasers = []DaemonEraser{daemonEraser}

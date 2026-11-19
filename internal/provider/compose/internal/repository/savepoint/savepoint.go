@@ -49,6 +49,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // The reserved keys at the root of every savepoint namespace. The namespace
@@ -75,18 +76,22 @@ func New(store storages.Storager) *Repository {
 // SaveSavepoint writes "<id>/savepoint.json". It is the commit: the caller must have
 // written every archive first, because a reader treats this object's existence
 // as proof that the savepoint is whole.
-func (r *Repository) SaveSavepoint(ctx context.Context, savepoint model.Savepoint) error {
-	if err := savepoint.ID.Validate(); err != nil {
+func (r *Repository) SaveSavepoint(ctx context.Context, savepoint composemodel.Savepoint) error {
+	if err := savepoint.Header.ID.Validate(); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(savepoint, "", "  ")
+	record, err := composemodel.NewSavepointRecord(savepoint)
 	if err != nil {
-		return fmt.Errorf("marshal savepoint %s: %w", savepoint.ID, err)
+		return err
+	}
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal savepoint %s: %w", savepoint.Header.ID, err)
 	}
 	data = append(data, '\n')
 
-	if err := r.storage.PutObject(ctx, recordKey(savepoint.ID), bytes.NewReader(data)); err != nil {
-		return fmt.Errorf("write savepoint record %s: %w", savepoint.ID, err)
+	if err := r.storage.PutObject(ctx, recordKey(savepoint.Header.ID), bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("write savepoint record %s: %w", savepoint.Header.ID, err)
 	}
 	return nil
 }
@@ -139,13 +144,13 @@ func (r *Repository) LoadSpec(ctx context.Context, id model.SavepointID) ([]byte
 // That is a listing plus two requests per savepoint (Exists, then GetObject)
 // rather than a single index read: free on a local filesystem, a round trip each
 // on an object store or over SFTP.
-func (r *Repository) ListSavepoints(ctx context.Context) ([]model.Savepoint, error) {
+func (r *Repository) ListSavepoints(ctx context.Context) ([]composemodel.Savepoint, error) {
 	_, dirs, err := r.storage.ListDir(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list savepoint store: %w", err)
 	}
 
-	records := make([]model.Savepoint, 0, len(dirs))
+	records := make([]composemodel.Savepoint, 0, len(dirs))
 	for _, dir := range dirs {
 		id := model.SavepointID(dir.Dirname())
 		if err := id.Validate(); err != nil {
@@ -162,15 +167,17 @@ func (r *Repository) ListSavepoints(ctx context.Context) ([]model.Savepoint, err
 		}
 		records = append(records, record)
 	}
-	slices.SortFunc(records, func(a, b model.Savepoint) int { return strings.Compare(a.ID.String(), b.ID.String()) })
+	slices.SortFunc(records, func(a, b composemodel.Savepoint) int {
+		return strings.Compare(a.Header.ID.String(), b.Header.ID.String())
+	})
 	return records, nil
 }
 
 // LoadSavepoints reads the record of every savepoint of ids, oldest first: one request per
 // record, and no listing of its own. One with no record, never committed or removed since,
 // is skipped.
-func (r *Repository) LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error) {
-	var records []model.Savepoint
+func (r *Repository) LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]composemodel.Savepoint, error) {
+	var records []composemodel.Savepoint
 	for _, id := range ids {
 		if err := id.Validate(); err != nil {
 			return nil, fmt.Errorf("load savepoints: %w", err)
@@ -185,35 +192,37 @@ func (r *Repository) LoadSavepoints(ctx context.Context, ids []model.SavepointID
 		}
 		records = append(records, record)
 	}
-	slices.SortFunc(records, func(a, b model.Savepoint) int { return strings.Compare(a.ID.String(), b.ID.String()) })
+	slices.SortFunc(records, func(a, b composemodel.Savepoint) int {
+		return strings.Compare(a.Header.ID.String(), b.Header.ID.String())
+	})
 	return records, nil
 }
 
 // load reads one savepoint's record. found is false when the namespace holds no
 // record, which means the savepoint never committed.
-func (r *Repository) load(ctx context.Context, id model.SavepointID) (model.Savepoint, bool, error) {
+func (r *Repository) load(ctx context.Context, id model.SavepointID) (composemodel.Savepoint, bool, error) {
 	// Exists rather than matching GetObject's error against os.ErrNotExist: that
 	// error belongs to the directory backend, and an object store would report a
 	// missing key differently.
 	exists, err := r.storage.Exists(ctx, recordKey(id))
 	if err != nil {
-		return model.Savepoint{}, false, fmt.Errorf("stat record: %w", err)
+		return composemodel.Savepoint{}, false, fmt.Errorf("stat record: %w", err)
 	}
 	if !exists {
-		return model.Savepoint{}, false, nil
+		return composemodel.Savepoint{}, false, nil
 	}
 	record, err := r.read(ctx, id)
 	if err != nil {
-		return model.Savepoint{}, false, err
+		return composemodel.Savepoint{}, false, err
 	}
 	return record, true, nil
 }
 
 // read reads and decodes one savepoint's record, which must exist.
-func (r *Repository) read(ctx context.Context, id model.SavepointID) (model.Savepoint, error) {
+func (r *Repository) read(ctx context.Context, id model.SavepointID) (composemodel.Savepoint, error) {
 	obj, err := r.storage.GetObject(ctx, recordKey(id))
 	if err != nil {
-		return model.Savepoint{}, fmt.Errorf("read record: %w", err)
+		return composemodel.Savepoint{}, fmt.Errorf("read record: %w", err)
 	}
 	defer func() {
 		if err := obj.Close(); err != nil {
@@ -223,9 +232,9 @@ func (r *Repository) read(ctx context.Context, id model.SavepointID) (model.Save
 
 	var record model.Savepoint
 	if err := json.NewDecoder(obj).Decode(&record); err != nil {
-		return model.Savepoint{}, fmt.Errorf("parse record: %w", err)
+		return composemodel.Savepoint{}, fmt.Errorf("parse record: %w", err)
 	}
-	return record, nil
+	return composemodel.ParseSavepoint(record)
 }
 
 // DeleteSavepoint removes the record, then the whole tree, so a crash leaves a dead tree for a gc.

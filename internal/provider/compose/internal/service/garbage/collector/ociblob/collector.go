@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/utils"
@@ -36,10 +37,10 @@ func New(concurrency int) *Collector {
 }
 
 func (s *Collector) Kind() model.GarbageCollectorKind {
-	return model.GarbageCollectorKindOCIBlobs
+	return composemodel.GarbageCollectorKindOCIBlobs
 }
 
-func (s *Collector) DataKind() model.GarbageDataKind { return model.GarbageDataKindImageLayers }
+func (s *Collector) DataKind() model.GarbageDataKind { return composemodel.GarbageDataKindImageLayers }
 
 // Find names every blob no live manifest lists. One an unreferenced manifest lists is held back,
 // and freed by the run after the one that removes that manifest: a capture reuses an intact
@@ -56,7 +57,7 @@ func (s *Collector) Find(ctx context.Context, scope garbage.ComposeProjectScope)
 		return nil, err
 	}
 	if len(references.unreadable) > 0 {
-		return model.OCIBlobStat{
+		return composemodel.OCIBlobStat{
 			GarbageFindings: model.GarbageFindings{
 				Ops:     ops,
 				Aborted: fmt.Sprintf("%d image manifests cannot be read", len(references.unreadable)),
@@ -72,21 +73,21 @@ func (s *Collector) Find(ctx context.Context, scope garbage.ComposeProjectScope)
 		case references.byUnnamed[blob.Digest]:
 			skipped = append(skipped, model.GarbageSkip{
 				Target:       blob.Key,
-				Reason:       model.GarbageReasonListedByUnreferenced,
+				Reason:       composemodel.GarbageReasonListedByUnreferenced,
 				LastModified: blob.LastModified,
 			})
 		default:
 			ops = append(ops, model.GarbageOp{
-				Action:       model.GarbageActionDeleteObject,
+				Action:       composemodel.GarbageActionDeleteObject,
 				Target:       blob.Key,
 				Bytes:        utils.New(blob.Bytes),
-				Reason:       model.GarbageReasonUnreferenced,
+				Reason:       composemodel.GarbageReasonUnreferenced,
 				LastModified: blob.LastModified,
 				Savepoint:    newSoleDeadSavepoint(references.byDeadSavepoints[blob.Digest]),
 			})
 		}
 	}
-	return model.OCIBlobStat{
+	return composemodel.OCIBlobStat{
 		GarbageFindings: model.GarbageFindings{
 			Ops:     ops,
 			Skipped: skipped,

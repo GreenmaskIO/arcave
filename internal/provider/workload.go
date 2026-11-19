@@ -32,9 +32,17 @@ type Workload interface {
 // Observer reads one workload for a status, built at the DI root apart from the Workload: it opens
 // no store and refuses no daemon.
 type Observer interface {
-	// Observe reads the workload's replicas as the daemon runs them; it takes no lock and changes
-	// nothing. A workload never started or taken down has none.
+	// Observe reads the workload off its runtime; it opens no store, takes no lock, refuses nothing.
 	Observe(ctx context.Context) (ObservedWorkload, error)
+}
+
+// ObservedWorkload is the workload as Observe read it; nothing below does I/O.
+type ObservedWorkload interface {
+	// Deployment is the build the workload carries, the latest of several; nil for none.
+	Deployment() *model.SavepointDeployment
+	// Report says what runs, set against the deployed savepoint's record; nil when arcave read
+	// none. Ages are counted from checkedAt.
+	Report(checkedAt time.Time, deployed *model.Savepoint) model.WorkloadReport
 }
 
 // Surveyor reads one workload by its labels alone for an up or a down. Built at the DI root apart

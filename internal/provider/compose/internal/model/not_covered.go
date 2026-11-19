@@ -19,6 +19,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 // SkipReason says why a mount is not a unit of backup. Its values are the wire
@@ -67,26 +70,12 @@ func (m NotCovered) IsEmpty() bool {
 		len(m.FailedHooks) == 0
 }
 
-// Notice is one thing a savepoint does not hold or a status finds, for a reader: what it is, and,
-// on a savepoint's, what to change when there is something to.
-type Notice struct {
-	// Code names the condition, stable for a machine to act on; empty where none is defined.
-	Code    NoticeCode `json:"code,omitempty"`
-	Message string     `json:"message"`
-	Hint    string     `json:"hint,omitempty"`
-	// Severe marks a notice that puts the data at risk; a reader lists it first.
-	Severe bool `json:"severe,omitempty"`
-}
-
-// NoticeCode names the condition a notice reports.
-type NoticeCode string
-
 // Notices spells out what is left out, one notice per entry: the severe first, then in the order
 // of the fields.
-func (m NotCovered) Notices() []Notice {
-	var notices []Notice
+func (m NotCovered) Notices() []model.Notice {
+	var notices []model.Notice
 	for _, killed := range m.KilledContainers {
-		notices = append(notices, Notice{
+		notices = append(notices, model.Notice{
 			Message: fmt.Sprintf("%s was killed at the stop deadline: its volumes may hold a crash state",
 				formatReplica(killed.Service, killed.Replica, formatShortID(killed.Container))),
 			Hint:   "raise compose.stop_timeout or the service's stop_grace_period",
@@ -94,16 +83,16 @@ func (m NotCovered) Notices() []Notice {
 		})
 	}
 	for _, failed := range m.FailedHooks {
-		notices = append(notices, Notice{
+		notices = append(notices, model.Notice{
 			Message: fmt.Sprintf("%s: %s hook failed (%s), captured anyway: the application may not have been prepared",
 				formatReplica(failed.Service, failed.Replica, failed.Container), failed.Hook, failed.Error),
 			Hint: fmt.Sprintf("fix the hook, or set %s%s.on-error: %s to refuse such a capture",
-				CaptureLabelHookPrefix, failed.Hook, HookOnErrorFail),
+				CaptureLabelHookPrefix, failed.Hook, composeconfig.HookOnErrorFail),
 			Severe: true,
 		})
 	}
 	for _, gap := range m.ReplicaGaps {
-		notices = append(notices, Notice{
+		notices = append(notices, model.Notice{
 			Message: fmt.Sprintf("%s: replica %s gone, only %s held",
 				gap.Service, formatInts(gap.Missing), formatInts(gap.Replicas)),
 			Severe: true,
@@ -118,24 +107,24 @@ func (m NotCovered) Notices() []Notice {
 		if slices.ContainsFunc(m.WritableLayers, func(layer SkippedWritableLayer) bool { return layer.Service == service }) {
 			message = fmt.Sprintf("%s has no volumes", service)
 		}
-		notices = append(notices, Notice{
+		notices = append(notices, model.Notice{
 			Message: message,
 		})
 	}
 	for _, unresolved := range m.UnresolvedImages {
-		notices = append(notices, Notice{
+		notices = append(notices, model.Notice{
 			Message: fmt.Sprintf("%s runs on an image arcave cannot name%s: only its writable layer brings it back",
 				formatReplica(unresolved.Service, unresolved.Replica, unresolved.Container), formatParens(unresolved.Image)),
 		})
 	}
 	for _, layer := range m.WritableLayers {
-		notices = append(notices, Notice{
+		notices = append(notices, model.Notice{
 			Message: fmt.Sprintf("%s: writable layer left out%s, a rollback creates it fresh from its image",
 				formatReplica(layer.Service, layer.Replica, layer.Container), formatBy(layer.Detail)),
 		})
 	}
 	for _, image := range m.Images {
-		notices = append(notices, Notice{
+		notices = append(notices, model.Notice{
 			Message: fmt.Sprintf("%s: image %sleft out%s", image.Service, formatSpaced(image.Image), formatBy(image.Detail)),
 		})
 	}
@@ -143,19 +132,19 @@ func (m NotCovered) Notices() []Notice {
 }
 
 // newMountNotice says what a skipped mount is and why; an excluded one names the label or key.
-func newMountNotice(skipped SkippedVolume) Notice {
+func newMountNotice(skipped SkippedVolume) model.Notice {
 	name := "volume " + skipped.Volume
 	if skipped.Volume == "" {
 		name = formatReplica(skipped.Service, skipped.Replica, "mount") + " " + skipped.Target
 	}
 	if skipped.Reason != SkipReasonExcluded {
-		return Notice{Message: fmt.Sprintf("%s is not held: %s", name, skipped.Detail)}
+		return model.Notice{Message: fmt.Sprintf("%s is not held: %s", name, skipped.Detail)}
 	}
 	hint := skipped.Detail + " leaves it out"
 	if skipped.Detail == "" {
 		hint = "an " + CaptureLabelCapture.String() + "=false or " + CaptureLabelMountsExclude.String() + " label leaves it out"
 	}
-	return Notice{
+	return model.Notice{
 		Message: name + " is left out",
 		Hint:    hint,
 	}

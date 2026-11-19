@@ -40,7 +40,7 @@ func TestConfigInitHandler_Init(t *testing.T) {
 		Log: config.Log{Level: "debug", Format: "console"},
 		ComposeProvider: composeconfig.Config{
 			Docker:   composeconfig.Docker{Host: "tcp://remote:2375"},
-			Snapshot: composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendFullCopy},
+			Snapshot: composeconfig.Snapshot{Backend: string(composeconfig.SnapshotBackendFullCopy)},
 		},
 	}
 	svcErr := errors.New("project already initialized")

@@ -23,13 +23,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
@@ -48,7 +48,7 @@ func New() *Archiver { return &Archiver{} }
 // Store writes the archive whole. Nothing is deduplicated, so every byte written is
 // a byte this capture added.
 func (s *Archiver) Store(
-	ctx context.Context, dst storages.Writer, imageID model.ImageDigestID, archive io.Reader,
+	ctx context.Context, dst storages.Writer, imageID composemodel.ImageDigestID, archive io.Reader,
 ) (imagebackend.StoredSize, error) {
 	counted := utils.NewCountingReader(archive)
 	if err := dst.PutObject(ctx, archiveName, progress.NewReader(ctx, counted, 0)); err != nil {
@@ -67,7 +67,7 @@ func (s *Archiver) Store(
 
 // Load streams the stored archive back out.
 func (s *Archiver) Load(
-	ctx context.Context, src storages.Storager, imageID model.ImageDigestID, archive io.Writer,
+	ctx context.Context, src storages.Storager, imageID composemodel.ImageDigestID, archive io.Writer,
 ) error {
 	manifest, err := imagebackend.ReadManifest(ctx, src, imagebackend.FormatArchive)
 	if err != nil {

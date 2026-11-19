@@ -20,23 +20,24 @@ import (
 	"time"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // labelPrefix opens every label of an inflight marker's volume.
-const labelPrefix = model.SystemLabelPrefix + "inflight."
+const labelPrefix = composemodel.SystemLabelPrefix + "inflight."
 
 // The labels of an inflight marker's volume: the arcave project it is looked up by, and the
 // marker spelled out.
 const (
-	labelArcaveProject  model.SystemLabel = labelPrefix + "arcave-project"
-	labelComposeProject model.SystemLabel = labelPrefix + "compose-project"
-	labelSession        model.SystemLabel = labelPrefix + "session"
-	labelTarget         model.SystemLabel = labelPrefix + "target"
-	labelSafety         model.SystemLabel = labelPrefix + "safety"
-	labelPhase          model.SystemLabel = labelPrefix + "phase"
-	labelAt             model.SystemLabel = labelPrefix + "at"
+	labelArcaveProject  composemodel.SystemLabel = labelPrefix + "arcave-project"
+	labelComposeProject composemodel.SystemLabel = labelPrefix + "compose-project"
+	labelSession        composemodel.SystemLabel = labelPrefix + "session"
+	labelTarget         composemodel.SystemLabel = labelPrefix + "target"
+	labelSafety         composemodel.SystemLabel = labelPrefix + "safety"
+	labelPhase          composemodel.SystemLabel = labelPrefix + "phase"
+	labelAt             composemodel.SystemLabel = labelPrefix + "at"
 	// labelDescription says what the volume is to whoever finds it on the daemon.
-	labelDescription model.SystemLabel = labelPrefix + "description"
+	labelDescription composemodel.SystemLabel = labelPrefix + "description"
 )
 
 const (
@@ -83,7 +84,7 @@ func newInflightMarkerVolumeName(composeProject model.DockerComposeProjectName, 
 // parseInflightMarkerVolume reads the marker a volume's labels spell out; every label but the
 // safety snapshot and the description is required.
 func parseInflightMarkerVolume(labels map[string]string) (inflightMarkerVolume, error) {
-	get := func(key model.SystemLabel) string { return labels[string(key)] }
+	get := func(key composemodel.SystemLabel) string { return labels[string(key)] }
 	var (
 		arcaveProject  = model.ArcaveProjectName(get(labelArcaveProject))
 		composeProject = model.DockerComposeProjectName(get(labelComposeProject))
@@ -149,6 +150,6 @@ func parseLabelTime(value string) (time.Time, error) {
 	return time.Parse(time.RFC3339Nano, value)
 }
 
-func newLabelError(key model.SystemLabel, err error) error {
+func newLabelError(key composemodel.SystemLabel, err error) error {
 	return fmt.Errorf("%s: %w", key, err)
 }

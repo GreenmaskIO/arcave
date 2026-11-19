@@ -129,6 +129,11 @@ func (m *mockSession) Savepoints(workload provider.WorkloadName) (provider.Savep
 	return savepoints, args.Error(1)
 }
 
+func (m *mockSession) GarbageDataKinds() []model.GarbageDataKind {
+	dataKinds, _ := m.Called().Get(0).([]model.GarbageDataKind)
+	return dataKinds
+}
+
 func (m *mockSession) FindGarbage(ctx context.Context, dataKinds []model.GarbageDataKind) []provider.Garbage {
 	found, _ := m.Called(ctx, dataKinds).Get(0).([]provider.Garbage)
 	return found

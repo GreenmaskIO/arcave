@@ -16,14 +16,14 @@ package cdcbackend
 
 import (
 	"encoding/json"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"path"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 )
 
@@ -57,7 +57,7 @@ func TestSnapshotter_Restore(t *testing.T) {
 			require.NotEqual(t, captured, env.hash(t, vol), "the volume must actually diverge first")
 
 			// Act
-			err := backend.Restore(env.ctx, model.BackendRestoreRequest{SnapshotID: idFirst, Payload: payload})
+			err := backend.Restore(env.ctx, composemodel.BackendRestoreRequest{SnapshotID: idFirst, Payload: payload})
 
 			// Assert
 			require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestSnapshotter_Restore_DecodesAStoredPayload(t *testing.T) {
 	require.IsType(t, map[string]any{}, stored, "the point of this case is the map, not the struct")
 
 	// Act
-	err := backend.Restore(env.ctx, model.BackendRestoreRequest{SnapshotID: idFirst, Payload: stored})
+	err := backend.Restore(env.ctx, composemodel.BackendRestoreRequest{SnapshotID: idFirst, Payload: stored})
 
 	// Assert
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func TestSnapshotter_Restore_RefusesAnUnusablePayload(t *testing.T) {
 			live := env.hash(t, vol)
 
 			// Act
-			err := backend.Restore(env.ctx, model.BackendRestoreRequest{SnapshotID: idFirst, Payload: tt.payload})
+			err := backend.Restore(env.ctx, composemodel.BackendRestoreRequest{SnapshotID: idFirst, Payload: tt.payload})
 
 			// Assert
 			require.Error(t, err)
@@ -145,7 +145,7 @@ func TestSnapshotter_Restore_SnapshotDeletedBehindArcave(t *testing.T) {
 	require.NoError(t, env.repoStore(t, vol).Delete(env.ctx, path.Join(snapshotsPath, payload.SnapshotObjectID)))
 
 	// Act
-	err := backend.Restore(env.ctx, model.BackendRestoreRequest{SnapshotID: idFirst, Payload: payload})
+	err := backend.Restore(env.ctx, composemodel.BackendRestoreRequest{SnapshotID: idFirst, Payload: payload})
 
 	// Assert
 	require.Error(t, err)

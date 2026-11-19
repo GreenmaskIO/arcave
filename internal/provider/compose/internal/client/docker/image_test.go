@@ -17,10 +17,11 @@ package docker
 import (
 	"context"
 	"errors"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
@@ -29,8 +30,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 func TestEngine_CommitContainer(t *testing.T) {
@@ -49,13 +48,13 @@ func TestEngine_CommitContainer(t *testing.T) {
 
 	// Act
 	id, err := e.CommitContainer(context.Background(), "c0ffee", "arcave savepoint 019e7044-8800-7000-8000-000000000000", map[string]string{
-		string(model.SystemLabelBaseImageRef): "postgres:16",
-		string(model.SystemLabelBaseImageID):  "sha256:bbbb",
+		string(composemodel.SystemLabelBaseImageRef): "postgres:16",
+		string(composemodel.SystemLabelBaseImageID):  "sha256:bbbb",
 	})
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, model.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), id)
+	assert.Equal(t, composemodel.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), id)
 	api.AssertExpectations(t)
 }
 
@@ -72,7 +71,7 @@ func TestEngine_CommitContainer_PrefixesABareDigest(t *testing.T) {
 
 	// Assert: Podman answers with the hex alone.
 	require.NoError(t, err)
-	assert.Equal(t, model.ImageDigestID("sha256:"+bare), id)
+	assert.Equal(t, composemodel.ImageDigestID("sha256:"+bare), id)
 	api.AssertExpectations(t)
 }
 
@@ -87,7 +86,7 @@ func TestEngine_CommitContainer_RefusesAnAnswerThatIsNotADigest(t *testing.T) {
 	_, err := e.CommitContainer(context.Background(), "c0ffee", "", nil)
 
 	// Assert: a name would be resolved by whatever it points at later on.
-	require.ErrorIs(t, err, model.ErrInvalidDigestID)
+	require.ErrorIs(t, err, composemodel.ErrInvalidDigestID)
 	api.AssertExpectations(t)
 }
 
@@ -363,7 +362,7 @@ func TestEngine_ListLayerImages(t *testing.T) {
 	}).Return([]image.Summary{
 		{
 			ID: "sha256:aaaa", RepoTags: []string{layerRef, "postgres:16"},
-			Labels: map[string]string{string(model.SystemLabelArcaveProject): "app", string(model.SystemLabelComposeProject): "demo"},
+			Labels: map[string]string{string(composemodel.SystemLabelArcaveProject): "app", string(composemodel.SystemLabelComposeProject): "demo"},
 		},
 		{ID: "sha256:bbbb", RepoTags: []string{"docker.io/" + podmanRef}},
 		{ID: "sha256:cccc", RepoTags: []string{"arcave/demo-db-3:sp-not-a-savepoint"}},

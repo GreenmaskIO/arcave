@@ -20,25 +20,25 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 type mockImageEngine struct{ mock.Mock }
 
 func (m *mockImageEngine) CommitContainer(
 	ctx context.Context, containerID, comment string, labels map[string]string,
-) (model.ImageDigestID, error) {
+) (composemodel.ImageDigestID, error) {
 	args := m.Called(ctx, containerID, comment, labels)
-	return args.Get(0).(model.ImageDigestID), args.Error(1)
+	return args.Get(0).(composemodel.ImageDigestID), args.Error(1)
 }
 
-func (m *mockImageEngine) SaveImage(ctx context.Context, imageID model.ImageDigestID) (io.ReadCloser, error) {
+func (m *mockImageEngine) SaveImage(ctx context.Context, imageID composemodel.ImageDigestID) (io.ReadCloser, error) {
 	args := m.Called(ctx, imageID)
 	rc, _ := args.Get(0).(io.ReadCloser)
 	return rc, args.Error(1)
 }
 
-func (m *mockImageEngine) RemoveImage(ctx context.Context, imageID model.ImageDigestID) error {
+func (m *mockImageEngine) RemoveImage(ctx context.Context, imageID composemodel.ImageDigestID) error {
 	return m.Called(ctx, imageID).Error(0)
 }
 
@@ -49,11 +49,11 @@ func (m *mockImageEngine) LoadImage(ctx context.Context, r io.Reader) error {
 	return m.Called(ctx, string(archive)).Error(0)
 }
 
-func (m *mockImageEngine) TagImage(ctx context.Context, imageID model.ImageDigestID, ref string) error {
+func (m *mockImageEngine) TagImage(ctx context.Context, imageID composemodel.ImageDigestID, ref string) error {
 	return m.Called(ctx, imageID, ref).Error(0)
 }
 
-func (m *mockImageEngine) ImageExists(ctx context.Context, imageID model.ImageDigestID) (bool, error) {
+func (m *mockImageEngine) ImageExists(ctx context.Context, imageID composemodel.ImageDigestID) (bool, error) {
 	args := m.Called(ctx, imageID)
 	return args.Bool(0), args.Error(1)
 }

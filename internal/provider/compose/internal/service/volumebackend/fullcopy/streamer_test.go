@@ -33,6 +33,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -57,7 +59,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 		addressErr  error
 		putErr      error
 		wantKey     string
-		wantStored  func(t *testing.T, stat model.SnapshotStat, object string)
+		wantStored  func(t *testing.T, stat composemodel.SnapshotStat, object string)
 		wantErrMsg  []string
 		wantErrIs   error
 		wantEmpty   bool
@@ -67,7 +69,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 			name:        "none stores the tar as is",
 			compression: CompressionNone,
 			wantKey:     captureDir + archiveNameTar,
-			wantStored: func(t *testing.T, stat model.SnapshotStat, object string) {
+			wantStored: func(t *testing.T, stat composemodel.SnapshotStat, object string) {
 				assert.Equal(t, tarStream, object)
 				assert.Equal(t, stat.SizeBytes, stat.StoredBytes, "the archive is stored whole")
 			},
@@ -76,7 +78,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 			name:        "zstd stores the tar compressed",
 			compression: CompressionZstd,
 			wantKey:     captureDir + archiveNameZstd,
-			wantStored: func(t *testing.T, stat model.SnapshotStat, object string) {
+			wantStored: func(t *testing.T, stat composemodel.SnapshotStat, object string) {
 				assert.Equal(t, tarStream, decodeZstd(t, object))
 				assert.Equal(t, int64(len(object)), stat.StoredBytes, "stored is what reached the store")
 				assert.Less(t, stat.StoredBytes, stat.SizeBytes)
@@ -137,11 +139,11 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 				spec = refusingStore{Storager: store, err: tt.putErr}
 			}
 			snapshotter, err := NewFactory(docker, tt.compression).
-				New(model.BackendSpec{Store: spec, Volume: volume})
+				New(composemodel.BackendSpec{Store: spec, Volume: volume})
 			require.NoError(t, err)
 
 			// Act
-			stat, err := snapshotter.Snapshot(context.Background(), model.BackendSnapshotRequest{SnapshotID: testSnapshotID})
+			stat, err := snapshotter.Snapshot(context.Background(), composemodel.BackendSnapshotRequest{SnapshotID: testSnapshotID})
 
 			// Assert
 			if tt.wantErrMsg != nil {
@@ -162,7 +164,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, []string{tt.wantKey}, objectNames(t, store))
 			assert.Equal(t, volume, stat.Volume, "the stat carries the unit it captured")
-			assert.Equal(t, model.SnapshotBackendFullCopy, stat.Type)
+			assert.Equal(t, composeconfig.SnapshotBackendFullCopy, stat.Type)
 			assert.Equal(t, int64(len(tarStream)), stat.SizeBytes, "size counts the tar")
 			assert.Zero(t, stat.ReusedBytes)
 			assert.Equal(t, Payload{Compression: tt.compression}, stat.Payload, "the record names the format")
@@ -201,11 +203,11 @@ func TestSnapshotter_Snapshot_CapturesIntoTheStoreTheSpecNamed(t *testing.T) {
 		Return(io.NopCloser(strings.NewReader(tarStream)), nil).Once()
 	named, other := newStore(t, "named"), newStore(t, "other")
 	snapshotter, err := NewFactory(docker, CompressionZstd).
-		New(model.BackendSpec{Store: named, Volume: volume})
+		New(composemodel.BackendSpec{Store: named, Volume: volume})
 	require.NoError(t, err)
 
 	// Act
-	_, err = snapshotter.Snapshot(context.Background(), model.BackendSnapshotRequest{SnapshotID: testSnapshotID})
+	_, err = snapshotter.Snapshot(context.Background(), composemodel.BackendSnapshotRequest{SnapshotID: testSnapshotID})
 
 	// Assert
 	require.NoError(t, err)
@@ -226,11 +228,11 @@ func TestSnapshotter_Snapshot_ReportsTheTarBytes(t *testing.T) {
 	recorder := &bytesRecorder{}
 	ctx := newBytesStepContext(recorder, "volume.capture")
 	snapshotter, err := NewFactory(docker, CompressionZstd).
-		New(model.BackendSpec{Store: store, Volume: volume})
+		New(composemodel.BackendSpec{Store: store, Volume: volume})
 	require.NoError(t, err)
 
 	// Act
-	stat, err := snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: testSnapshotID})
+	stat, err := snapshotter.Snapshot(ctx, composemodel.BackendSnapshotRequest{SnapshotID: testSnapshotID})
 
 	// Assert
 	require.NoError(t, err)
@@ -334,11 +336,11 @@ func TestSnapshotter_Restore(t *testing.T) {
 					Return(tt.writeErr).Once()
 			}
 			snapshotter, err := NewFactory(docker, CompressionZstd).
-				New(model.BackendSpec{Store: store, Volume: volume})
+				New(composemodel.BackendSpec{Store: store, Volume: volume})
 			require.NoError(t, err)
 
 			// Act
-			err = snapshotter.Restore(ctx, model.BackendRestoreRequest{SnapshotID: testSnapshotID, Payload: tt.reqPayload})
+			err = snapshotter.Restore(ctx, composemodel.BackendRestoreRequest{SnapshotID: testSnapshotID, Payload: tt.reqPayload})
 
 			// Assert
 			tt.verify(t, err, restored.String())
@@ -354,11 +356,11 @@ func TestSnapshotter_Restore_RefusesAnUnknownCompression(t *testing.T) {
 	docker := &mockVolumeStreamer{}
 	store := newStore(t, "savepoints")
 	snapshotter, err := NewFactory(docker, CompressionZstd).
-		New(model.BackendSpec{Store: store, Volume: bindVolume("app", "/etc/cfg")})
+		New(composemodel.BackendSpec{Store: store, Volume: bindVolume("app", "/etc/cfg")})
 	require.NoError(t, err)
 
 	// Act
-	err = snapshotter.Restore(context.Background(), model.BackendRestoreRequest{
+	err = snapshotter.Restore(context.Background(), composemodel.BackendRestoreRequest{
 		SnapshotID: testSnapshotID,
 		Payload:    map[string]any{"compression": "lz4"},
 	})
@@ -412,11 +414,11 @@ func TestSnapshotter_Restore_ReportsTheTarBytes(t *testing.T) {
 		}).
 		Return(nil).Once()
 	snapshotter, err := NewFactory(docker, CompressionZstd).
-		New(model.BackendSpec{Store: store, Volume: volume})
+		New(composemodel.BackendSpec{Store: store, Volume: volume})
 	require.NoError(t, err)
 
 	// Act
-	err = snapshotter.Restore(ctx, model.BackendRestoreRequest{
+	err = snapshotter.Restore(ctx, composemodel.BackendRestoreRequest{
 		SnapshotID: testSnapshotID,
 		Payload:    Payload{Compression: CompressionZstd},
 		SizeBytes:  int64(len(tarStream)),
@@ -508,19 +510,19 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 
 	ops := []struct {
 		name string
-		call func(ctx context.Context, s model.VolumeSnapshotBackend, id model.SavepointID) error
+		call func(ctx context.Context, s composemodel.VolumeSnapshotBackend, id model.SavepointID) error
 	}{
 		{
 			name: "snapshot",
-			call: func(ctx context.Context, s model.VolumeSnapshotBackend, id model.SavepointID) error {
-				_, err := s.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: id})
+			call: func(ctx context.Context, s composemodel.VolumeSnapshotBackend, id model.SavepointID) error {
+				_, err := s.Snapshot(ctx, composemodel.BackendSnapshotRequest{SnapshotID: id})
 				return err
 			},
 		},
 		{
 			name: "restore",
-			call: func(ctx context.Context, s model.VolumeSnapshotBackend, id model.SavepointID) error {
-				return s.Restore(ctx, model.BackendRestoreRequest{SnapshotID: id})
+			call: func(ctx context.Context, s composemodel.VolumeSnapshotBackend, id model.SavepointID) error {
+				return s.Restore(ctx, composemodel.BackendRestoreRequest{SnapshotID: id})
 			},
 		},
 	}
@@ -531,7 +533,7 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 				// Arrange
 				docker := &mockVolumeStreamer{}
 				store := newStore(t, "savepoints")
-				snapshotter, err := NewFactory(docker, CompressionZstd).New(model.BackendSpec{Store: store, Volume: bindVolume("app", "/etc/cfg")})
+				snapshotter, err := NewFactory(docker, CompressionZstd).New(composemodel.BackendSpec{Store: store, Volume: bindVolume("app", "/etc/cfg")})
 				require.NoError(t, err)
 
 				// Act
@@ -554,7 +556,7 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 func TestFactory_New(t *testing.T) {
 	tests := []struct {
 		name        string
-		volume      model.Volume
+		volume      composemodel.Volume
 		noStore     bool
 		compression Compression
 		wantErrIs   error
@@ -569,7 +571,7 @@ func TestFactory_New(t *testing.T) {
 		},
 		{
 			name:   "so does one mounted only at a subpath: it is captured whole",
-			volume: namedVolume("demo_assets", model.ServiceReference{Service: "web", Target: "/srv", Subpath: "public"}),
+			volume: namedVolume("demo_assets", composemodel.ServiceReference{Service: "web", Target: "/srv", Subpath: "public"}),
 		},
 		{
 			name:      "a spec carrying no store has nowhere to write",
@@ -589,7 +591,7 @@ func TestFactory_New(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			docker := &mockVolumeStreamer{}
-			spec := model.BackendSpec{Volume: tt.volume}
+			spec := composemodel.BackendSpec{Volume: tt.volume}
 			if !tt.noStore {
 				spec.Store = newStore(t, "savepoints")
 			}

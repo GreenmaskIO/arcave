@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
@@ -38,31 +39,31 @@ func TestRestoredLayerTag(t *testing.T) {
 	tests := []struct {
 		name    string
 		project string
-		capture model.WritableLayer
+		capture composemodel.WritableLayer
 		want    string
 	}{
 		{
 			name:    "project, service, replica and upstream image",
 			project: "demo",
-			capture: model.WritableLayer{Service: "db", Replica: 1, UpstreamImageRef: "postgres:16"},
+			capture: composemodel.WritableLayer{Service: "db", Replica: 1, UpstreamImageRef: "postgres:16"},
 			want:    "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000",
 		},
 		{
 			name:    "a registry-qualified upstream image",
 			project: "demo",
-			capture: model.WritableLayer{Service: "web", Replica: 2, UpstreamImageRef: "ghcr.io/Org/App:1.2.3"},
+			capture: composemodel.WritableLayer{Service: "web", Replica: 2, UpstreamImageRef: "ghcr.io/Org/App:1.2.3"},
 			want:    "arcave/demo-web-2-ghcr-io-org-app-1-2-3:sp-019e843e-1650-7000-8000-000000000000",
 		},
 		{
 			name:    "an upper-case service, which a repository path refuses",
 			project: "Demo_App",
-			capture: model.WritableLayer{Service: "DB", Replica: 1, UpstreamImageRef: "busybox"},
+			capture: composemodel.WritableLayer{Service: "DB", Replica: 1, UpstreamImageRef: "busybox"},
 			want:    "arcave/demo-app-db-1-busybox:sp-019e843e-1650-7000-8000-000000000000",
 		},
 		{
 			name:    "a capture whose upstream could not be traced is still addressable",
 			project: "demo",
-			capture: model.WritableLayer{Service: "db", Replica: 1},
+			capture: composemodel.WritableLayer{Service: "db", Replica: 1},
 			want:    "arcave/demo-db-1:sp-019e843e-1650-7000-8000-000000000000",
 		},
 	}
@@ -79,7 +80,7 @@ func TestRestoredLayerTag(t *testing.T) {
 
 	t.Run("an upstream image too long for the cap is cut, never the identity", func(t *testing.T) {
 		// Act
-		got := restoredLayerTag("demo", id, model.WritableLayer{
+		got := restoredLayerTag("demo", id, composemodel.WritableLayer{
 			Service: "db", Replica: 1, UpstreamImageRef: longImage,
 		})
 
@@ -103,7 +104,7 @@ func TestRestoredLayerTag_IsAlwaysNameable(t *testing.T) {
 		for _, service := range names {
 			for _, base := range bases {
 				// Act
-				got := restoredLayerTag(project, "019e843e-1650-7000-8000-000000000000", model.WritableLayer{
+				got := restoredLayerTag(project, "019e843e-1650-7000-8000-000000000000", composemodel.WritableLayer{
 					Service: service, Replica: 1, UpstreamImageRef: base,
 				})
 
@@ -122,7 +123,7 @@ func TestRetargetImages_LowestRecordedReplica(t *testing.T) {
 	project := &types.Project{Name: composetest.DemoProject, Services: types.Services{
 		composetest.DemoService: {Name: composetest.DemoService, Image: composetest.DemoBaseImage},
 	}}
-	restored := []model.WritableLayerRestoreResult{
+	restored := []composemodel.WritableLayerRestoreResult{
 		{Service: composetest.DemoService, Replica: 3, Tag: composetest.DemoRestoredTag(3)},
 		{Service: composetest.DemoService, Replica: 2, Tag: composetest.DemoRestoredTag(2)},
 	}
@@ -140,13 +141,13 @@ func TestPreparer_requireImages(t *testing.T) {
 	tests := []struct {
 		name     string
 		policy   string
-		restored []model.WritableLayerRestoreResult
+		restored []composemodel.WritableLayerRestoreResult
 		present  *bool
 		wantErr  bool
 	}{
 		{name: "an image compose may pull is not looked up", policy: types.PullPolicyMissing},
 		{name: "a service on a restored layer is not looked up", policy: types.PullPolicyNever,
-			restored: []model.WritableLayerRestoreResult{{Service: "db"}}},
+			restored: []composemodel.WritableLayerRestoreResult{{Service: "db"}}},
 		{name: "a local image the daemon holds passes", policy: types.PullPolicyNever, present: boolPtr(true)},
 		{name: "a local image the daemon lacks is refused", policy: types.PullPolicyNever, present: boolPtr(false), wantErr: true},
 	}

@@ -18,12 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/moby/moby/api/types/mount"
 	"github.com/rs/zerolog"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // errObjectIDCollision refuses a project whose volumes render one ObjectID from
@@ -34,31 +33,31 @@ var errObjectIDCollision = errors.New("two volumes address the same object id")
 
 // skipReason is why a mount is not a unit of backup, as a code and as prose.
 type skipReason struct {
-	code   model.SkipReason
+	code   composemodel.SkipReason
 	detail string
 }
 
 // skipReasons says why a mount type is not a unit of backup.
-var skipReasons = map[model.VolumeType]skipReason{
-	model.VolumeTypeTmpfs:   {model.SkipReasonTmpfs, "non-persistent (tmpfs lives in RAM)"},
-	model.VolumeTypeNPipe:   {model.SkipReasonNPipe, "a named pipe is a channel, not data"},
-	model.VolumeTypeImage:   {model.SkipReasonImage, "read-only image content, reproducible from the image"},
-	model.VolumeTypeCluster: {model.SkipReasonCluster, "CSI volume: data lives outside the docker daemon"},
-	model.VolumeTypeUnknown: {model.SkipReasonUnknownType, "unknown mount type"},
+var skipReasons = map[composemodel.VolumeType]skipReason{
+	composemodel.VolumeTypeTmpfs:   {composemodel.SkipReasonTmpfs, "non-persistent (tmpfs lives in RAM)"},
+	composemodel.VolumeTypeNPipe:   {composemodel.SkipReasonNPipe, "a named pipe is a channel, not data"},
+	composemodel.VolumeTypeImage:   {composemodel.SkipReasonImage, "read-only image content, reproducible from the image"},
+	composemodel.VolumeTypeCluster: {composemodel.SkipReasonCluster, "CSI volume: data lives outside the docker daemon"},
+	composemodel.VolumeTypeUnknown: {composemodel.SkipReasonUnknownType, "unknown mount type"},
 }
 
 // inheritedSkipReason skips a mount inherited from a container the project does not stop or capture.
-var inheritedSkipReason = skipReason{model.SkipReasonInheritedFromOutside, "inherited from a container outside the project"}
+var inheritedSkipReason = skipReason{composemodel.SkipReasonInheritedFromOutside, "inherited from a container outside the project"}
 
 // resolveBackupVolumes returns the units a savepoint of the introspected compose project
 // covers, and the mounts and services it leaves out. Every workflow comes through
 // here, so create and rollback cannot differ.
 func resolveBackupVolumes(
 	ctx context.Context, introspection composemodel.IntrospectionResult, capturePolicy composemodel.CapturePolicy,
-) ([]model.Volume, model.NotCovered, error) {
+) ([]composemodel.Volume, composemodel.NotCovered, error) {
 	volumes, notCovered, err := findBackupVolumes(introspection, capturePolicy)
 	if err != nil {
-		return nil, model.NotCovered{}, fmt.Errorf("deciding which volumes to back up: %w", err)
+		return nil, composemodel.NotCovered{}, fmt.Errorf("deciding which volumes to back up: %w", err)
 	}
 
 	// Info, not Warn: what is left out is in the record's not_covered, and the result says so.
@@ -75,7 +74,7 @@ func resolveBackupVolumes(
 		}
 		msg := "volume will not be backed up"
 		// A mount of compose type volume is an anonymous one: a named volume is left out whole.
-		if skippedMount.Reason == model.SkipReasonExcluded &&
+		if skippedMount.Reason == composemodel.SkipReasonExcluded &&
 			skippedMount.Volume == "" && skippedMount.RawType == string(mount.TypeVolume) {
 			msg = "volume will not be backed up; a rollback to this savepoint recreates it empty"
 		}
@@ -91,10 +90,10 @@ func resolveBackupVolumes(
 // which backend, and what it leaves out; two units rendering one ObjectID are an error.
 func findBackupVolumes(
 	introspection composemodel.IntrospectionResult, capturePolicy composemodel.CapturePolicy,
-) ([]model.Volume, model.NotCovered, error) {
+) ([]composemodel.Volume, composemodel.NotCovered, error) {
 	var (
-		volumes []model.Volume
-		skipped []model.SkippedVolume
+		volumes []composemodel.Volume
+		skipped []composemodel.SkippedVolume
 	)
 	registered := map[string]volumeIdentity{}
 	covered := map[string]bool{}
@@ -108,10 +107,10 @@ func findBackupVolumes(
 		decision := capturePolicy.DecideNamedVolume(named.Name)
 		if !decision.Capture {
 			excludedNamed[named.Name] = true
-			skipped = append(skipped, model.SkippedVolume{
+			skipped = append(skipped, composemodel.SkippedVolume{
 				Volume:  named.Name,
 				RawType: string(mount.TypeVolume),
-				Reason:  model.SkipReasonExcluded,
+				Reason:  composemodel.SkipReasonExcluded,
 				Detail:  decision.Source,
 			})
 			continue
@@ -122,18 +121,18 @@ func findBackupVolumes(
 		namedIdentity := volumeIdentity{dockerName: named.Name}
 		duplicate, err := isObjectIDRegistered(registered, named.ObjectID(), namedIdentity)
 		if err != nil {
-			return nil, model.NotCovered{}, err
+			return nil, composemodel.NotCovered{}, err
 		}
 		if duplicate {
 			continue
 		}
 		registered[named.ObjectID()] = namedIdentity
-		volumes = append(volumes, model.Volume{
+		volumes = append(volumes, composemodel.Volume{
 			ObjectID:       named.ObjectID(),
 			ComposeProject: introspection.Project.Name,
-			Type:           model.VolumeTypeNamed,
+			Type:           composemodel.VolumeTypeNamed,
 			Backend:        decision.Backend,
-			Named: &model.VolumePropertiesNamed{
+			Named: &composemodel.VolumePropertiesNamed{
 				VolumeName: named.Name,
 				UsedBy:     named.UsedBy,
 			},
@@ -145,7 +144,7 @@ func findBackupVolumes(
 	inProject := projectContainers(introspection.Project.Services)
 	for _, service := range introspection.Project.Services {
 		for _, serviceVolume := range service.Volumes {
-			if serviceVolume.Type == model.VolumeTypeNamed {
+			if serviceVolume.Type == composemodel.VolumeTypeNamed {
 				// Only a reference to the unit decided above.
 				if excludedNamed[serviceVolume.VolumeName] {
 					excludedFrom[service.Name] = true
@@ -164,7 +163,7 @@ func findBackupVolumes(
 				continue
 			}
 			switch serviceVolume.Type {
-			case model.VolumeTypeBind, model.VolumeTypeAnon:
+			case composemodel.VolumeTypeBind, composemodel.VolumeTypeAnon:
 				// A unit of its own.
 			default:
 				skipped = append(skipped, newSkippedVolume(service.Name, serviceVolume, reasonFor(serviceVolume.Type)))
@@ -181,7 +180,7 @@ func findBackupVolumes(
 				skipped = append(skipped, newSkippedVolume(
 					service.Name,
 					serviceVolume,
-					skipReason{model.SkipReasonExcluded, decision.Source},
+					skipReason{composemodel.SkipReasonExcluded, decision.Source},
 				))
 				continue
 			}
@@ -195,13 +194,13 @@ func findBackupVolumes(
 			}
 			duplicate, err := isObjectIDRegistered(registered, objectID, mountIdentity)
 			if err != nil {
-				return nil, model.NotCovered{}, err
+				return nil, composemodel.NotCovered{}, err
 			}
 			if duplicate {
 				continue
 			}
 			registered[objectID] = mountIdentity
-			volumes = append(volumes, model.Volume{
+			volumes = append(volumes, composemodel.Volume{
 				ObjectID:       objectID,
 				ComposeProject: introspection.Project.Name,
 				Type:           serviceVolume.Type,
@@ -218,19 +217,19 @@ func findBackupVolumes(
 			uncovered = append(uncovered, service.Name)
 		}
 	}
-	return volumes, model.NotCovered{Mounts: skipped, ServicesWithoutVolumes: uncovered}, nil
+	return volumes, composemodel.NotCovered{Mounts: skipped, ServicesWithoutVolumes: uncovered}, nil
 }
 
 // newSkippedVolume reports one mount of service left out for reason.
-func newSkippedVolume(service string, serviceVolume composemodel.ServiceVolume, reason skipReason) model.SkippedVolume {
-	skipped := model.SkippedVolume{
+func newSkippedVolume(service string, serviceVolume composemodel.ServiceVolume, reason skipReason) composemodel.SkippedVolume {
+	skipped := composemodel.SkippedVolume{
 		Service: service,
 		Target:  serviceVolume.Target,
 		RawType: serviceVolume.RawType,
 		Reason:  reason.code,
 		Detail:  reason.detail,
 	}
-	if serviceVolume.Type == model.VolumeTypeAnon {
+	if serviceVolume.Type == composemodel.VolumeTypeAnon {
 		skipped.Replica = serviceVolume.Replica
 	}
 	return skipped
@@ -287,20 +286,20 @@ func isObjectIDRegistered(
 
 // reasonFor falls back to the unknown-type reason, so a VolumeType missing from
 // the table is still reported rather than dropped.
-func reasonFor(volumeType model.VolumeType) skipReason {
+func reasonFor(volumeType composemodel.VolumeType) skipReason {
 	if reason, ok := skipReasons[volumeType]; ok {
 		return reason
 	}
-	return skipReasons[model.VolumeTypeUnknown]
+	return skipReasons[composemodel.VolumeTypeUnknown]
 }
 
 // newBindProperties and newAnonProperties each fill their arm or return nil, so
 // exactly one arm of the Volume literal above ends up non-nil.
-func newBindProperties(service string, serviceVolume composemodel.ServiceVolume) *model.VolumePropertiesBind {
-	if serviceVolume.Type != model.VolumeTypeBind {
+func newBindProperties(service string, serviceVolume composemodel.ServiceVolume) *composemodel.VolumePropertiesBind {
+	if serviceVolume.Type != composemodel.VolumeTypeBind {
 		return nil
 	}
-	return &model.VolumePropertiesBind{
+	return &composemodel.VolumePropertiesBind{
 		Service:  service,
 		Target:   serviceVolume.Target,
 		Source:   serviceVolume.Source,
@@ -308,15 +307,15 @@ func newBindProperties(service string, serviceVolume composemodel.ServiceVolume)
 	}
 }
 
-func newAnonProperties(service string, serviceVolume composemodel.ServiceVolume) *model.VolumePropertiesAnon {
-	if serviceVolume.Type != model.VolumeTypeAnon {
+func newAnonProperties(service string, serviceVolume composemodel.ServiceVolume) *composemodel.VolumePropertiesAnon {
+	if serviceVolume.Type != composemodel.VolumeTypeAnon {
 		return nil
 	}
 	var subpath string
 	if serviceVolume.Volume != nil {
 		subpath = serviceVolume.Volume.Subpath
 	}
-	return &model.VolumePropertiesAnon{
+	return &composemodel.VolumePropertiesAnon{
 		Service:  service,
 		Replica:  serviceVolume.Replica,
 		Target:   serviceVolume.Target,

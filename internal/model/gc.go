@@ -15,7 +15,6 @@
 package model
 
 import (
-	"fmt"
 	"slices"
 	"time"
 )
@@ -25,105 +24,35 @@ import (
 type GarbageDataKind string
 
 const (
-	// GarbageDataKindSavepointData is a savepoint's own directory no record commits: its
-	// record, its spec, its streamed volumes and its writable layers' archives and manifests.
-	GarbageDataKindSavepointData GarbageDataKind = "savepoint-data"
 	// GarbageDataKindSafetySnapshots is a compose project's committed safety snapshots beyond the
 	// newest gc.safety_snapshots.retain_recent; what only they hold goes on the next run.
 	GarbageDataKindSafetySnapshots GarbageDataKind = "safety-snapshots"
-	// GarbageDataKindDeduplicatedVolumes is volume data shared across savepoints that no
-	// savepoint names.
-	GarbageDataKindDeduplicatedVolumes GarbageDataKind = "deduplicated-volumes"
-	// GarbageDataKindImageLayers is the layers, and configs, of stored images that writable
-	// layers and upstream images share, that no stored manifest lists.
-	GarbageDataKindImageLayers GarbageDataKind = "image-layers"
-	// GarbageDataKindUpstreamImages is a stored upstream image no savepoint names; its layers
-	// are image-layers, freed by the gc run after the one that removes it.
-	GarbageDataKindUpstreamImages GarbageDataKind = "upstream-images"
-	// GarbageDataKindRestoredLayers is a writable layer a rollback restored into the daemon
-	// that no container runs on.
-	GarbageDataKindRestoredLayers GarbageDataKind = "restored-layers"
 )
-
-// GarbageDataKinds lists every data kind.
-func GarbageDataKinds() []GarbageDataKind {
-	return []GarbageDataKind{
-		GarbageDataKindSavepointData, GarbageDataKindSafetySnapshots, GarbageDataKindDeduplicatedVolumes,
-		GarbageDataKindImageLayers, GarbageDataKindUpstreamImages, GarbageDataKindRestoredLayers,
-	}
-}
-
-// Validate refuses a data kind arcave does not know.
-func (m GarbageDataKind) Validate() error {
-	if !slices.Contains(GarbageDataKinds(), m) {
-		return fmt.Errorf("%w: unknown kind %q", ErrInvalidGarbageCollectRequest, string(m))
-	}
-	return nil
-}
 
 // GarbageCollectorKind names one collector: how one implementation finds, and deletes,
 // the garbage of its data kind.
 type GarbageCollectorKind string
 
 const (
-	// GarbageCollectorKindSavepointDirectory reads savepoint directories by their record.
-	GarbageCollectorKindSavepointDirectory GarbageCollectorKind = "savepoint-directory"
 	// GarbageCollectorKindSafetySnapshotRetention reads the committed safety snapshots against the
 	// configured retention.
 	GarbageCollectorKindSafetySnapshotRetention GarbageCollectorKind = "safety-snapshot-retention"
-	// GarbageCollectorKindResticRepositories reads the cdc backend's restic repositories.
-	GarbageCollectorKindResticRepositories GarbageCollectorKind = "restic-repositories"
-	// GarbageCollectorKindOCIBlobs reads the OCI blob store every stored image manifest lists.
-	GarbageCollectorKindOCIBlobs GarbageCollectorKind = "oci-blobs"
-	// GarbageCollectorKindOCIImages reads the stored upstream images' OCI manifests.
-	GarbageCollectorKindOCIImages GarbageCollectorKind = "oci-images"
-	// GarbageCollectorKindDockerLayerTags reads the daemon's arcave/…:sp-<savepoint> tags.
-	GarbageCollectorKindDockerLayerTags GarbageCollectorKind = "docker-layer-tags"
 )
-
-// GarbageCollectorKinds lists every collector kind.
-func GarbageCollectorKinds() []GarbageCollectorKind {
-	return []GarbageCollectorKind{
-		GarbageCollectorKindSavepointDirectory, GarbageCollectorKindSafetySnapshotRetention,
-		GarbageCollectorKindResticRepositories, GarbageCollectorKindOCIBlobs, GarbageCollectorKindOCIImages,
-		GarbageCollectorKindDockerLayerTags,
-	}
-}
 
 // GarbageAction is what a gc that deletes does to one object.
 type GarbageAction string
 
 const (
-	GarbageActionDeleteObject GarbageAction = "delete-object"
-	GarbageActionDeleteTree   GarbageAction = "delete-tree"
 	// GarbageActionDeleteSavepoint deletes a committed savepoint, its record first, then its tree.
 	GarbageActionDeleteSavepoint GarbageAction = "delete-savepoint"
-	// GarbageActionDeleteImage deletes one stored image, its manifest first.
-	GarbageActionDeleteImage GarbageAction = "delete-image"
-	// GarbageActionForget is a restic forget of one snapshot, its data freed by the prune after;
-	// of a repository, its prune alone.
-	GarbageActionForget GarbageAction = "forget"
-	GarbageActionUntag  GarbageAction = "untag"
 )
 
 // GarbageReason is the stable code of why an object is dead, or why it was held back.
 type GarbageReason string
 
 const (
-	// GarbageReasonDeadCapture is a savepoint tree no record commits.
-	GarbageReasonDeadCapture GarbageReason = "dead-capture"
 	// GarbageReasonBeyondRetention is a safety snapshot older than the newest the config retains.
 	GarbageReasonBeyondRetention GarbageReason = "beyond-retention"
-	GarbageReasonUnreferenced    GarbageReason = "unreferenced"
-	GarbageReasonUnusedTag       GarbageReason = "unused-tag"
-	// GarbageReasonUnprunedData is a restic repository holding data no snapshot uses: a prune
-	// that failed after its forget, or a capture cut short.
-	GarbageReasonUnprunedData GarbageReason = "unpruned-data"
-	// GarbageReasonBackendUnreadable leaves unjudged what the backend holding it cannot list.
-	GarbageReasonBackendUnreadable GarbageReason = "backend-unreadable"
-	// GarbageReasonListedByUnreferenced holds back a blob only a manifest no record names
-	// lists: it goes once that manifest does.
-	GarbageReasonListedByUnreferenced GarbageReason = "listed-by-unreferenced"
 )
 
 // GarbageCollectRequest is one gc run.
@@ -131,16 +60,6 @@ type GarbageCollectRequest struct {
 	DryRun bool
 	// DataKinds narrow what the gc looks at; empty looks at every one.
 	DataKinds []GarbageDataKind
-}
-
-// Validate refuses an unknown data kind.
-func (m GarbageCollectRequest) Validate() error {
-	for _, dataKind := range m.DataKinds {
-		if err := dataKind.Validate(); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // GarbageStat is one collector's finding over one scope. Every kind reports the same
@@ -162,8 +81,8 @@ type GarbageSummary struct {
 	Aborted string `json:"aborted,omitempty"`
 }
 
-// withBytes is the summary with bytes in place of its own.
-func (m GarbageSummary) withBytes(bytes *int64) GarbageSummary {
+// WithBytes is the summary with bytes in place of its own.
+func (m GarbageSummary) WithBytes(bytes *int64) GarbageSummary {
 	m.Bytes = bytes
 	return m
 }
@@ -227,88 +146,10 @@ func (m GarbageFindings) newOpBytes() *int64 {
 	return &bytes
 }
 
-// SavepointDirectoryStat is a compose project's savepoint directories no record commits.
-type SavepointDirectoryStat struct {
-	GarbageFindings
-	Committed int `json:"committed"`
-}
-
 // SafetySnapshotStat is a compose project's committed safety snapshots beyond the retention.
 type SafetySnapshotStat struct {
 	GarbageFindings
 	Retained int `json:"retained"`
-}
-
-// OCIImageStat is a compose project's stored upstream images no record names.
-type OCIImageStat struct {
-	GarbageFindings
-	Live int `json:"live"`
-}
-
-// OCIBlobStat is a compose project's deduplicated blobs no manifest in the store lists.
-type OCIBlobStat struct {
-	GarbageFindings
-	Live int `json:"live"`
-	// Unreadable are the manifests that cannot be read; any one of them aborts the kind,
-	// since an unread manifest references everything.
-	Unreadable []UnreadableManifest `json:"unreadable,omitempty"`
-}
-
-// UnreadableManifest is a manifest in the store a gc could not read.
-type UnreadableManifest struct {
-	// Key is the manifest, relative to the compose project store.
-	Key string `json:"key"`
-	// Savepoint is the committed savepoint naming it; empty for one no record names.
-	Savepoint SavepointID `json:"savepoint,omitempty"`
-	Error     string      `json:"error"`
-}
-
-// ResticRepositoryStat is a compose project's cdc snapshots whose savepoint is dead. Ops carry no
-// bytes: what forgetting them frees is estimated per repository, by a prune dry run.
-type ResticRepositoryStat struct {
-	GarbageFindings
-	LiveRepos     int `json:"live_repos"`
-	LiveSnapshots int `json:"live_snapshots"`
-	// Unattributed counts snapshots tagged with no savepoint: no gc judges them.
-	Unattributed int                    `json:"unattributed"`
-	Estimates    []ResticForgetEstimate `json:"estimates,omitempty"`
-}
-
-// ResticForgetEstimate is what forgetting Snapshots, then pruning, frees in one repository.
-type ResticForgetEstimate struct {
-	Repo      string   `json:"repo"`
-	Snapshots []string `json:"snapshots"`
-	// FreedBytes is nil when restic gave no estimate.
-	FreedBytes *int64 `json:"freed_bytes"`
-}
-
-// Summary counts the findings; Bytes is the sum of the estimates, nil when any is unknown.
-func (m ResticRepositoryStat) Summary() GarbageSummary {
-	return m.GarbageFindings.Summary().withBytes(m.newEstimateBytes())
-}
-
-// newEstimateBytes sums the estimates; nil when any is unknown.
-func (m ResticRepositoryStat) newEstimateBytes() *int64 {
-	var bytes int64
-	for _, estimate := range m.Estimates {
-		if estimate.FreedBytes == nil {
-			return nil
-		}
-		bytes += *estimate.FreedBytes
-	}
-	return &bytes
-}
-
-// DockerLayerTagStat is the daemon's arcave/…:sp-<savepoint> tags no container runs on, of the layers the
-// arcave project committed for the session's compose projects.
-type DockerLayerTagStat struct {
-	GarbageFindings
-	InUse int `json:"in_use"`
-	// Unattributed counts tags whose image names no origin: no gc judges them.
-	Unattributed int `json:"unattributed"`
-	// OtherComposeProjects counts the arcave project's tags of compose projects this session
-	// does not hold; this gc does not judge them.
-	OtherComposeProjects int `json:"other_compose_projects"`
 }
 
 // GarbageReport is one collector's stat over one scope, with the summary lifted out.

@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -35,7 +35,7 @@ const (
 )
 
 // newNotCoveredWarning sums up what a capture leaves out, "" for nothing.
-func newNotCoveredWarning(notCovered *model.NotCovered) string {
+func newNotCoveredWarning(notCovered *composemodel.NotCovered) string {
 	if notCovered == nil {
 		return ""
 	}
@@ -69,7 +69,7 @@ func warn(step *progress.StepReporter, msg string, inResult bool) {
 }
 
 // newImageSample is what capturing image moved: nothing for one not stored.
-func newImageSample(image model.Image) progress.Sample {
+func newImageSample(image composemodel.Image) progress.Sample {
 	if !image.Stored {
 		return progress.Sample{}
 	}

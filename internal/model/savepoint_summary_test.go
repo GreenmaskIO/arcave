@@ -20,27 +20,39 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestParseHookOnError(t *testing.T) {
+func demoSummary() SavepointSummary {
+	return SavepointSummary{
+		Units: []UnitTotal{
+			{Kind: UnitKindVolumes, Count: 2, SizeBytes: 10, StoredBytes: 4},
+			{Kind: UnitKindLayers, Count: 1, SizeBytes: 7, StoredBytes: 3},
+		},
+	}
+}
+
+func TestSavepointSummary_Unit(t *testing.T) {
 	tests := []struct {
-		name   string
-		token  string
-		want   HookOnError
-		wantOK bool
+		name string
+		kind UnitKind
+		want UnitTotal
 	}{
-		{name: "fail", token: "fail", want: HookOnErrorFail, wantOK: true},
-		{name: "continue", token: "continue", want: HookOnErrorContinue, wantOK: true},
-		{name: "an unknown token", token: "ignore"},
-		{name: "case matters", token: "Fail"},
-		{name: "empty", token: ""},
+		{name: "a kind held", kind: UnitKindLayers, want: UnitTotal{Kind: UnitKindLayers, Count: 1, SizeBytes: 7, StoredBytes: 3}},
+		{name: "a kind not held is its zero tally", kind: UnitKindImages, want: UnitTotal{Kind: UnitKindImages}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, ok := ParseHookOnError(tt.token)
+			got := demoSummary().Unit(tt.kind)
 
 			// Assert
-			assert.Equal(t, tt.wantOK, ok)
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestSavepointSummary_StoredBytes(t *testing.T) {
+	// Act
+	got := demoSummary().StoredBytes()
+
+	// Assert
+	assert.Equal(t, int64(7), got, "every kind together")
 }

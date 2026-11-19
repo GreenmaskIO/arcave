@@ -16,9 +16,10 @@ package capturepolicy
 
 import (
 	"context"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"maps"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/moby/api/types/container"
@@ -28,13 +29,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 // defaults capture every kind, by the default backends.
 var defaults = CaptureDefaults{
-	VolumeBackend:        model.SnapshotBackendFullCopy,
-	WritableLayerBackend: model.ImageBackendDedupCopy,
+	VolumeBackend:        composeconfig.SnapshotBackendFullCopy,
+	WritableLayerBackend: composeconfig.ImageBackendDedupCopy,
 	SavepointCapture: SavepointCaptureSettings{
 		WritableLayers:   true,
 		Images:           true,
@@ -51,17 +52,17 @@ func demoProject(appLabels, dbLabels, anonLabels, pgdataLabels map[string]string
 		Name: "demo",
 		Services: []composemodel.Service{
 			{Name: "app", Labels: appLabels, Volumes: []composemodel.ServiceVolume{
-				{Type: model.VolumeTypeBind, Source: "/src", Target: "/app"},
-				{Type: model.VolumeTypeAnon, Target: "/cache", Replica: 1, Volume: &composemodel.VolumeMount{Labels: anonLabels}},
-				{Type: model.VolumeTypeTmpfs, Target: "/tmp"},
+				{Type: composemodel.VolumeTypeBind, Source: "/src", Target: "/app"},
+				{Type: composemodel.VolumeTypeAnon, Target: "/cache", Replica: 1, Volume: &composemodel.VolumeMount{Labels: anonLabels}},
+				{Type: composemodel.VolumeTypeTmpfs, Target: "/tmp"},
 			}},
 			{Name: "db", Labels: dbLabels, Volumes: []composemodel.ServiceVolume{
-				{Type: model.VolumeTypeNamed, Source: "pgdata", Target: "/var/lib/postgresql/data", VolumeName: "demo_pgdata"},
+				{Type: composemodel.VolumeTypeNamed, Source: "pgdata", Target: "/var/lib/postgresql/data", VolumeName: "demo_pgdata"},
 			}},
 		},
 		Volumes: []composemodel.NamedVolume{{
 			Key: "pgdata", Name: "demo_pgdata", Labels: pgdataLabels,
-			UsedBy: []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
+			UsedBy: []composemodel.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
 		}},
 	}}
 }
@@ -74,7 +75,7 @@ var (
 func nopCtx() context.Context { return zerolog.Nop().WithContext(context.Background()) }
 
 // byConfig is a volume captured by the defaults.
-func byConfig(backend model.SnapshotBackendKind) composemodel.VolumeDecision {
+func byConfig(backend composeconfig.SnapshotBackendKind) composemodel.VolumeDecision {
 	return composemodel.VolumeDecision{CaptureDecision: composemodel.NewConfigDecision(true, ""), Backend: backend}
 }
 
@@ -85,7 +86,7 @@ func byLabel(capture bool, source string) composemodel.CaptureDecision {
 
 // defaultImages is a service's images decided by the defaults.
 func defaultImages() composemodel.ServiceDecision {
-	return composemodel.CapturePolicy{WritableLayerBackend: model.ImageBackendDedupCopy}.DecideService("any")
+	return composemodel.CapturePolicy{WritableLayerBackend: composeconfig.ImageBackendDedupCopy}.DecideService("any")
 }
 
 func TestResolve(t *testing.T) {
@@ -97,29 +98,29 @@ func TestResolve(t *testing.T) {
 	}{
 		{
 			name:     "no label captures everything by the defaults",
-			wantBind: byConfig(model.SnapshotBackendFullCopy),
-			wantAnon: byConfig(model.SnapshotBackendFullCopy),
-			wantData: byConfig(model.SnapshotBackendFullCopy),
+			wantBind: byConfig(composeconfig.SnapshotBackendFullCopy),
+			wantAnon: byConfig(composeconfig.SnapshotBackendFullCopy),
+			wantData: byConfig(composeconfig.SnapshotBackendFullCopy),
 			wantApp:  defaultImages(),
 			wantDB:   defaultImages(),
 		},
 		{
 			name: "a service left out takes its layer, upstream and own mounts, and a volume only it mounts",
-			app:  map[string]string{string(model.CaptureLabelCapture): "false"},
-			db:   map[string]string{string(model.CaptureLabelCapture): "false"},
-			wantBind: composemodel.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
+			app:  map[string]string{string(composemodel.CaptureLabelCapture): "false"},
+			db:   map[string]string{string(composemodel.CaptureLabelCapture): "false"},
+			wantBind: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.capture=false on service app")},
-			wantAnon: composemodel.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
+			wantAnon: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.capture=false on service app")},
-			wantData: composemodel.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
+			wantData: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.capture=false on every service mounting it")},
 			wantApp: composemodel.ServiceDecision{
-				WritableLayer: composemodel.WritableLayerDecision{Backend: model.ImageBackendDedupCopy,
+				WritableLayer: composemodel.WritableLayerDecision{Backend: composeconfig.ImageBackendDedupCopy,
 					CaptureDecision: byLabel(false, "arcave.capture=false on service app")},
 				Image: byLabel(false, "arcave.capture=false on service app"),
 			},
 			wantDB: composemodel.ServiceDecision{
-				WritableLayer: composemodel.WritableLayerDecision{Backend: model.ImageBackendDedupCopy,
+				WritableLayer: composemodel.WritableLayerDecision{Backend: composeconfig.ImageBackendDedupCopy,
 					CaptureDecision: byLabel(false, "arcave.capture=false on service db")},
 				Image: byLabel(false, "arcave.capture=false on service db"),
 			},
@@ -127,22 +128,22 @@ func TestResolve(t *testing.T) {
 		{
 			name: "the most specific label wins over the service's",
 			app: map[string]string{
-				string(model.CaptureLabelCapture):              "false",
-				string(model.CaptureLabelWritableLayerCapture): "true",
-				string(model.CaptureLabelWritableLayerBackend): "fullcopy",
-				string(model.CaptureLabelVolumeBackend):        "cdc",
-				string(model.CaptureLabelMountsInclude):        "/cache",
-				string(model.CaptureLabelMountsFullCopy):       "/cache",
+				string(composemodel.CaptureLabelCapture):              "false",
+				string(composemodel.CaptureLabelWritableLayerCapture): "true",
+				string(composemodel.CaptureLabelWritableLayerBackend): "fullcopy",
+				string(composemodel.CaptureLabelVolumeBackend):        "cdc",
+				string(composemodel.CaptureLabelMountsInclude):        "/cache",
+				string(composemodel.CaptureLabelMountsFullCopy):       "/cache",
 			},
-			pgdata: map[string]string{string(model.CaptureLabelBackend): "cdc"},
-			wantBind: composemodel.VolumeDecision{Backend: model.SnapshotBackendCDC,
+			pgdata: map[string]string{string(composemodel.CaptureLabelBackend): "cdc"},
+			wantBind: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendCDC,
 				CaptureDecision: byLabel(false, "arcave.capture=false on service app")},
-			wantAnon: composemodel.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
+			wantAnon: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(true, "arcave.mounts.include=/cache on service app")},
-			wantData: composemodel.VolumeDecision{Backend: model.SnapshotBackendCDC,
+			wantData: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendCDC,
 				CaptureDecision: composemodel.NewConfigDecision(true, "")},
 			wantApp: composemodel.ServiceDecision{
-				WritableLayer: composemodel.WritableLayerDecision{Backend: model.ImageBackendFullCopy,
+				WritableLayer: composemodel.WritableLayerDecision{Backend: composeconfig.ImageBackendFullCopy,
 					CaptureDecision: byLabel(true, "arcave.writable-layer.capture=true on service app")},
 				Image: byLabel(false, "arcave.capture=false on service app"),
 			},
@@ -151,16 +152,16 @@ func TestResolve(t *testing.T) {
 		{
 			name: "an anonymous volume no list names follows its service's capture and backend",
 			app: map[string]string{
-				string(model.CaptureLabelCapture):       "false",
-				string(model.CaptureLabelVolumeBackend): "cdc",
+				string(composemodel.CaptureLabelCapture):       "false",
+				string(composemodel.CaptureLabelVolumeBackend): "cdc",
 			},
-			wantBind: composemodel.VolumeDecision{Backend: model.SnapshotBackendCDC,
+			wantBind: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendCDC,
 				CaptureDecision: byLabel(false, "arcave.capture=false on service app")},
-			wantAnon: composemodel.VolumeDecision{Backend: model.SnapshotBackendCDC,
+			wantAnon: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendCDC,
 				CaptureDecision: byLabel(false, "arcave.capture=false on service app")},
-			wantData: byConfig(model.SnapshotBackendFullCopy),
+			wantData: byConfig(composeconfig.SnapshotBackendFullCopy),
 			wantApp: composemodel.ServiceDecision{
-				WritableLayer: composemodel.WritableLayerDecision{Backend: model.ImageBackendDedupCopy,
+				WritableLayer: composemodel.WritableLayerDecision{Backend: composeconfig.ImageBackendDedupCopy,
 					CaptureDecision: byLabel(false, "arcave.capture=false on service app")},
 				Image: byLabel(false, "arcave.capture=false on service app"),
 			},
@@ -169,15 +170,15 @@ func TestResolve(t *testing.T) {
 		{
 			name: "target lists exclude a mount and pick another's backend",
 			app: map[string]string{
-				string(model.CaptureLabelMountsExclude): "/app",
-				string(model.CaptureLabelMountsCDC):     " /cache ,",
-				string(model.CaptureLabelImageCapture):  "false",
+				string(composemodel.CaptureLabelMountsExclude): "/app",
+				string(composemodel.CaptureLabelMountsCDC):     " /cache ,",
+				string(composemodel.CaptureLabelImageCapture):  "false",
 			},
-			wantBind: composemodel.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
+			wantBind: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.mounts.exclude=/app on service app")},
-			wantAnon: composemodel.VolumeDecision{Backend: model.SnapshotBackendCDC,
+			wantAnon: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendCDC,
 				CaptureDecision: composemodel.NewConfigDecision(true, "")},
-			wantData: byConfig(model.SnapshotBackendFullCopy),
+			wantData: byConfig(composeconfig.SnapshotBackendFullCopy),
 			wantApp: composemodel.ServiceDecision{
 				WritableLayer: defaultImages().WritableLayer,
 				Image:         byLabel(false, "arcave.image.capture=false on service app"),
@@ -187,23 +188,23 @@ func TestResolve(t *testing.T) {
 		{
 			name: "a target is read as a clean path",
 			app: map[string]string{
-				string(model.CaptureLabelMountsExclude): "/app/",
-				string(model.CaptureLabelMountsCDC):     "/cache/.",
+				string(composemodel.CaptureLabelMountsExclude): "/app/",
+				string(composemodel.CaptureLabelMountsCDC):     "/cache/.",
 			},
-			wantBind: composemodel.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
+			wantBind: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.mounts.exclude=/app/ on service app")},
-			wantAnon: composemodel.VolumeDecision{Backend: model.SnapshotBackendCDC,
+			wantAnon: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendCDC,
 				CaptureDecision: composemodel.NewConfigDecision(true, "")},
-			wantData: byConfig(model.SnapshotBackendFullCopy),
+			wantData: byConfig(composeconfig.SnapshotBackendFullCopy),
 			wantApp:  defaultImages(),
 			wantDB:   defaultImages(),
 		},
 		{
 			name:     "a named volume's own label leaves it out whatever its services say",
-			pgdata:   map[string]string{string(model.CaptureLabelCapture): "false"},
-			wantBind: byConfig(model.SnapshotBackendFullCopy),
-			wantAnon: byConfig(model.SnapshotBackendFullCopy),
-			wantData: composemodel.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
+			pgdata:   map[string]string{string(composemodel.CaptureLabelCapture): "false"},
+			wantBind: byConfig(composeconfig.SnapshotBackendFullCopy),
+			wantAnon: byConfig(composeconfig.SnapshotBackendFullCopy),
+			wantData: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.capture=false on volume demo_pgdata")},
 			wantApp: defaultImages(),
 			wantDB:  defaultImages(),
@@ -231,9 +232,9 @@ func TestResolve(t *testing.T) {
 // A named volume one excluded service and one captured service share is captured.
 func TestResolve_SharedNamedVolumeStaysWhileOneServiceIsCaptured(t *testing.T) {
 	// Arrange
-	introspection := demoProject(map[string]string{string(model.CaptureLabelCapture): "false"}, nil, nil, nil)
+	introspection := demoProject(map[string]string{string(composemodel.CaptureLabelCapture): "false"}, nil, nil, nil)
 	introspection.Project.Volumes[0].UsedBy = append(introspection.Project.Volumes[0].UsedBy,
-		model.ServiceReference{Service: "app", Target: "/shared"})
+		composemodel.ServiceReference{Service: "app", Target: "/shared"})
 
 	// Act
 	policy, err := Resolve(nopCtx(), introspection, defaults)
@@ -250,24 +251,24 @@ func TestResolve_Refuses(t *testing.T) {
 		wantMsg       string
 	}{
 		{name: "an unknown key", app: map[string]string{"arcave.captur": "false"}, wantMsg: `arcave.captur="false" on service app`},
-		{name: "a value not a bool", app: map[string]string{string(model.CaptureLabelCapture): "no"}, wantMsg: "want true or false"},
-		{name: "an unknown volume backend", app: map[string]string{string(model.CaptureLabelVolumeBackend): "rsync"}, wantMsg: "want fullcopy or cdc"},
-		{name: "an unknown image backend", app: map[string]string{string(model.CaptureLabelWritableLayerBackend): "copy"}, wantMsg: "want dedupcopy or fullcopy"},
-		{name: "a service label on a volume", pg: map[string]string{string(model.CaptureLabelWritableLayerCapture): "false"}, wantMsg: "on volume demo_pgdata"},
-		{name: "a volume label on a service", app: map[string]string{string(model.CaptureLabelBackend): "cdc"}, wantMsg: "not a label arcave reads here"},
+		{name: "a value not a bool", app: map[string]string{string(composemodel.CaptureLabelCapture): "no"}, wantMsg: "want true or false"},
+		{name: "an unknown volume backend", app: map[string]string{string(composemodel.CaptureLabelVolumeBackend): "rsync"}, wantMsg: "want fullcopy or cdc"},
+		{name: "an unknown image backend", app: map[string]string{string(composemodel.CaptureLabelWritableLayerBackend): "copy"}, wantMsg: "want dedupcopy or fullcopy"},
+		{name: "a service label on a volume", pg: map[string]string{string(composemodel.CaptureLabelWritableLayerCapture): "false"}, wantMsg: "on volume demo_pgdata"},
+		{name: "a volume label on a service", app: map[string]string{string(composemodel.CaptureLabelBackend): "cdc"}, wantMsg: "not a label arcave reads here"},
 		{name: "a per-mount label", app: map[string]string{"arcave.mount./app.capture": "false"}, wantMsg: "not a label arcave reads here"},
-		{name: "a label on an anonymous volume", anon: map[string]string{string(model.CaptureLabelCapture): "false"},
+		{name: "a label on an anonymous volume", anon: map[string]string{string(composemodel.CaptureLabelCapture): "false"},
 			wantMsg: `arcave.capture="false" on the anonymous volume at /cache of service app: not a label arcave reads here; name the target in the service's arcave.mounts.* lists`},
-		{name: "a backend label on an anonymous volume", anon: map[string]string{string(model.CaptureLabelBackend): "cdc"},
+		{name: "a backend label on an anonymous volume", anon: map[string]string{string(composemodel.CaptureLabelBackend): "cdc"},
 			wantMsg: `arcave.backend="cdc" on the anonymous volume at /cache of service app: not a label arcave reads here`},
-		{name: "a target mounting nothing", app: map[string]string{string(model.CaptureLabelMountsExclude): "/nope"}, wantMsg: "mounts nothing at /nope"},
-		{name: "a target of a tmpfs", app: map[string]string{string(model.CaptureLabelMountsExclude): "/tmp"}, wantMsg: "not a volume or bind of the service's own"},
+		{name: "a target mounting nothing", app: map[string]string{string(composemodel.CaptureLabelMountsExclude): "/nope"}, wantMsg: "mounts nothing at /nope"},
+		{name: "a target of a tmpfs", app: map[string]string{string(composemodel.CaptureLabelMountsExclude): "/tmp"}, wantMsg: "not a volume or bind of the service's own"},
 		{name: "a target in both backend lists", app: map[string]string{
-			string(model.CaptureLabelMountsCDC): "/app", string(model.CaptureLabelMountsFullCopy): "/app"}, wantMsg: "listed for both"},
-		{name: "an unknown capture mode", app: map[string]string{string(model.CaptureLabelCaptureMode): "freeze"},
+			string(composemodel.CaptureLabelMountsCDC): "/app", string(composemodel.CaptureLabelMountsFullCopy): "/app"}, wantMsg: "listed for both"},
+		{name: "an unknown capture mode", app: map[string]string{string(composemodel.CaptureLabelCaptureMode): "freeze"},
 			wantMsg: `arcave.capture.mode="freeze" on service app: want stop, pause or live`},
 		{name: "a target both included and excluded", app: map[string]string{
-			string(model.CaptureLabelMountsInclude): "/app", string(model.CaptureLabelMountsExclude): "/app"}, wantMsg: "also in arcave.mounts.exclude"},
+			string(composemodel.CaptureLabelMountsInclude): "/app", string(composemodel.CaptureLabelMountsExclude): "/app"}, wantMsg: "also in arcave.mounts.exclude"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -297,34 +298,34 @@ func TestResolve_ServiceLabelsReachANamedVolume(t *testing.T) {
 	}{
 		{
 			name: "excluded",
-			db:   map[string]string{string(model.CaptureLabelMountsExclude): "/var/lib/postgresql/data"},
-			want: composemodel.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
+			db:   map[string]string{string(composemodel.CaptureLabelMountsExclude): "/var/lib/postgresql/data"},
+			want: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.mounts.exclude=/var/lib/postgresql/data on service db")},
 		},
 		{
 			name:   "one service's exclusion wins over another's inclusion",
-			db:     map[string]string{string(model.CaptureLabelMountsInclude): "/var/lib/postgresql/data"},
-			shares: map[string]string{string(model.CaptureLabelMountsExclude): "/shared"},
-			want: composemodel.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
+			db:     map[string]string{string(composemodel.CaptureLabelMountsInclude): "/var/lib/postgresql/data"},
+			shares: map[string]string{string(composemodel.CaptureLabelMountsExclude): "/shared"},
+			want: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.mounts.exclude=/shared on service app")},
 		},
 		{
 			name: "its backend picked",
-			db:   map[string]string{string(model.CaptureLabelMountsCDC): "/var/lib/postgresql/data"},
-			want: composemodel.VolumeDecision{Backend: model.SnapshotBackendCDC,
+			db:   map[string]string{string(composemodel.CaptureLabelMountsCDC): "/var/lib/postgresql/data"},
+			want: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendCDC,
 				CaptureDecision: composemodel.NewConfigDecision(true, "")},
 		},
 		{
 			name:     "a service's arcave.capture=true takes it back from the config",
-			db:       map[string]string{string(model.CaptureLabelCapture): "true"},
+			db:       map[string]string{string(composemodel.CaptureLabelCapture): "true"},
 			namedOff: true,
-			want: composemodel.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
+			want: composemodel.VolumeDecision{Backend: composeconfig.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(true, "arcave.capture=true on service db")},
 		},
 		{
 			name:    "two services naming different backends are refused",
-			db:      map[string]string{string(model.CaptureLabelMountsCDC): "/var/lib/postgresql/data"},
-			shares:  map[string]string{string(model.CaptureLabelMountsFullCopy): "/shared"},
+			db:      map[string]string{string(composemodel.CaptureLabelMountsCDC): "/var/lib/postgresql/data"},
+			shares:  map[string]string{string(composemodel.CaptureLabelMountsFullCopy): "/shared"},
 			wantErr: "services app and db name different backends for volume demo_pgdata",
 		},
 	}
@@ -333,8 +334,8 @@ func TestResolve_ServiceLabelsReachANamedVolume(t *testing.T) {
 			// Arrange: app mounts pgdata too, at /shared.
 			introspection := demoProject(tt.shares, tt.db, nil, nil)
 			introspection.Project.Services[0].Volumes = append(introspection.Project.Services[0].Volumes, composemodel.ServiceVolume{
-				Type: model.VolumeTypeNamed, Source: "pgdata", Target: "/shared", VolumeName: "demo_pgdata"})
-			introspection.Project.Volumes[0].UsedBy = []model.ServiceReference{
+				Type: composemodel.VolumeTypeNamed, Source: "pgdata", Target: "/shared", VolumeName: "demo_pgdata"})
+			introspection.Project.Volumes[0].UsedBy = []composemodel.ServiceReference{
 				{Service: "app", Target: "/shared"}, {Service: "db", Target: "/var/lib/postgresql/data"}}
 			config := defaults
 			config.SavepointCapture.NamedVolumes = !tt.namedOff
@@ -360,7 +361,7 @@ func TestResolve_ConfigKinds(t *testing.T) {
 	captureNothing := defaults
 	captureNothing.SavepointCapture = SavepointCaptureSettings{}
 	introspection := demoProject(
-		map[string]string{string(model.CaptureLabelMountsInclude): "/app", string(model.CaptureLabelWritableLayerCapture): "true"},
+		map[string]string{string(composemodel.CaptureLabelMountsInclude): "/app", string(composemodel.CaptureLabelWritableLayerCapture): "true"},
 		nil, nil, nil)
 
 	// Act
@@ -383,18 +384,18 @@ func TestResolve_ConfigKinds(t *testing.T) {
 func TestResolve_IgnoresOtherLabels(t *testing.T) {
 	// Arrange
 	labels := map[string]string{
-		"com.docker.compose.project":         "demo",
-		string(model.SystemLabelBaseImageID): "sha256:x",
-		"org.opencontainers.title":           "app",
-		"arcave.version":                     "1",
+		"com.docker.compose.project":                "demo",
+		string(composemodel.SystemLabelBaseImageID): "sha256:x",
+		"org.opencontainers.title":                  "app",
+		"arcave.version":                            "1",
 	}
-	anonLabels := map[string]string{"com.example.owner": "team", string(model.SystemLabelBaseImageID): "sha256:x"}
+	anonLabels := map[string]string{"com.example.owner": "team", string(composemodel.SystemLabelBaseImageID): "sha256:x"}
 	introspection := demoProject(labels, nil, anonLabels, map[string]string{"com.docker.compose.project": "demo"})
-	imageID := model.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	imageID := composemodel.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	introspection.Project.Services[0].Containers = []composemodel.Container{{Inspect: container.InspectResponse{
 		Image: imageID.String(),
 	}}}
-	introspection.Images = map[model.ImageDigestID]image.InspectResponse{
+	introspection.Images = map[composemodel.ImageDigestID]image.InspectResponse{
 		imageID: {Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Labels: map[string]string{"arcave.version": "1"}}}},
 	}
 
@@ -403,7 +404,7 @@ func TestResolve_IgnoresOtherLabels(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, byConfig(model.SnapshotBackendFullCopy), policy.DecideMount(appAnon))
+	assert.Equal(t, byConfig(composeconfig.SnapshotBackendFullCopy), policy.DecideMount(appAnon))
 }
 
 // A service's capture mode is its label, else the config's, else none: stop.
@@ -411,13 +412,13 @@ func TestResolve_CaptureMode(t *testing.T) {
 	tests := []struct {
 		name       string
 		label      string
-		configMode model.CaptureMode
-		wantApp    model.CaptureMode
-		wantDB     model.CaptureMode
+		configMode composeconfig.CaptureMode
+		wantApp    composeconfig.CaptureMode
+		wantDB     composeconfig.CaptureMode
 	}{
-		{name: "the label", label: "pause", configMode: model.CaptureModeLive, wantApp: model.CaptureModePause, wantDB: model.CaptureModeLive},
-		{name: "the config", configMode: model.CaptureModePause, wantApp: model.CaptureModePause, wantDB: model.CaptureModePause},
-		{name: "a label, no config", label: "live", wantApp: model.CaptureModeLive},
+		{name: "the label", label: "pause", configMode: composeconfig.CaptureModeLive, wantApp: composeconfig.CaptureModePause, wantDB: composeconfig.CaptureModeLive},
+		{name: "the config", configMode: composeconfig.CaptureModePause, wantApp: composeconfig.CaptureModePause, wantDB: composeconfig.CaptureModePause},
+		{name: "a label, no config", label: "live", wantApp: composeconfig.CaptureModeLive},
 		{name: "neither: no mode, which holds by stop"},
 	}
 	for _, tt := range tests {
@@ -425,7 +426,7 @@ func TestResolve_CaptureMode(t *testing.T) {
 			// Arrange
 			var appLabels map[string]string
 			if tt.label != "" {
-				appLabels = map[string]string{string(model.CaptureLabelCaptureMode): tt.label}
+				appLabels = map[string]string{string(composemodel.CaptureLabelCaptureMode): tt.label}
 			}
 			withMode := defaults
 			withMode.Mode = tt.configMode
@@ -448,7 +449,7 @@ func TestResolveWithoutLabels(t *testing.T) {
 	// Arrange
 	noBinds := defaults
 	noBinds.SavepointCapture.BindVolumes = false
-	introspection := demoProject(map[string]string{"arcave.captur": "false"}, nil, map[string]string{string(model.CaptureLabelCapture): "false"}, nil)
+	introspection := demoProject(map[string]string{"arcave.captur": "false"}, nil, map[string]string{string(composemodel.CaptureLabelCapture): "false"}, nil)
 
 	// Act
 	policy := ResolveWithoutLabels(introspection, noBinds)
@@ -468,9 +469,9 @@ func TestResolveWithoutLabels_IsResolveOfNoLabel(t *testing.T) {
 		{
 			name: "every kind left out, by cdc and pause",
 			defaults: CaptureDefaults{
-				VolumeBackend:        model.SnapshotBackendCDC,
-				WritableLayerBackend: model.ImageBackendFullCopy,
-				Mode:                 model.CaptureModePause,
+				VolumeBackend:        composeconfig.SnapshotBackendCDC,
+				WritableLayerBackend: composeconfig.ImageBackendFullCopy,
+				Mode:                 composeconfig.CaptureModePause,
 			},
 		},
 	}
@@ -478,10 +479,10 @@ func TestResolveWithoutLabels_IsResolveOfNoLabel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			labelled := demoProject(
-				map[string]string{string(model.CaptureLabelCapture): "false", "arcave.hook.pre-capture": "true"},
-				map[string]string{string(model.CaptureLabelCaptureMode): "live"},
+				map[string]string{string(composemodel.CaptureLabelCapture): "false", "arcave.hook.pre-capture": "true"},
+				map[string]string{string(composemodel.CaptureLabelCaptureMode): "live"},
 				nil,
-				map[string]string{string(model.CaptureLabelBackend): "cdc"},
+				map[string]string{string(composemodel.CaptureLabelBackend): "cdc"},
 			)
 			want, err := Resolve(nopCtx(), demoProject(nil, nil, nil, nil), tt.defaults)
 			require.NoError(t, err)
@@ -501,7 +502,7 @@ func TestStamps(t *testing.T) {
 	// Arrange
 	noBinds := defaults
 	noBinds.SavepointCapture.BindVolumes = false
-	introspection := demoProject(map[string]string{string(model.CaptureLabelMountsCDC): "/cache"}, nil, nil, nil)
+	introspection := demoProject(map[string]string{string(composemodel.CaptureLabelMountsCDC): "/cache"}, nil, nil, nil)
 	policy, err := Resolve(nopCtx(), introspection, noBinds)
 	require.NoError(t, err)
 
@@ -522,7 +523,7 @@ func TestStamps(t *testing.T) {
 // stamps are never read, so the user's labels alone decide again.
 func TestStamps_AreNotReadBack(t *testing.T) {
 	// Arrange
-	user := map[string]string{string(model.CaptureLabelMountsExclude): "/app", string(model.CaptureLabelWritableLayerBackend): "fullcopy"}
+	user := map[string]string{string(composemodel.CaptureLabelMountsExclude): "/app", string(composemodel.CaptureLabelWritableLayerBackend): "fullcopy"}
 	introspection := demoProject(user, nil, nil, nil)
 	policy, err := Resolve(nopCtx(), introspection, defaults)
 	require.NoError(t, err)

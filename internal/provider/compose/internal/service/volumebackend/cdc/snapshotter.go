@@ -21,7 +21,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // savepointTag ties a restic snapshot back to the savepoint that took it — the
@@ -35,7 +36,7 @@ const savepointTag = "arcave-savepoint"
 // It binds the volume into a container of its own, so no service container is
 // involved and the volume is always captured whole.
 type Snapshotter struct {
-	volume model.Volume
+	volume composemodel.Volume
 	// repo is this instance's repository addressed as objects, without a
 	// container. What a restic container reaches over the protocol is the same
 	// repository, resolved by the server from the volume's ObjectID.
@@ -46,35 +47,35 @@ type Snapshotter struct {
 	deps      Dependencies
 }
 
-func (s *Snapshotter) Volume() model.Volume { return s.volume }
+func (s *Snapshotter) Volume() composemodel.Volume { return s.volume }
 
 // Snapshot backs the volume up, initialising the repository on the first
 // capture. The volume is bound whole and mounted read-only.
 func (s *Snapshotter) Snapshot(
-	ctx context.Context, req model.BackendSnapshotRequest,
-) (model.SnapshotStat, error) {
+	ctx context.Context, req composemodel.BackendSnapshotRequest,
+) (composemodel.SnapshotStat, error) {
 	if err := req.SnapshotID.Validate(); err != nil {
-		return model.SnapshotStat{}, err
+		return composemodel.SnapshotStat{}, err
 	}
 
 	src, err := s.mountSource(ctx)
 	if err != nil {
-		return model.SnapshotStat{}, err
+		return composemodel.SnapshotStat{}, err
 	}
 
 	resticRunner, err := s.openResticRunner(ctx)
 	if err != nil {
-		return model.SnapshotStat{}, fmt.Errorf("opening snapshot: %w", err)
+		return composemodel.SnapshotStat{}, fmt.Errorf("opening snapshot: %w", err)
 	}
 
 	initialised, err := s.repo.HasConfig(ctx)
 	if err != nil {
-		return model.SnapshotStat{}, err
+		return composemodel.SnapshotStat{}, err
 	}
 	if !initialised {
 		zerolog.Ctx(ctx).Info().Msg("initialising the restic repository")
 		if _, err := resticRunner.run(ctx, resticCmd{args: []string{"init", "--json"}}); err != nil {
-			return model.SnapshotStat{}, err
+			return composemodel.SnapshotStat{}, err
 		}
 	}
 
@@ -83,18 +84,18 @@ func (s *Snapshotter) Snapshot(
 		binds: []string{src.Source + ":" + s.mountPath + ":ro"},
 	})
 	if err != nil {
-		return model.SnapshotStat{}, err
+		return composemodel.SnapshotStat{}, err
 	}
 	// The one thing worth checking about the id: restic printed one. An empty id
 	// would be committed into the record and only surface at the rollback that
 	// cannot find its snapshot.
 	if summary.SnapshotID == "" {
-		return model.SnapshotStat{}, errNoSnapshotID
+		return composemodel.SnapshotStat{}, errNoSnapshotID
 	}
 
-	return model.SnapshotStat{
+	return composemodel.SnapshotStat{
 		Volume:      s.volume,
-		Type:        model.SnapshotBackendCDC,
+		Type:        composeconfig.SnapshotBackendCDC,
 		SizeBytes:   summary.TotalBytesProcessed,
 		StoredBytes: summary.DataAddedPacked,
 		ReusedBytes: max(summary.TotalBytesProcessed-summary.DataAdded, 0),
@@ -107,7 +108,7 @@ func (s *Snapshotter) Snapshot(
 // them, and a safety snapshot that missed the parent would reship the whole
 // volume. What it is for shows up in the labels the caller passed, and nowhere
 // else.
-func (s *Snapshotter) newBackupArgs(req model.BackendSnapshotRequest) []string {
+func (s *Snapshotter) newBackupArgs(req composemodel.BackendSnapshotRequest) []string {
 	args := []string{
 		"backup", s.mountPath,
 		"--host", s.volume.ComposeProject,
@@ -126,7 +127,7 @@ func (s *Snapshotter) newBackupArgs(req model.BackendSnapshotRequest) []string {
 // (/m/<object-id>), so restoring at the root lands them in the mounted volume.
 // --include keeps that scoped, and is required for --delete not to aim at the
 // container's whole filesystem.
-func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreRequest) error {
+func (s *Snapshotter) Restore(ctx context.Context, req composemodel.BackendRestoreRequest) error {
 	if err := req.SnapshotID.Validate(); err != nil {
 		return err
 	}
@@ -199,10 +200,10 @@ func (s *Snapshotter) newRunner() (runner, error) {
 //
 // The volume is mounted whole, whatever subpath a service happens to mount — so
 // a capture holds all of it, and a restore puts all of it back.
-func (s *Snapshotter) mountSource(ctx context.Context) (model.MountSource, error) {
+func (s *Snapshotter) mountSource(ctx context.Context) (composemodel.MountSource, error) {
 	src, err := s.deps.Runner.ResolveMountSource(ctx, s.volume)
 	if err != nil {
-		return model.MountSource{}, fmt.Errorf("resolve the mount source of volume %s: %w", s.volume.ObjectID, err)
+		return composemodel.MountSource{}, fmt.Errorf("resolve the mount source of volume %s: %w", s.volume.ObjectID, err)
 	}
 	return src, nil
 }

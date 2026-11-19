@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/gctest"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
@@ -51,7 +52,11 @@ func newRepoScope(t *testing.T, repos ...string) garbage.ComposeProjectScope {
 	for _, repo := range repos {
 		gctest.WriteObject(t, root, "restic/"+repo+"/config", "c", gctest.Old)
 	}
-	scope := gctest.NewScope(t, store, model.Savepoint{ID: gctest.LiveSavepoint})
+	scope := gctest.NewScope(t, store, composemodel.Savepoint{
+		Header: model.Savepoint{
+			ID: gctest.LiveSavepoint,
+		},
+	})
 	scope.Dead = []model.SavepointID{gctest.DeadSavepoint}
 	return scope
 }
@@ -84,19 +89,19 @@ func TestCollector_Find(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	got := stat.(model.ResticRepositoryStat)
+	got := stat.(composemodel.ResticRepositoryStat)
 	assert.Equal(t, []model.GarbageOp{
 		{
-			Action:       model.GarbageActionForget,
+			Action:       composemodel.GarbageActionForget,
 			Target:       "restic/volume-named-db/snapshots/" + dead[0],
-			Reason:       model.GarbageReasonDeadCapture,
+			Reason:       composemodel.GarbageReasonDeadCapture,
 			LastModified: gctest.Old,
 			Savepoint:    gctest.DeadSavepoint,
 		},
 		{
-			Action:       model.GarbageActionForget,
+			Action:       composemodel.GarbageActionForget,
 			Target:       "restic/volume-named-db/snapshots/" + dead[1],
-			Reason:       model.GarbageReasonDeadCapture,
+			Reason:       composemodel.GarbageReasonDeadCapture,
 			LastModified: gctest.Old,
 			Savepoint:    absentSavepoint,
 		},
@@ -105,14 +110,14 @@ func TestCollector_Find(t *testing.T) {
 	assert.Equal(t, []model.GarbageSkip{
 		{
 			Target: "restic/volume-named-cache",
-			Reason: model.GarbageReasonBackendUnreadable,
+			Reason: composemodel.GarbageReasonBackendUnreadable,
 			Error:  "restic snapshots: wrong password",
 		},
 	}, got.Unjudged)
 	assert.Equal(t, 1, got.LiveRepos)
 	assert.Equal(t, 1, got.LiveSnapshots)
 	assert.Equal(t, 1, got.Unattributed, "a snapshot no capture tagged is not arcave's")
-	assert.Equal(t, []model.ResticForgetEstimate{
+	assert.Equal(t, []composemodel.ResticForgetEstimate{
 		{
 			Repo:       "restic/volume-named-db",
 			Snapshots:  dead,
@@ -160,7 +165,7 @@ func TestCollector_Find_Estimate(t *testing.T) {
 
 			// Assert
 			require.NoError(t, err)
-			got := stat.(model.ResticRepositoryStat)
+			got := stat.(composemodel.ResticRepositoryStat)
 			assert.Len(t, got.Ops, 1)
 			assert.Empty(t, got.Unjudged)
 			require.Len(t, got.Estimates, 1)
@@ -180,17 +185,17 @@ func TestCollector_Find_Unpruned(t *testing.T) {
 		freed       *int64
 		estimateErr error
 		wantOps     []model.GarbageOp
-		want        []model.ResticForgetEstimate
+		want        []composemodel.ResticForgetEstimate
 	}{
 		{
 			name:  "data a prune would free",
 			freed: utils.New(int64(4096)),
 			wantOps: []model.GarbageOp{{
-				Action: model.GarbageActionForget,
+				Action: composemodel.GarbageActionForget,
 				Target: "restic/volume-named-db",
-				Reason: model.GarbageReasonUnprunedData,
+				Reason: composemodel.GarbageReasonUnprunedData,
 			}},
-			want: []model.ResticForgetEstimate{{
+			want: []composemodel.ResticForgetEstimate{{
 				Repo:       "restic/volume-named-db",
 				Snapshots:  []string{},
 				FreedBytes: utils.New(int64(4096)),
@@ -220,7 +225,7 @@ func TestCollector_Find_Unpruned(t *testing.T) {
 
 			// Assert
 			require.NoError(t, err)
-			got := stat.(model.ResticRepositoryStat)
+			got := stat.(composemodel.ResticRepositoryStat)
 			assert.Equal(t, append([]model.GarbageOp{}, tt.wantOps...), got.Ops)
 			assert.Equal(t, tt.want, got.Estimates)
 			assert.Equal(t, 1, got.LiveSnapshots)
@@ -241,7 +246,7 @@ func TestCollector_Find_NoRepositories(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, model.ResticRepositoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, stat)
+	assert.Equal(t, composemodel.ResticRepositoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, stat)
 	assert.Equal(t, utils.New(int64(0)), stat.Summary().Bytes)
 	opener.AssertExpectations(t)
 }

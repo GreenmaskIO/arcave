@@ -58,9 +58,6 @@ func runGC(cmd *cobra.Command, _ []string) error {
 		DryRun:    gcDryRun,
 		DataKinds: dataKinds,
 	}
-	if err := cli.ValidateGarbageCollectRequest(req); err != nil {
-		return err
-	}
 	ctx := cmd.Context()
 	var opened utils.Closers
 	defer opened.Release(ctx)

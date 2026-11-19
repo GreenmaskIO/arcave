@@ -85,11 +85,15 @@ Removed 1 savepoint:
       "name": "before-migration",
       "description": "before the v2 schema",
       "created_at": "2026-06-01T19:41:12.123456789Z",
-      "stats": [ … ],
-      "writable_layers": [ … ],
-      "images": [ … ],
-      "spec": { "format": "compose-yaml" },
-      "not_covered": { … }
+      "provider": "compose",
+      "summary": { "units": [ … ], "notices": [ … ] },
+      "detail": {
+        "stats": [ … ],
+        "writable_layers": [ … ],
+        "images": [ … ],
+        "spec": { "format": "compose-yaml" },
+        "not_covered": { … }
+      }
     }
   ]
 }

@@ -16,7 +16,6 @@ package podman
 
 import (
 	"context"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,12 +23,13 @@ import (
 	"testing"
 	"time"
 
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 )
 
@@ -73,7 +73,7 @@ func TestEngine_OpenVolume(t *testing.T) {
 	e := NewEngine(docker.NewEngine(api))
 
 	// Act
-	rc, openErr := e.OpenVolume(context.Background(), model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"})
+	rc, openErr := e.OpenVolume(context.Background(), composemodel.MountSource{Type: composemodel.MountSourceVolume, Source: "demo_pgdata"})
 
 	// Assert
 	require.NoError(t, openErr)
@@ -123,7 +123,7 @@ func TestEngine_OpenVolume_Stream(t *testing.T) {
 					_, _ = io.WriteString(spec.Stderr, tt.stderr)
 				}).Return(tt.runErr).Once()
 			e := &Engine{runner: runner}
-			rc, err := e.OpenVolume(context.Background(), model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"})
+			rc, err := e.OpenVolume(context.Background(), composemodel.MountSource{Type: composemodel.MountSourceVolume, Source: "demo_pgdata"})
 			require.NoError(t, err)
 
 			// Act
@@ -161,7 +161,7 @@ func TestEngine_OpenVolume_ClosedEarly(t *testing.T) {
 			close(stopped)
 		}).Return(context.Canceled).Once()
 	e := &Engine{runner: runner}
-	rc, err := e.OpenVolume(context.Background(), model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"})
+	rc, err := e.OpenVolume(context.Background(), composemodel.MountSource{Type: composemodel.MountSourceVolume, Source: "demo_pgdata"})
 	require.NoError(t, err)
 	_, err = rc.Read(make([]byte, 16))
 	require.NoError(t, err)
@@ -192,7 +192,7 @@ func TestEngine_OpenVolume_NoSource(t *testing.T) {
 	e := &Engine{runner: runner}
 
 	// Act
-	rc, err := e.OpenVolume(context.Background(), model.MountSource{Type: model.MountSourceVolume})
+	rc, err := e.OpenVolume(context.Background(), composemodel.MountSource{Type: composemodel.MountSourceVolume})
 
 	// Assert
 	require.ErrorContains(t, err, "no source")

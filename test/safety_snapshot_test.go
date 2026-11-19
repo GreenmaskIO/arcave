@@ -69,7 +69,7 @@ func TestGC_RetainsTheNewestSafetySnapshot(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendCDC)
+	writeStorageConfig(t, env.projectRoot, env.storage, string(composeconfig.SnapshotBackendCDC))
 	compose := env.composeProject
 	arcave := func(args ...string) []byte {
 		t.Helper()
@@ -112,19 +112,19 @@ func TestGC_RetainsTheNewestSafetySnapshot(t *testing.T) {
 	assert.Equal(t, wantRetired, targetsOf(preview.ops(model.GarbageDataKindSafetySnapshots)))
 	assert.Equal(t, beforeGC, afterPreview, "a dry run retires nothing")
 	assert.Equal(t, wantRetired, targetsOf(retiring.ops(model.GarbageDataKindSafetySnapshots)))
-	assert.Empty(t, retiring.ops(model.GarbageDataKindDeduplicatedVolumes),
+	assert.Empty(t, retiring.ops(model.GarbageDataKind("deduplicated-volumes")),
 		"the run that retires them still read their restic snapshots as live")
 	assert.Equal(t, []model.SavepointID{third.SafetySnapshot}, afterGC)
 	assert.Equal(t, third.SafetySnapshot, undone.RolledBackTo.ID, "the kept undo is rolled back to by id")
 	assert.Equal(t, "third", volumeUndone, "the volume is back from third rollback")
 	assert.Equal(t, "third", layerUndone, "and the writable layer")
 	var forgotten []string
-	for _, op := range freeing.ops(model.GarbageDataKindDeduplicatedVolumes) {
+	for _, op := range freeing.ops(model.GarbageDataKind("deduplicated-volumes")) {
 		forgotten = append(forgotten, op.Savepoint.String())
 	}
 	assert.Subset(t, forgotten, wantRetired, "the next run forgets the retired snapshots' restic snapshots")
 	assert.NotContains(t, forgotten, undone.SafetySnapshot.String())
-	assert.NotEmpty(t, freeing.ops(model.GarbageDataKindImageLayers), "and frees the blobs only they listed")
+	assert.NotEmpty(t, freeing.ops(model.GarbageDataKind("image-layers")), "and frees the blobs only they listed")
 	assert.Equal(t, []model.SavepointID{undone.SafetySnapshot}, afterFreeing,
 		"the undo of the rollback to the kept one is the newest now")
 }
@@ -139,7 +139,7 @@ func TestRollback_SafetySnapshotNamesItsRollback(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
+	writeStorageConfig(t, env.projectRoot, env.storage, string(composeconfig.SnapshotBackendFullCopy))
 	arcave := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, env.projectRoot, nil, append([]string{"-p", env.project}, args...)...)
@@ -196,7 +196,7 @@ func TestRollback_WithoutASafetySnapshot(t *testing.T) {
 			env := newSessionEnv(t)
 			env.withComposeProject(t)
 			initArcave(t, env)
-			writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
+			writeStorageConfig(t, env.projectRoot, env.storage, string(composeconfig.SnapshotBackendFullCopy))
 			compose := env.composeProject
 			var environment []string
 			if tt.config != "" {
@@ -240,7 +240,7 @@ func TestGC_RetainRecentFromTheEnvironment(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
+	writeStorageConfig(t, env.projectRoot, env.storage, string(composeconfig.SnapshotBackendFullCopy))
 	compose := env.composeProject
 	arcave := func(args ...string) []byte {
 		t.Helper()
@@ -269,7 +269,7 @@ func TestSavepointRemove_RetainRecentZero(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
+	writeStorageConfig(t, env.projectRoot, env.storage, string(composeconfig.SnapshotBackendFullCopy))
 	compose := env.composeProject
 	arcave := func(args ...string) []byte {
 		t.Helper()
@@ -301,7 +301,7 @@ func TestMCP_RollbackSafetySnapshot(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
+	writeStorageConfig(t, env.projectRoot, env.storage, string(composeconfig.SnapshotBackendFullCopy))
 	command := arcaveCommand(t, env, "mcp")
 	command.Env = append(command.Env, "ARCAVE_ROLLBACK_SAFETY_SNAPSHOT=false")
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "arcave-it", Version: "0"}, nil)

@@ -24,6 +24,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 	"github.com/greenmaskio/arcave/internal/utils"
@@ -67,11 +68,11 @@ func New(daemon Pinger, opener InspectorOpener) *Collector {
 }
 
 func (s *Collector) Kind() model.GarbageCollectorKind {
-	return model.GarbageCollectorKindResticRepositories
+	return composemodel.GarbageCollectorKindResticRepositories
 }
 
 func (s *Collector) DataKind() model.GarbageDataKind {
-	return model.GarbageDataKindDeduplicatedVolumes
+	return composemodel.GarbageDataKindDeduplicatedVolumes
 }
 
 // Probe checks, within probeTimeout, that the daemon answers.
@@ -90,7 +91,7 @@ func (s *Collector) Find(ctx context.Context, scope garbage.ComposeProjectScope)
 		return nil, err
 	}
 	if len(repos) == 0 {
-		return model.ResticRepositoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil
+		return composemodel.ResticRepositoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil
 	}
 	inspector, err := s.opener.Open(ctx, scope.Store)
 	if err != nil {
@@ -102,7 +103,7 @@ func (s *Collector) Find(ctx context.Context, scope garbage.ComposeProjectScope)
 		committed                = newCommittedSavepoints(scope)
 		ops                      = []model.GarbageOp{}
 		unjudged                 []model.GarbageSkip
-		estimates                []model.ResticForgetEstimate
+		estimates                []composemodel.ResticForgetEstimate
 		liveRepos, liveSnapshots int
 		unattributed             int
 	)
@@ -112,7 +113,7 @@ func (s *Collector) Find(ctx context.Context, scope garbage.ComposeProjectScope)
 		if err != nil {
 			unjudged = append(unjudged, model.GarbageSkip{
 				Target: key,
-				Reason: model.GarbageReasonBackendUnreadable,
+				Reason: composemodel.GarbageReasonBackendUnreadable,
 				Error:  err.Error(),
 			})
 			continue
@@ -129,7 +130,7 @@ func (s *Collector) Find(ctx context.Context, scope garbage.ComposeProjectScope)
 			estimates = append(estimates, *estimate)
 		}
 	}
-	return model.ResticRepositoryStat{
+	return composemodel.ResticRepositoryStat{
 		GarbageFindings: model.GarbageFindings{
 			Ops:      ops,
 			Unjudged: unjudged,
@@ -146,7 +147,7 @@ func (s *Collector) Find(ctx context.Context, scope garbage.ComposeProjectScope)
 func newCommittedSavepoints(scope garbage.ComposeProjectScope) map[model.SavepointID]bool {
 	committed := map[model.SavepointID]bool{}
 	for _, savepoint := range scope.Savepoints {
-		committed[savepoint.ID] = true
+		committed[savepoint.Header.ID] = true
 	}
 	return committed
 }
@@ -174,9 +175,9 @@ func judgeSnapshots(committed map[model.SavepointID]bool, repo string, snapshots
 		default:
 			dead = append(dead, snapshot.ID)
 			ops = append(ops, model.GarbageOp{
-				Action:       model.GarbageActionForget,
+				Action:       composemodel.GarbageActionForget,
 				Target:       cdc.NewSnapshotKey(repo, snapshot.ID),
-				Reason:       model.GarbageReasonDeadCapture,
+				Reason:       composemodel.GarbageReasonDeadCapture,
 				LastModified: snapshot.Time,
 				Savepoint:    snapshot.Savepoint,
 			})
@@ -195,7 +196,7 @@ func judgeSnapshots(committed map[model.SavepointID]bool, repo string, snapshots
 // left behind. Neither is no op and no estimate.
 func readRepoGarbage(
 	ctx context.Context, inspector Inspector, repo string, verdict repoVerdict,
-) ([]model.GarbageOp, *model.ResticForgetEstimate) {
+) ([]model.GarbageOp, *composemodel.ResticForgetEstimate) {
 	var (
 		key   = cdc.NewRepositoryKey(repo)
 		freed = readEstimate(ctx, inspector, repo, verdict.dead)
@@ -205,9 +206,9 @@ func readRepoGarbage(
 		return verdict.ops, newForgetEstimate(key, verdict.dead, freed)
 	case utils.Value(freed) > 0:
 		prune := model.GarbageOp{
-			Action: model.GarbageActionForget,
+			Action: composemodel.GarbageActionForget,
 			Target: key,
-			Reason: model.GarbageReasonUnprunedData,
+			Reason: composemodel.GarbageReasonUnprunedData,
 		}
 		return []model.GarbageOp{prune}, newForgetEstimate(key, []string{}, freed)
 	}
@@ -215,8 +216,8 @@ func readRepoGarbage(
 }
 
 // newForgetEstimate is what forgetting ids in the repository at key, then pruning it, frees.
-func newForgetEstimate(key string, ids []string, freed *int64) *model.ResticForgetEstimate {
-	return &model.ResticForgetEstimate{
+func newForgetEstimate(key string, ids []string, freed *int64) *composemodel.ResticForgetEstimate {
+	return &composemodel.ResticForgetEstimate{
 		Repo:       key,
 		Snapshots:  ids,
 		FreedBytes: freed,

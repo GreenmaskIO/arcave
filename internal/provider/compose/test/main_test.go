@@ -15,6 +15,7 @@
 package test
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -25,7 +26,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
+	"github.com/greenmaskio/arcave/internal/model"
 	composeclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
@@ -45,4 +48,20 @@ func newComposeService(t *testing.T, cli command.Cli) (api.Compose, *composeclie
 	)
 	require.NoError(t, err)
 	return service, prompter
+}
+
+// detailOf is the compose provider's body of savepoint.
+func detailOf(t *testing.T, savepoint model.Savepoint) composemodel.SavepointDetail {
+	t.Helper()
+	parsed, err := composemodel.ParseSavepoint(savepoint)
+	require.NoError(t, err)
+	return parsed.Detail
+}
+
+// restoreDetailOf is the compose provider's body of what a build restored.
+func restoreDetailOf(t *testing.T, detail json.RawMessage) composemodel.RestoreDetail {
+	t.Helper()
+	var restored composemodel.RestoreDetail
+	require.NoError(t, json.Unmarshal(detail, &restored))
+	return restored
 }

@@ -22,7 +22,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // requireDaemon refuses a daemon whose version is older than minMajor; 0 requires none.
@@ -39,7 +39,7 @@ func requireDaemon(ctx context.Context, version string, minMajor int) error {
 	}
 	if major < minMajor {
 		return fmt.Errorf("%w: the daemon reports version %s; arcave needs Docker %d or newer",
-			model.ErrUnsupportedDaemon, version, minMajor)
+			composemodel.ErrUnsupportedDaemon, version, minMajor)
 	}
 	return nil
 }

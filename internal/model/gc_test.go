@@ -60,101 +60,20 @@ func TestGarbageFindings_Summary(t *testing.T) {
 	}
 }
 
-// A restic stat's bytes are its estimates', never its ops': a forget alone frees nothing.
-func TestResticRepositoryStat_Summary(t *testing.T) {
-	size := func(n int64) *int64 { return &n }
-	tests := []struct {
-		name string
-		stat ResticRepositoryStat
-		want GarbageSummary
-	}{
-		{
-			name: "no estimate frees nothing",
-			stat: ResticRepositoryStat{GarbageFindings: GarbageFindings{Ops: []GarbageOp{}}},
-			want: GarbageSummary{Bytes: size(0)},
-		},
-		{
-			name: "estimates add up",
-			stat: ResticRepositoryStat{
-				GarbageFindings: GarbageFindings{Ops: []GarbageOp{{}, {}}, Unjudged: []GarbageSkip{{}}},
-				Estimates:       []ResticForgetEstimate{{FreedBytes: size(3)}, {FreedBytes: size(4)}},
-			},
-			want: GarbageSummary{Found: 2, Bytes: size(7), Unjudged: 1},
-		},
-		{
-			name: "one unknown estimate leaves the total unknown",
-			stat: ResticRepositoryStat{
-				GarbageFindings: GarbageFindings{Ops: []GarbageOp{{}, {}}},
-				Estimates:       []ResticForgetEstimate{{FreedBytes: size(3)}, {}},
-			},
-			want: GarbageSummary{Found: 2},
-		},
-		{
-			name: "an op's own bytes are not counted",
-			stat: ResticRepositoryStat{
-				GarbageFindings: GarbageFindings{Ops: []GarbageOp{{Bytes: size(100)}}},
-				Estimates:       []ResticForgetEstimate{{FreedBytes: size(5)}},
-			},
-			want: GarbageSummary{Found: 1, Bytes: size(5)},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, tt.stat.Summary())
-		})
-	}
-}
-
-func TestGarbageDataKind_Validate(t *testing.T) {
-	for _, dataKind := range GarbageDataKinds() {
-		assert.NoError(t, dataKind.Validate())
-	}
-	assert.ErrorIs(t, GarbageDataKind("restic").Validate(), ErrInvalidGarbageCollectRequest)
-}
-
-func TestGarbageCollectRequest_Validate(t *testing.T) {
-	tests := []struct {
-		name    string
-		req     GarbageCollectRequest
-		wantErr error
-	}{
-		{name: "nothing set", req: GarbageCollectRequest{DryRun: true}},
-		{name: "known data kinds", req: GarbageCollectRequest{DataKinds: []GarbageDataKind{GarbageDataKindImageLayers}}},
-		{name: "an unknown data kind", req: GarbageCollectRequest{DataKinds: []GarbageDataKind{"blob"}}, wantErr: ErrInvalidGarbageCollectRequest},
-		{
-			name:    "session trees are not gc's: session list --all names them",
-			req:     GarbageCollectRequest{DataKinds: []GarbageDataKind{"session-tree"}},
-			wantErr: ErrInvalidGarbageCollectRequest,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			err := tt.req.Validate()
-
-			// Assert
-			if tt.wantErr != nil {
-				assert.ErrorIs(t, err, tt.wantErr)
-				return
-			}
-			assert.NoError(t, err)
-		})
-	}
-}
-
 // The report is the wire contract: the detail is the kind's own stat, its findings inlined.
 func TestGarbageReport_JSON(t *testing.T) {
 	// Arrange
 	size := int64(5)
 	report := GarbageReport{
-		DataKind: GarbageDataKindImageLayers, Collector: GarbageCollectorKindOCIBlobs, ComposeProject: "demo",
-		Summary: GarbageSummary{Found: 1, Bytes: &size},
-		Detail: OCIBlobStat{
+		DataKind: GarbageDataKindSafetySnapshots, Collector: GarbageCollectorKindSafetySnapshotRetention,
+		ComposeProject: "demo",
+		Summary:        GarbageSummary{Found: 1, Bytes: &size},
+		Detail: SafetySnapshotStat{
 			GarbageFindings: GarbageFindings{Ops: []GarbageOp{{
-				Action: GarbageActionDeleteObject, Target: "shared/oci/blobs/sha256/ab", Bytes: &size,
-				Reason: GarbageReasonUnreferenced,
+				Action: GarbageActionDeleteSavepoint, Target: "sp1", Bytes: &size,
+				Reason: GarbageReasonBeyondRetention,
 			}}},
-			Live: 2,
+			Retained: 2,
 		},
 	}
 
@@ -164,11 +83,11 @@ func TestGarbageReport_JSON(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.JSONEq(t, `{
-		"data_kind": "image-layers", "collector": "oci-blobs", "compose_project": "demo",
+		"data_kind": "safety-snapshots", "collector": "safety-snapshot-retention", "compose_project": "demo",
 		"summary": {"found": 1, "bytes": 5, "skipped": 0, "unjudged": 0},
 		"detail": {
-			"ops": [{"action": "delete-object", "target": "shared/oci/blobs/sha256/ab", "bytes": 5, "reason": "unreferenced"}],
-			"live": 2
+			"ops": [{"action": "delete-savepoint", "target": "sp1", "bytes": 5, "reason": "beyond-retention"}],
+			"retained": 2
 		}
 	}`, string(got))
 }

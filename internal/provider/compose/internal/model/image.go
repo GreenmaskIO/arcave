@@ -14,14 +14,24 @@
 
 package model
 
-import (
-	"github.com/greenmaskio/arcave/internal/model"
-)
-
 // ImageCaptureRequest is one image to keep. ExistsInDaemon is whether the Docker
 // daemon still held it when the compose project was introspected: only then can its
 // bytes be stored.
 type ImageCaptureRequest struct {
-	Image          model.Image
+	Image          Image
 	ExistsInDaemon bool
+}
+
+// Image is one image a compose file named, kept in a savepoint so a
+// container can be rebuilt without its writable layer. It travels in the savepoint record,
+// so its json tags are the wire contract.
+type Image struct {
+	ID          ImageDigestID `json:"id"`                     // sha256 digest of the image config; the store key
+	Refs        []string      `json:"refs,omitempty"`         // names, e.g. postgres:16
+	RepoDigests []string      `json:"repo_digests,omitempty"` // registry digests, e.g. postgres@sha256:…
+	SizeBytes   int64         `json:"size_bytes,omitempty"`   // image size as the daemon reports it
+	StoredBytes int64         `json:"stored_bytes,omitempty"` // bytes this savepoint added; 0 when already stored
+	// Stored is whether the store holds the bytes; false when only the identity is recorded, the
+	// daemon having lacked them or failed to hand them over.
+	Stored bool `json:"stored"`
 }

@@ -24,7 +24,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
@@ -37,7 +36,7 @@ func TestBuilt_RestoreData_LogsAreAttributedPerVolume(t *testing.T) {
 	backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once()
 	built := builtWorkload{
 		vacant: vacantWorkload{service: newComposeWorkload(Deps{})},
-		target: preparedSavepoint{Target: composemodel.Target{Savepoint: record, Backends: []model.VolumeSnapshotBackend{backend}}},
+		target: preparedSavepoint{Target: composemodel.Target{Savepoint: record, Backends: []composemodel.VolumeSnapshotBackend{backend}}},
 	}
 	logs := &composetest.SyncBuffer{}
 	ctx := zerolog.New(logs).Level(zerolog.DebugLevel).WithContext(context.Background())
@@ -49,7 +48,7 @@ func TestBuilt_RestoreData_LogsAreAttributedPerVolume(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, logs.String(), `"volume":"volume-named-demo_db"`)
 	assert.Contains(t, logs.String(), `"backend":"fullcopy"`)
-	assert.Contains(t, logs.String(), `"snapshot_id":"`+record.ID.String()+`"`)
+	assert.Contains(t, logs.String(), `"snapshot_id":"`+record.Header.ID.String()+`"`)
 	assert.Contains(t, logs.String(), `"op":"restore"`)
 	backend.AssertExpectations(t)
 }
@@ -62,7 +61,7 @@ func TestBuilt_RestoreData_FailedRestore(t *testing.T) {
 	backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(errors.New("boom")).Once()
 	building := builtWorkload{
 		vacant: vacantWorkload{service: newComposeWorkload(Deps{})},
-		target: preparedSavepoint{Target: composemodel.Target{Savepoint: record, Backends: []model.VolumeSnapshotBackend{backend}}},
+		target: preparedSavepoint{Target: composemodel.Target{Savepoint: record, Backends: []composemodel.VolumeSnapshotBackend{backend}}},
 	}
 	ctx := zerolog.Nop().WithContext(context.Background())
 

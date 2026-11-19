@@ -29,13 +29,14 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // StoredImage is one image directory under the shared image store.
 type StoredImage struct {
 	// ID is read off the directory's name, sha256:<hex>; a stray directory is listed too.
-	ID model.ImageDigestID
+	ID composemodel.ImageDigestID
 	// Key is the directory, relative to the compose project store.
 	Key          string
 	Bytes        int64
@@ -75,7 +76,7 @@ func NewStoredImages(objects []storages.ObjectStat) []StoredImage {
 			}
 		}
 		images = append(images, StoredImage{
-			ID:            model.ImageDigestID(algorithm + ":" + hex),
+			ID:            composemodel.ImageDigestID(algorithm + ":" + hex),
 			Key:           key,
 			Bytes:         bytes,
 			LastModified:  lastModified,
@@ -151,7 +152,7 @@ func ReadListedBlobs(ctx context.Context, store storages.Navigator, key string) 
 // listed as size bytes: none when the capture would store the image again. A read short of size is
 // an error: an intact manifest cut off on the way reads the same.
 func ReadReusableBlobs(
-	ctx context.Context, store storages.Navigator, key string, size int64, image model.ImageDigestID,
+	ctx context.Context, store storages.Navigator, key string, size int64, image composemodel.ImageDigestID,
 ) ([]string, error) {
 	imageStore, err := store.SubStorage(key, true)
 	if err != nil {

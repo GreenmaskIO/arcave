@@ -16,11 +16,9 @@ package text
 
 import (
 	"bytes"
-	"net/netip"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -29,7 +27,6 @@ import (
 var (
 	checkedAt  = time.Date(2026, 11, 7, 17, 14, 0, 0, time.UTC)
 	deployedAt = time.Date(2026, 11, 7, 14, 2, 0, 0, time.UTC)
-	startedAt  = deployedAt.Add(30 * time.Second)
 	baseline   = model.SessionRef{
 		ID:   model.DefaultSession,
 		Name: model.DefaultSessionName,
@@ -49,23 +46,17 @@ func TestPrinter_Print_Status(t *testing.T) {
 			name: "status_degraded_mixed",
 			status: func() model.ComposeProjectStatus {
 				status := newRunningStatus()
-				status.State = model.ComposeProjectStateDegraded
-				status.Deployment.Source = model.DeploymentSourceMixed
-				status.Deployment.Replaced = 1
-				status.Services[0].Health = model.ReplicaHealthUnhealthy
-				status.Services[0].Replicas[0].Health = model.ReplicaHealthUnhealthy
-				status.Services[1].Replicas[1].InDeployment = false
-				status.Services = append(status.Services, model.ServiceStatus{
-					Name: "worker", State: model.ReplicaStateExited, ReplicasExpected: 1,
-					Replicas: []model.ReplicaStatus{{
-						Number: 1, Container: "myapp-worker-1", State: model.ReplicaStateExited, ExitCode: 1,
-						InDeployment: true, InSavepoint: true,
-					}},
-				})
+				status.State = "degraded"
+				status.Detail = fakeDetail{table: model.Table{Columns: statusColumns, Rows: [][]string{
+					{"db", "1/1", "unhealthy", "3h 11m", "127.0.0.1:5432→5432/tcp"},
+					{"web", "2/2", "running", "3h 11m", "0.0.0.0:8080→80/tcp"},
+					{"migrate", "1/1", "completed", "—", ""},
+					{"worker", "0/1", "exited 1", "—", ""},
+				}}}
 				status.Notices = []model.Notice{
-					{Code: model.NoticeCodeReplicaExited, Message: "worker-1 exited with code 1 (out of memory) 3h 09m ago", Severe: true},
-					{Code: model.NoticeCodeReplicaUnhealthy, Message: "db-1 is unhealthy: 5 failing checks", Severe: true},
-					{Code: model.NoticeCodeReplicaRecreated, Message: "web-2 was recreated outside arcave 34m ago " +
+					{Code: "replica-exited", Message: "worker-1 exited with code 1 (out of memory) 3h 09m ago", Severe: true},
+					{Code: "replica-unhealthy", Message: "db-1 is unhealthy: 5 failing checks", Severe: true},
+					{Code: "replica-recreated", Message: "web-2 was recreated outside arcave 34m ago " +
 						"(compose replaced myapp-web-2): the writable layer the rollback restored is gone; volumes are untouched"},
 				}
 				return status
@@ -76,13 +67,11 @@ func TestPrinter_Print_Status(t *testing.T) {
 			status: model.ComposeProjectStatus{
 				ComposeProject: "myapp",
 				CheckedAt:      checkedAt,
-				State:          model.ComposeProjectStateRunning,
+				State:          "running",
 				Session:        &baseline,
-				Deployment:     &model.DeploymentStatus{Source: model.DeploymentSourceCompose},
-				Services: []model.ServiceStatus{{
-					Name: "db", State: model.ReplicaStateRunning, ReplicasUp: 1,
-					Replicas: []model.ReplicaStatus{newRunningReplica("myapp-db-1", 1, publishedPort("127.0.0.1", 5432, 5432))},
-				}},
+				Detail: fakeDetail{table: model.Table{Columns: statusColumns, Rows: [][]string{
+					{"db", "1", "running", "3h 11m", "127.0.0.1:5432→5432/tcp"},
+				}}},
 			},
 		},
 		{
@@ -90,15 +79,16 @@ func TestPrinter_Print_Status(t *testing.T) {
 			status: model.ComposeProjectStatus{
 				ComposeProject: "myapp",
 				CheckedAt:      checkedAt,
-				State:          model.ComposeProjectStateAbsent,
+				State:          "absent",
 				Session:        &baseline,
+				Detail:         fakeDetail{table: model.Table{Columns: statusColumns}},
 			},
 		},
 		{
 			name: "status_rollback_pending",
 			status: func() model.ComposeProjectStatus {
 				status := newRunningStatus()
-				status.State = model.ComposeProjectStateRollbackPending
+				status.State = model.StatusStateRollbackPending
 				status.RollbackInFlight = &model.RollbackInFlight{
 					Phase: model.InflightRestoring, Session: model.DefaultSession, Target: savepointID, Safety: safetyID,
 					At: checkedAt.Add(-3 * time.Minute), Recover: safetyID,
@@ -115,14 +105,12 @@ func TestPrinter_Print_Status(t *testing.T) {
 			name: "status_stopped",
 			status: func() model.ComposeProjectStatus {
 				status := newRunningStatus()
-				status.State = model.ComposeProjectStateStopped
-				status.Services = status.Services[:1]
-				status.Services[0].State, status.Services[0].Health, status.Services[0].ReplicasUp =
-					model.ReplicaStateExited, "", 0
-				status.Services[0].Replicas[0].State, status.Services[0].Replicas[0].Health =
-					model.ReplicaStateExited, ""
+				status.State = "stopped"
+				status.Detail = fakeDetail{table: model.Table{Columns: statusColumns, Rows: [][]string{
+					{"db", "0/1", "exited 0", "—", "127.0.0.1:5432→5432/tcp"},
+				}}}
 				status.Notices = []model.Notice{{
-					Code:    model.NoticeCodeComposeProjectStopped,
+					Code:    "compose-project-stopped",
 					Message: "no container runs",
 				}}
 				return status
@@ -134,7 +122,7 @@ func TestPrinter_Print_Status(t *testing.T) {
 				status := newRunningStatus()
 				status.Session = nil
 				status.Deployment.Record = model.DeploymentRecordUnreadable
-				status.Deployment.Savepoint.Description, status.Deployment.Savepoint.Restored = "", nil
+				status.Deployment.Savepoint.Description = ""
 				status.Unreadable = []model.StatusUnreadable{{Source: model.StatusUnreadableStore, Error: "the store is encrypted"}}
 				status.Notices = []model.Notice{{
 					Code:    model.NoticeCodeStoreUnreadable,
@@ -182,16 +170,27 @@ func TestPrinter_Print_Status(t *testing.T) {
 	}
 }
 
+// statusColumns are the columns of the compose provider's table.
+var statusColumns = []string{"SERVICE", "REPLICAS", "STATE", "UP", "PORTS"}
+
+// fakeDetail is a provider's body of a status that lays out table.
+type fakeDetail struct {
+	table model.Table
+}
+
+func (f fakeDetail) MarshalJSON() ([]byte, error) { return []byte(`{}`), nil }
+
+func (f fakeDetail) Table() model.Table { return f.table }
+
 // newRunningStatus is a compose project a rollback deployed, every replica up but a job that
 // finished.
 func newRunningStatus() model.ComposeProjectStatus {
 	return model.ComposeProjectStatus{
 		ComposeProject: "myapp",
 		CheckedAt:      checkedAt,
-		State:          model.ComposeProjectStateRunning,
+		State:          "running",
 		Session:        &baseline,
 		Deployment: &model.DeploymentStatus{
-			Source:     model.DeploymentSourceSavepoint,
 			DeployedAt: deployedAt,
 			Session:    model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
 			Savepoint: &model.DeployedSavepointStatus{
@@ -201,137 +200,13 @@ func newRunningStatus() model.ComposeProjectStatus {
 					CreatedAt: createdAt,
 				},
 				Description: "the schema before 0042",
-				Restored:    &model.RestoredCounts{Volumes: 3, WritableLayers: 2},
 			},
 			Record: model.DeploymentRecordFound,
 		},
-		Services: []model.ServiceStatus{
-			{
-				Name: "db", State: model.ReplicaStateRunning, Health: model.ReplicaHealthHealthy,
-				ReplicasExpected: 1, ReplicasUp: 1,
-				Replicas: []model.ReplicaStatus{withHealth(
-					newRunningReplica("myapp-db-1", 1, publishedPort("127.0.0.1", 5432, 5432)), model.ReplicaHealthHealthy)},
-			},
-			{
-				Name: "web", State: model.ReplicaStateRunning, ReplicasExpected: 2, ReplicasUp: 2,
-				Replicas: []model.ReplicaStatus{
-					newRunningReplica("myapp-web-1", 1, publishedPort("0.0.0.0", 8080, 80), publishedPort("::", 8080, 80)),
-					newRunningReplica("myapp-web-2", 2),
-				},
-			},
-			{
-				Name: "migrate", State: model.ReplicaStateCompleted, ReplicasExpected: 1, ReplicasUp: 1,
-				Replicas: []model.ReplicaStatus{{
-					Number: 1, Container: "myapp-migrate-1", State: model.ReplicaStateCompleted, InDeployment: true, InSavepoint: true,
-				}},
-			},
-		},
-	}
-}
-
-func newRunningReplica(container string, number int, ports ...model.PublishedPort) model.ReplicaStatus {
-	return model.ReplicaStatus{
-		Number:       number,
-		Container:    container,
-		State:        model.ReplicaStateRunning,
-		StartedAt:    &startedAt,
-		InDeployment: true,
-		InSavepoint:  true,
-		Ports:        ports,
-	}
-}
-
-func withHealth(replica model.ReplicaStatus, health model.ReplicaHealth) model.ReplicaStatus {
-	replica.Health = health
-	return replica
-}
-
-func publishedPort(hostIP string, hostPort, containerPort int) model.PublishedPort {
-	return model.PublishedPort{
-		ContainerPort: containerPort,
-		Protocol:      "tcp",
-		HostIP:        netip.MustParseAddr(hostIP).String(),
-		HostPort:      hostPort,
-	}
-}
-
-func TestFormatServicePorts(t *testing.T) {
-	tests := []struct {
-		name  string
-		ports []model.PublishedPort
-		want  string
-	}{
-		{name: "none"},
-		{
-			name:  "one port on both unspecified addresses is one",
-			ports: []model.PublishedPort{publishedPort("0.0.0.0", 8080, 80), publishedPort("::", 8080, 80)},
-			want:  "0.0.0.0:8080→80/tcp",
-		},
-		{
-			name:  "one port on two given addresses is two",
-			ports: []model.PublishedPort{publishedPort("127.0.0.1", 5432, 5432), publishedPort("192.168.1.5", 5432, 5432)},
-			want:  "127.0.0.1:5432→5432/tcp, 192.168.1.5:5432→5432/tcp",
-		},
-		{
-			name:  "a port with no address",
-			ports: []model.PublishedPort{{ContainerPort: 80, Protocol: "udp", HostPort: 8080}},
-			want:  "8080→80/udp",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			service := model.ServiceStatus{Replicas: []model.ReplicaStatus{newRunningReplica("demo-web-1", 1, tt.ports...)}}
-
-			// Act
-			got := formatServicePorts(service)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestFormatServiceState(t *testing.T) {
-	tests := []struct {
-		name    string
-		service model.ServiceStatus
-		want    string
-	}{
-		{
-			name: "every replica exited 0",
-			service: model.ServiceStatus{State: model.ReplicaStateExited, Replicas: []model.ReplicaStatus{
-				{Number: 1, State: model.ReplicaStateExited},
-				{Number: 2, State: model.ReplicaStateExited},
-			}},
-			want: "exited 0",
-		},
-		{
-			name: "a failing replica after one that exited 0",
-			service: model.ServiceStatus{State: model.ReplicaStateExited, Replicas: []model.ReplicaStatus{
-				{Number: 1, State: model.ReplicaStateExited},
-				{Number: 2, State: model.ReplicaStateExited, ExitCode: 137},
-			}},
-			want: "exited 137",
-		},
-		{
-			name:    "running with a healthcheck",
-			service: model.ServiceStatus{State: model.ReplicaStateRunning, Health: model.ReplicaHealthHealthy},
-			want:    "healthy",
-		},
-		{
-			name:    "running with none",
-			service: model.ServiceStatus{State: model.ReplicaStateRunning},
-			want:    "running",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got := formatServiceState(tt.service)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-		})
+		Detail: fakeDetail{table: model.Table{Columns: statusColumns, Rows: [][]string{
+			{"db", "1/1", "healthy", "3h 11m", "127.0.0.1:5432→5432/tcp"},
+			{"web", "2/2", "running", "3h 11m", "0.0.0.0:8080→80/tcp"},
+			{"migrate", "1/1", "completed", "—", ""},
+		}}},
 	}
 }

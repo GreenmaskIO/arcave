@@ -272,14 +272,14 @@ func TestService_planCapture(t *testing.T) {
 func TestService_planCapture_AnInspectionFailurePlansNothing(t *testing.T) {
 	// Arrange
 	stages := newMockStages(false)
-	stages.expectInspect(model.ErrUnsupportedDaemon)
+	stages.expectInspect(errUnsupportedDaemon)
 	svc := newStagedService(t, stages, &mockSavepoints{}, &mockLocker{}, &fakeInflight{})
 
 	// Act
 	plan, err := svc.planCapture(zerolog.Nop().WithContext(context.Background()))
 
 	// Assert
-	require.ErrorIs(t, err, model.ErrUnsupportedDaemon)
+	require.ErrorIs(t, err, errUnsupportedDaemon)
 	assert.Nil(t, plan)
 	stages.AssertExpectations(t)
 }

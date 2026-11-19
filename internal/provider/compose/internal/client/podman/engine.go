@@ -18,13 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+
 	"golang.org/x/sync/errgroup"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 )
 
@@ -61,7 +61,7 @@ func NewEngine(engine *docker.Engine) *Engine {
 
 // OpenVolume streams the volume out as a tar written inside a throwaway container,
 // owners and modes kept; closing the stream removes the container.
-func (e *Engine) OpenVolume(ctx context.Context, src model.MountSource) (io.ReadCloser, error) {
+func (e *Engine) OpenVolume(ctx context.Context, src composemodel.MountSource) (io.ReadCloser, error) {
 	if src.Source == "" {
 		return nil, fmt.Errorf("cannot reach a %q volume with no source", src.Type)
 	}

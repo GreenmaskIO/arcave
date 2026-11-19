@@ -16,10 +16,11 @@ package composespec
 
 import (
 	"context"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"net/netip"
 	"slices"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v5/pkg/api"
@@ -28,8 +29,6 @@ import (
 	"github.com/moby/moby/api/types/system"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // richResult is the compose project the round-trip is measured on: every section a rebuild
@@ -38,13 +37,13 @@ func richResult() composemodel.IntrospectionResult {
 	svc := richService()
 	svc.Volumes[0].Volume = &composemodel.VolumeMount{NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"}}
 	svc.Volumes = append(svc.Volumes,
-		composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/conf", Target: "/etc/conf",
+		composemodel.ServiceVolume{Type: composemodel.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/conf", Target: "/etc/conf",
 			Bind: &composemodel.BindMount{Propagation: "rshared", Recursive: "disabled"}},
-		composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/data", Target: "/data",
+		composemodel.ServiceVolume{Type: composemodel.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/data", Target: "/data",
 			Bind: &composemodel.BindMount{CreateHostPath: true}},
-		composemodel.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run/cache",
+		composemodel.ServiceVolume{Type: composemodel.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run/cache",
 			Tmpfs: &composemodel.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
-		composemodel.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1", Target: "/assets",
+		composemodel.ServiceVolume{Type: composemodel.VolumeTypeImage, RawType: "image", Source: "assets:1", Target: "/assets",
 			ReadOnly: true, Image: &composemodel.ImageMount{Subpath: "static"}},
 	)
 	svc.Containers[0].Labels = map[string]string{

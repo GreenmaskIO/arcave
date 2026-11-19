@@ -104,7 +104,7 @@ func TestService_Rollback_WithoutSafetySnapshot(t *testing.T) {
 			// Assert
 			require.NoError(t, err)
 			assert.Empty(t, res.SafetySnapshot)
-			assert.Equal(t, demoSummary().Volumes, res.Restored)
+			assert.Equal(t, demoSummary().Restored, res.Restored)
 			assert.Equal(t, []string{noSafetySnapshotWarning}, recorder.inResult)
 			inflight.AssertExpectations(t)
 			savepoints.AssertExpectations(t)
@@ -188,11 +188,19 @@ func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
 	tests := []struct {
 		name         string
 		standing     *model.InflightMarker
+		overwritten  []string
+		warnings     []model.Notice
 		wantLeftover []string
 		wantPhase    model.InflightPhase
 	}{
-		{name: "a leftover volume overwritten", wantLeftover: []string{"demo_db"}, wantPhase: model.InflightRecreating},
-		{name: "a recovery names none", standing: &recovered, wantPhase: model.InflightRestoring},
+		{
+			name:         "a leftover volume overwritten",
+			overwritten:  []string{"demo_db"},
+			warnings:     []model.Notice{{Message: "volume demo_db was overwritten", Severe: true}},
+			wantLeftover: []string{"demo_db"},
+			wantPhase:    model.InflightRecreating,
+		},
+		{name: "a recovery the provider names none for", standing: &recovered, wantPhase: model.InflightRestoring},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -201,8 +209,9 @@ func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
 			savepoints, locker := demoResolution(record)
 			stages := newMockStages(true)
 			stages.target.prepared.summary = provider.PreparedSummary{
-				Volumes:     []model.Volume{demoVolume()},
-				Overwritten: []string{"demo_db"},
+				Restored:    demoSummary().Restored,
+				Overwritten: tt.overwritten,
+				Warnings:    tt.warnings,
 			}
 			recovering := tt.standing != nil
 			inflight := &mockInflight{}
@@ -236,12 +245,7 @@ func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
 			require.NoError(t, err)
 			assert.Empty(t, res.SafetySnapshot)
 			assert.Equal(t, tt.wantLeftover, res.LeftoverVolumes)
-			if recovering {
-				assert.Empty(t, recorder.inResult)
-				assert.Contains(t, logs.String(), "the compose project is not running but this volume survives")
-			} else {
-				assert.Equal(t, []string{model.NewLeftoverVolumeNotice("demo_db").Message}, recorder.inResult)
-			}
+			assert.Equal(t, warningMessages(tt.warnings), recorder.inResult, "the provider's warnings")
 			inflight.AssertExpectations(t)
 			savepoints.AssertExpectations(t)
 			locker.AssertExpectations(t)
@@ -258,7 +262,7 @@ func TestService_Rollback_ColdStartRefusedByThePrepare(t *testing.T) {
 	savepoints, locker := demoResolution(record)
 	stages := newMockStages(true)
 	stages.expectInspect(nil)
-	stages.expectPrepare(record.ID, demoPrepareOptions(record, false), model.ErrLeftoverVolumes)
+	stages.expectPrepare(record.ID, demoPrepareOptions(record, false), errLeftoverVolumes)
 	inflight := &mockInflight{}
 	inflight.On("Get", mock.Anything).Return(model.InflightMarker{}, false, nil).Once()
 	svc := newStagedService(t, stages, savepoints, locker, inflight)
@@ -268,7 +272,7 @@ func TestService_Rollback_ColdStartRefusedByThePrepare(t *testing.T) {
 		model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: time.Second})
 
 	// Assert
-	require.ErrorIs(t, err, model.ErrLeftoverVolumes)
+	require.ErrorIs(t, err, errLeftoverVolumes)
 	inflight.AssertExpectations(t)
 	savepoints.AssertExpectations(t)
 	locker.AssertExpectations(t)
@@ -414,7 +418,7 @@ func TestService_Rollback_ColdStartRerun(t *testing.T) {
 			savepoints, locker := demoResolution(record)
 			stages := newMockStages(true)
 			stages.target.prepared.summary = provider.PreparedSummary{
-				Volumes:     []model.Volume{demoVolume()},
+				Restored:    demoSummary().Restored,
 				Overwritten: []string{"demo_db"},
 			}
 			mock.InOrder(
@@ -522,4 +526,13 @@ func TestService_Rollback_NoSafetySnapshotCleansUpPastAnInterrupt(t *testing.T) 
 	savepoints.AssertExpectations(t)
 	locker.AssertExpectations(t)
 	stages.AssertExpectations(t)
+}
+
+// warningMessages are the messages of warnings, nil for none.
+func warningMessages(warnings []model.Notice) []string {
+	var messages []string
+	for _, warning := range warnings {
+		messages = append(messages, warning.Message)
+	}
+	return messages
 }

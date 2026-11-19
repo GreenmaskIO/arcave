@@ -117,7 +117,7 @@ func TestRepository_Save(t *testing.T) {
 						StopTimeout: 30 * time.Second,
 						Progress:    composeconfig.ProgressTTY,
 					},
-					Snapshot: composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendFullCopy},
+					Snapshot: composeconfig.Snapshot{Backend: string(composeconfig.SnapshotBackendFullCopy)},
 				},
 			},
 		},
@@ -130,7 +130,7 @@ func TestRepository_Save(t *testing.T) {
 					Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/shop"},
 				},
 				ComposeProvider: composeconfig.Config{
-					Snapshot: composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendFullCopy},
+					Snapshot: composeconfig.Snapshot{Backend: string(composeconfig.SnapshotBackendFullCopy)},
 				},
 			},
 		},
@@ -206,7 +206,7 @@ func savedConfig(name string) config.Config {
 			Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/" + name},
 		},
 		ComposeProvider: composeconfig.Config{
-			Snapshot: composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendFullCopy},
+			Snapshot: composeconfig.Snapshot{Backend: string(composeconfig.SnapshotBackendFullCopy)},
 		},
 	}
 }

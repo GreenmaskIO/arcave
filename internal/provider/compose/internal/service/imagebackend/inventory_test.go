@@ -17,10 +17,11 @@ package imagebackend
 import (
 	"context"
 	"encoding/json"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"strings"
 	"testing"
 	"time"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/inmemory"
@@ -36,7 +37,7 @@ const (
 )
 
 var (
-	inventoryImage = model.ImageDigestID("sha256:" + strings.Repeat("1", 64))
+	inventoryImage = composemodel.ImageDigestID("sha256:" + strings.Repeat("1", 64))
 	inventoryBlob  = strings.Repeat("a", 64)
 	listedManifest = Manifest{
 		ImageID: inventoryImage,
@@ -67,7 +68,7 @@ func TestNewStoredImages(t *testing.T) {
 	// Assert
 	assert.Equal(t, []StoredImage{
 		{ID: inventoryImage, Key: dir, Bytes: 15, LastModified: at.Add(time.Hour), ManifestBytes: 10, HasManifest: true},
-		{ID: model.ImageDigestID("sha256:" + strings.Repeat("2", 64)), Key: stray, Bytes: 3, LastModified: at},
+		{ID: composemodel.ImageDigestID("sha256:" + strings.Repeat("2", 64)), Key: stray, Bytes: 3, LastModified: at},
 	}, images)
 }
 
@@ -150,7 +151,7 @@ func TestReadReusableBlobs(t *testing.T) {
 		name    string
 		body    string
 		size    int64
-		image   model.ImageDigestID
+		image   composemodel.ImageDigestID
 		want    []string
 		wantErr string
 	}{
@@ -188,7 +189,7 @@ func TestReadReusableBlobs(t *testing.T) {
 			name:  "a manifest naming another image is written again: it holds nothing",
 			body:  intact,
 			size:  int64(len(intact)),
-			image: model.ImageDigestID("sha256:" + strings.Repeat("3", 64)),
+			image: composemodel.ImageDigestID("sha256:" + strings.Repeat("3", 64)),
 		},
 		{
 			name:    "a manifest read shorter than listed is unreadable",

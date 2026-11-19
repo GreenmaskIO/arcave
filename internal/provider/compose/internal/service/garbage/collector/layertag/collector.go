@@ -17,9 +17,10 @@ package layertag
 
 import (
 	"context"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"slices"
 	"time"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
@@ -51,11 +52,11 @@ func New(daemon layerDaemon, arcaveProject model.ArcaveProjectName) *Collector {
 }
 
 func (s *Collector) Kind() model.GarbageCollectorKind {
-	return model.GarbageCollectorKindDockerLayerTags
+	return composemodel.GarbageCollectorKindDockerLayerTags
 }
 
 func (s *Collector) DataKind() model.GarbageDataKind {
-	return model.GarbageDataKindRestoredLayers
+	return composemodel.GarbageDataKindRestoredLayers
 }
 
 // Probe checks, within probeTimeout, that the daemon answers.
@@ -72,7 +73,7 @@ func (s *Collector) Find(ctx context.Context, scope garbage.DaemonScope) (model.
 		tagged               []composemodel.TaggedImage
 		containers           []composemodel.ContainerImage
 		usedRefs             = map[model.ImageRef]bool{}
-		usedImages           = map[model.ImageDigestID]bool{}
+		usedImages           = map[composemodel.ImageDigestID]bool{}
 		ops                  []model.GarbageOp
 		inUse                int
 		unattributed         int
@@ -105,12 +106,12 @@ func (s *Collector) Find(ctx context.Context, scope garbage.DaemonScope) (model.
 			continue
 		}
 		ops = append(ops, model.GarbageOp{
-			Action: model.GarbageActionUntag,
+			Action: composemodel.GarbageActionUntag,
 			Target: string(image.Ref),
-			Reason: model.GarbageReasonUnusedTag,
+			Reason: composemodel.GarbageReasonUnusedTag,
 		})
 	}
-	return model.DockerLayerTagStat{
+	return composemodel.DockerLayerTagStat{
 		GarbageFindings:      model.GarbageFindings{Ops: ops},
 		InUse:                inUse,
 		Unattributed:         unattributed,

@@ -102,10 +102,10 @@ func (s *Service) up(ctx context.Context, session model.SessionRef, req model.Up
 		discarded = &dropped
 	}
 	return model.UpResult{
-		RolledBackTo:   built.RolledBackTo,
-		Restored:       built.Restored,
-		WritableLayers: built.WritableLayers,
-		Discarded:      discarded,
+		RolledBackTo: built.RolledBackTo,
+		Restored:     built.Restored,
+		Detail:       built.Detail,
+		Discarded:    discarded,
 	}, nil
 }
 

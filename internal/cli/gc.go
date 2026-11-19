@@ -25,12 +25,6 @@ type gcService interface {
 	GarbageCollect(ctx context.Context, req model.GarbageCollectRequest) (model.GarbageCollectResult, error)
 }
 
-// ValidateGarbageCollectRequest refuses, before anything is opened, a request the service
-// would refuse.
-func ValidateGarbageCollectRequest(req model.GarbageCollectRequest) error {
-	return req.Validate()
-}
-
 type GCHandler struct {
 	svc     gcService
 	printer printer

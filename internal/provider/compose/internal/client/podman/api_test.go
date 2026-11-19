@@ -17,13 +17,14 @@ package podman
 import (
 	"context"
 	"errors"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
@@ -34,7 +35,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman/libpod"
 )
@@ -42,7 +42,7 @@ import (
 // bareImageID is an image id as libpod answers a commit with: no algorithm.
 const bareImageID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-const podmanImageID = model.ImageDigestID("sha256:" + bareImageID)
+const podmanImageID = composemodel.ImageDigestID("sha256:" + bareImageID)
 
 // newRecordedDaemon is a client of a daemon answering for c1 as a real Podman did, on compat and libpod.
 func newRecordedDaemon(t *testing.T) *client.Client {

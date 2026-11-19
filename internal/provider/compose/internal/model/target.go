@@ -23,10 +23,10 @@ import (
 // Target is a savepoint ready to build: its spec pointed at its loaded layers, one backend per
 // volume, the deployment its containers are labelled with, and what the build overwrites.
 type Target struct {
-	Savepoint   model.Savepoint
+	Savepoint   Savepoint
 	Project     *types.Project
-	Restored    []model.WritableLayerRestoreResult
-	Backends    []model.VolumeSnapshotBackend
+	Restored    []WritableLayerRestoreResult
+	Backends    []VolumeSnapshotBackend
 	Deployment  model.SavepointDeployment
 	Overwritten []string
 }

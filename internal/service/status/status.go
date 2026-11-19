@@ -60,8 +60,8 @@ type Deps struct {
 	ComposeProject model.DockerComposeProjectName
 }
 
-// Service reports what the daemon runs for one compose project. It takes no lock, writes
-// nothing, and reads the store only to add to what the daemon's labels say.
+// Service reports what runs for one compose project. It takes no lock, writes nothing, and reads
+// the store only to add to what the provider reads.
 type Service struct {
 	observer               provider.Observer
 	inflight               inflightMarkerReader
@@ -98,53 +98,48 @@ type storeView struct {
 	storeUnreadable *model.StatusUnreadable
 }
 
-// Status reports the compose project as the daemon runs it and what the store adds. An unreadable
-// daemon, or a session req names that does not exist, fails it; an unreadable store, current session
-// or marker returns it with model.ErrStatusPartial.
+// Status reports the workload as the provider reads it and what the store adds. An unreadable
+// workload, or a session req names that does not exist, fails it; an unreadable store, current
+// session or marker returns it with model.ErrStatusPartial.
 func (s *Service) Status(ctx context.Context, req model.StatusRequest) (model.ComposeProjectStatus, error) {
 	var (
 		checkedAt        = time.Now().UTC()
-		containers       provider.ObservedWorkload
-		deployments      containerDeployments
-		services         []model.ServiceStatus
+		observed         provider.ObservedWorkload
+		deployment       *model.SavepointDeployment
 		marker           *model.InflightMarker
 		markerUnreadable *model.StatusUnreadable
 		view             storeView
+		report           model.WorkloadReport
 		unreadable       []model.StatusUnreadable
-		state            model.ComposeProjectState
 		err              error
 	)
-	if containers, err = s.observer.Observe(ctx); err != nil {
+	if observed, err = s.observer.Observe(ctx); err != nil {
 		return model.ComposeProjectStatus{}, err
 	}
-	deployments = findDeployments(containers)
-	services = newServiceStatuses(containers, deployments)
+	deployment = observed.Deployment()
 	marker, markerUnreadable = s.readInflightMarker(ctx)
-	if view, err = s.readStoreView(ctx, req.Session, deployments.latest); err != nil {
+	if view, err = s.readStoreView(ctx, req.Session, deployment); err != nil {
 		return model.ComposeProjectStatus{}, err
 	}
+	report = observed.Report(checkedAt, view.savepoint)
 	unreadable = newUnreadableList(markerUnreadable, view.sessionUnreadable, view.storeUnreadable)
-	state = newComposeProjectState(marker != nil, services)
 	status := model.ComposeProjectStatus{
 		ComposeProject:   s.composeProject,
 		CheckedAt:        checkedAt,
-		State:            state,
+		State:            newStatusState(marker, report),
 		Session:          view.session,
-		Deployment:       newDeploymentStatus(deployments, view, services),
-		Services:         services,
+		Deployment:       newDeploymentStatus(deployment, view),
 		RollbackInFlight: newRollbackInFlight(marker),
 		Unreadable:       unreadable,
 		Notices: newStatusNotices(statusFacts{
-			checkedAt:     checkedAt,
 			arcaveProject: s.arcaveProject,
 			ref:           req.Session,
-			state:         state,
 			marker:        marker,
-			deployments:   deployments,
+			deployment:    deployment,
 			view:          view,
-			services:      services,
 			unreadable:    unreadable,
-		}),
+		}, report.Notices),
+		Detail: report.Detail,
 	}
 	if len(unreadable) > 0 {
 		return status, model.ErrStatusPartial
@@ -296,54 +291,32 @@ func newRollbackInFlight(marker *model.InflightMarker) *model.RollbackInFlight {
 	}
 }
 
-// newDeploymentStatus is what built the containers, and what the deployed savepoint's record adds;
-// nil for a compose project with none.
-func newDeploymentStatus(
-	deployments containerDeployments, view storeView, services []model.ServiceStatus,
-) *model.DeploymentStatus {
-	switch {
-	case deployments.source == "":
-		return nil
-	case deployments.latest == nil:
-		return &model.DeploymentStatus{Source: deployments.source}
+// newStatusState is rollback-pending under a marker, else the provider's word.
+func newStatusState(marker *model.InflightMarker, report model.WorkloadReport) string {
+	if marker != nil {
+		return model.StatusStateRollbackPending
 	}
-	var (
-		deployment  = deployments.latest
-		description string
-		restored    *model.RestoredCounts
-	)
+	return report.State
+}
+
+// newDeploymentStatus is the build the workload carries, and what the deployed savepoint's record
+// adds; nil for none.
+func newDeploymentStatus(deployment *model.SavepointDeployment, view storeView) *model.DeploymentStatus {
+	if deployment == nil {
+		return nil
+	}
+	var description string
 	if view.savepoint != nil {
 		description = view.savepoint.Description
-		restored = &model.RestoredCounts{
-			Volumes:        len(view.savepoint.Stats),
-			WritableLayers: len(view.savepoint.WritableLayers),
-		}
 	}
 	return &model.DeploymentStatus{
-		Source:        deployments.source,
 		DeployedAt:    deployment.DeployedAt,
 		ArcaveProject: deployment.ArcaveProject,
 		Session:       deployment.Session,
 		Savepoint: &model.DeployedSavepointStatus{
 			DeployedSavepoint: deployment.Savepoint,
 			Description:       description,
-			Restored:          restored,
 		},
-		Replaced: countRecreated(deployments, services),
-		Record:   view.record,
+		Record: view.record,
 	}
-}
-
-// countRecreated counts the replicas recreated outside arcave since the deployment, none whose
-// labels do not parse among them.
-func countRecreated(deployments containerDeployments, services []model.ServiceStatus) int {
-	recreated := 0
-	for _, service := range services {
-		for _, replica := range service.Replicas {
-			if isRecreated(replica) && !deployments.isUnreadable(service.Name, replica.Number) {
-				recreated++
-			}
-		}
-	}
-	return recreated
 }

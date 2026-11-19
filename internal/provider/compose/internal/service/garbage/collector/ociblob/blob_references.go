@@ -25,6 +25,7 @@ import (
 	"github.com/greenmaskio/storages"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend"
 )
@@ -42,7 +43,7 @@ type blobReferences struct {
 	byDeadSavepoints map[string][]model.SavepointID
 	// unreadable are the manifests that could not be read; while any is, the references are not
 	// whole and no blob may be judged unreferenced by them.
-	unreadable []model.UnreadableManifest
+	unreadable []composemodel.UnreadableManifest
 }
 
 // manifestRef is one manifest readBlobReferences reads, by its capture's key: savepoint is the
@@ -50,7 +51,7 @@ type blobReferences struct {
 type manifestRef struct {
 	key       string
 	savepoint model.SavepointID
-	image     model.ImageDigestID
+	image     composemodel.ImageDigestID
 	dead      model.SavepointID
 	size      int64
 }
@@ -97,25 +98,25 @@ func readBlobReferences(
 // newLiveRefs names the manifest of every writable layer and live image the savepoints record;
 // one whose key cannot be built is returned unreadable.
 func newLiveRefs(
-	savepoints []model.Savepoint, live map[model.ImageDigestID]model.SavepointID,
-) ([]manifestRef, []model.UnreadableManifest) {
+	savepoints []composemodel.Savepoint, live map[composemodel.ImageDigestID]model.SavepointID,
+) ([]manifestRef, []composemodel.UnreadableManifest) {
 	var (
 		refs       []manifestRef
-		unreadable []model.UnreadableManifest
+		unreadable []composemodel.UnreadableManifest
 	)
 	for _, savepoint := range savepoints {
-		for _, layer := range savepoint.WritableLayers {
-			key, err := imagebackend.WritableLayerKey(savepoint.ID, layer.Service, layer.Replica)
+		for _, layer := range savepoint.Detail.WritableLayers {
+			key, err := imagebackend.WritableLayerKey(savepoint.Header.ID, layer.Service, layer.Replica)
 			if err != nil {
 				unreadable = append(unreadable, newUnreadableManifest(manifestRef{
-					key:       path.Join(savepoint.ID.String(), layer.Service),
-					savepoint: savepoint.ID,
+					key:       path.Join(savepoint.Header.ID.String(), layer.Service),
+					savepoint: savepoint.Header.ID,
 				}, err))
 				continue
 			}
 			refs = append(refs, manifestRef{
 				key:       key,
-				savepoint: savepoint.ID,
+				savepoint: savepoint.Header.ID,
 			})
 		}
 	}
@@ -140,7 +141,7 @@ func newLiveRefs(
 // newUnreferencedRefs names the manifests the scope lists that no record does: every stored image
 // no record names, and every dead tree's layer.
 func newUnreferencedRefs(
-	scope garbage.ComposeProjectScope, live map[model.ImageDigestID]model.SavepointID,
+	scope garbage.ComposeProjectScope, live map[composemodel.ImageDigestID]model.SavepointID,
 ) []manifestRef {
 	var refs []manifestRef
 	for _, image := range imagebackend.NewStoredImages(scope.Objects) {
@@ -176,7 +177,7 @@ func readListedDigests(ctx context.Context, store storages.Navigator, ref manife
 // names the manifest. A dead tree's manifest only attributes its blobs: one it cannot read keeps
 // nothing alive.
 func newBlobReferences(
-	refs []manifestRef, listed []listedDigests, unreadable []model.UnreadableManifest,
+	refs []manifestRef, listed []listedDigests, unreadable []composemodel.UnreadableManifest,
 ) blobReferences {
 	var (
 		bySavepoints     = map[string]bool{}
@@ -203,7 +204,7 @@ func newBlobReferences(
 			}
 		}
 	}
-	slices.SortFunc(unreadable, func(a, b model.UnreadableManifest) int { return strings.Compare(a.Key, b.Key) })
+	slices.SortFunc(unreadable, func(a, b composemodel.UnreadableManifest) int { return strings.Compare(a.Key, b.Key) })
 	for _, ids := range byDeadSavepoints {
 		slices.Sort(ids)
 	}
@@ -215,8 +216,8 @@ func newBlobReferences(
 	}
 }
 
-func newUnreadableManifest(ref manifestRef, err error) model.UnreadableManifest {
-	return model.UnreadableManifest{
+func newUnreadableManifest(ref manifestRef, err error) composemodel.UnreadableManifest {
+	return composemodel.UnreadableManifest{
 		Key:       imagebackend.ManifestKey(ref.key),
 		Savepoint: ref.savepoint,
 		Error:     err.Error(),

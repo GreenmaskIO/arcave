@@ -20,6 +20,7 @@ import (
 	"github.com/greenmaskio/storages"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // GroupFilesBySavepoint lets a collector measure a savepoint off the scope's one listing, asking the
@@ -39,12 +40,12 @@ func GroupFilesBySavepoint(files []storages.ObjectStat) map[model.SavepointID][]
 }
 
 // NewLiveImages maps every image the savepoints hold the bytes of to the first savepoint naming it.
-func NewLiveImages(savepoints []model.Savepoint) map[model.ImageDigestID]model.SavepointID {
-	live := map[model.ImageDigestID]model.SavepointID{}
+func NewLiveImages(savepoints []composemodel.Savepoint) map[composemodel.ImageDigestID]model.SavepointID {
+	live := map[composemodel.ImageDigestID]model.SavepointID{}
 	for _, savepoint := range savepoints {
-		for _, image := range savepoint.Images {
+		for _, image := range savepoint.Detail.Images {
 			if _, seen := live[image.ID]; image.Stored && !seen {
-				live[image.ID] = savepoint.ID
+				live[image.ID] = savepoint.Header.ID
 			}
 		}
 	}

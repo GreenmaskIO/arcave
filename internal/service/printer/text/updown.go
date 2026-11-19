@@ -16,7 +16,6 @@ package text
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -27,28 +26,11 @@ func (s *Printer) formatUp(response model.UpResult) string {
 	var b strings.Builder
 	b.WriteString(styleTitle.Render("Up from "+
 		s.formatSavepointTitle(response.RolledBackTo, "2006-01-02 15:04:05")) + "\n")
-	rows := []captureRow{{
-		kind:  "volumes",
-		cells: []string{strconv.Itoa(len(response.Restored))},
-	}}
-	if len(response.WritableLayers) > 0 {
-		rows = append(rows, captureRow{
-			kind:  "layers",
-			cells: []string{strconv.Itoa(len(response.WritableLayers))},
-		})
-	}
-	b.WriteString(formatCaptureRows(nil, rows))
+	b.WriteString(formatCaptureRows(nil, newRestoreRows(response.Restored)))
 	if response.Discarded != nil {
 		b.WriteString(formatCaptureLine("dropped", []string{formatDiscarded(*response.Discarded)}, []int{0}) + "\n")
 	}
-	var notices []model.Notice
-	if len(response.WritableLayers) > 0 {
-		notices = append(notices, model.Notice{
-			Message: "the containers run on the savepoint's writable layers",
-			Hint:    "`docker compose up` of your compose file recreates them on its images and drops those layers",
-		})
-	}
-	b.WriteString(formatNotices(notices))
+	b.WriteString(formatNotices(response.Restored.Notices))
 	return b.String()
 }
 

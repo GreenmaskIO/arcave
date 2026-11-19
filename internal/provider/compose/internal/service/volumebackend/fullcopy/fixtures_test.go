@@ -15,34 +15,34 @@
 package fullcopy
 
 import (
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 const testComposeProject = "demo"
 
-func namedVolume(dockerName string, usedBy ...model.ServiceReference) model.Volume {
-	return model.Volume{
+func namedVolume(dockerName string, usedBy ...composemodel.ServiceReference) composemodel.Volume {
+	return composemodel.Volume{
 		ObjectID:       composemodel.NamedVolume{Name: dockerName}.ObjectID(),
 		ComposeProject: testComposeProject,
-		Type:           model.VolumeTypeNamed,
-		Backend:        model.SnapshotBackendFullCopy,
-		Named:          &model.VolumePropertiesNamed{VolumeName: dockerName, UsedBy: usedBy},
+		Type:           composemodel.VolumeTypeNamed,
+		Backend:        composeconfig.SnapshotBackendFullCopy,
+		Named:          &composemodel.VolumePropertiesNamed{VolumeName: dockerName, UsedBy: usedBy},
 	}
 }
 
-func bindVolume(service, target string) model.Volume {
-	return model.Volume{
-		ObjectID:       composemodel.ServiceVolume{Type: model.VolumeTypeBind, Target: target}.ObjectID(service),
+func bindVolume(service, target string) composemodel.Volume {
+	return composemodel.Volume{
+		ObjectID:       composemodel.ServiceVolume{Type: composemodel.VolumeTypeBind, Target: target}.ObjectID(service),
 		ComposeProject: testComposeProject,
-		Type:           model.VolumeTypeBind,
-		Backend:        model.SnapshotBackendFullCopy,
-		Bind:           &model.VolumePropertiesBind{Service: service, Target: target, Source: "/host" + target},
+		Type:           composemodel.VolumeTypeBind,
+		Backend:        composeconfig.SnapshotBackendFullCopy,
+		Bind:           &composemodel.VolumePropertiesBind{Service: service, Target: target, Source: "/host" + target},
 	}
 }
 
 // bindAddress is what the engine answers for a bindVolume: compose-go resolves
 // a bind source to an absolute host path, so no lookup is involved.
-func bindAddress(target string) model.MountSource {
-	return model.MountSource{Type: model.MountSourceBind, Source: "/host" + target}
+func bindAddress(target string) composemodel.MountSource {
+	return composemodel.MountSource{Type: composemodel.MountSourceBind, Source: "/host" + target}
 }

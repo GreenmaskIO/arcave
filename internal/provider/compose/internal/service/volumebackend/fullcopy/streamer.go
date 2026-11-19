@@ -36,6 +36,8 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -48,9 +50,9 @@ var errNoStore = errors.New("backend spec carries no store")
 // source of a volume, a stream of the whole volume out, and the same stream wiped and
 // extracted back in. The concrete *docker.Engine satisfies it.
 type VolumeStreamer interface {
-	ResolveMountSource(ctx context.Context, v model.Volume) (model.MountSource, error)
-	OpenVolume(ctx context.Context, src model.MountSource) (io.ReadCloser, error)
-	WriteVolume(ctx context.Context, src model.MountSource, r io.Reader) error
+	ResolveMountSource(ctx context.Context, v composemodel.Volume) (composemodel.MountSource, error)
+	OpenVolume(ctx context.Context, src composemodel.MountSource) (io.ReadCloser, error)
+	WriteVolume(ctx context.Context, src composemodel.MountSource, r io.Reader) error
 }
 
 // Options is what every capture of one factory shares.
@@ -70,12 +72,14 @@ func NewFactory(docker VolumeStreamer, compression Compression) *Factory {
 	}
 }
 
-func (*Factory) Kind() model.SnapshotBackendKind { return model.SnapshotBackendFullCopy }
+func (*Factory) Kind() composeconfig.SnapshotBackendKind {
+	return composeconfig.SnapshotBackendFullCopy
+}
 
 // New binds the instance to the root the caller handed it — the one thing fixed
 // for its life. The volume's mount source is not, and cannot be: resolving it may
 // reach the daemon, and a constructor has no ctx to do that on.
-func (s *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
+func (s *Factory) New(spec composemodel.BackendSpec) (composemodel.VolumeSnapshotBackend, error) {
 	if spec.Store == nil {
 		return nil, errNoStore
 	}
@@ -92,34 +96,34 @@ func (s *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, erro
 
 // Snapshotter captures one volume into one root.
 type Snapshotter struct {
-	volume      model.Volume
+	volume      composemodel.Volume
 	store       storages.Navigator
 	docker      VolumeStreamer
 	compression Compression
 }
 
-func (s *Snapshotter) Volume() model.Volume { return s.volume }
+func (s *Snapshotter) Volume() composemodel.Volume { return s.volume }
 
 // Snapshot streams the whole volume out and stores it in the factory's format.
 // SizeBytes counts the tar stream, StoredBytes what reached the store.
 func (s *Snapshotter) Snapshot(
-	ctx context.Context, req model.BackendSnapshotRequest,
-) (model.SnapshotStat, error) {
+	ctx context.Context, req composemodel.BackendSnapshotRequest,
+) (composemodel.SnapshotStat, error) {
 	var (
 		captureStore storages.Storager
-		src          model.MountSource
+		src          composemodel.MountSource
 		archive      io.ReadCloser
 		err          error
 	)
 	if captureStore, err = s.captureStore(req.SnapshotID); err != nil {
-		return model.SnapshotStat{}, err
+		return composemodel.SnapshotStat{}, err
 	}
 	if src, err = s.mountSource(ctx); err != nil {
-		return model.SnapshotStat{}, err
+		return composemodel.SnapshotStat{}, err
 	}
 
 	if archive, err = s.docker.OpenVolume(ctx, src); err != nil {
-		return model.SnapshotStat{}, fmt.Errorf("open docker volume %s: %w", src.Source, err)
+		return composemodel.SnapshotStat{}, fmt.Errorf("open docker volume %s: %w", src.Source, err)
 	}
 	defer func() {
 		if err := archive.Close(); err != nil {
@@ -138,11 +142,11 @@ func (s *Snapshotter) Snapshot(
 	}()
 	stored := utils.NewCountingReader(encoded)
 	if err := captureStore.PutObject(ctx, s.compression.archiveName(), stored); err != nil {
-		return model.SnapshotStat{}, fmt.Errorf("write archive: %w", err)
+		return composemodel.SnapshotStat{}, fmt.Errorf("write archive: %w", err)
 	}
-	return model.SnapshotStat{
+	return composemodel.SnapshotStat{
 		Volume:      s.volume,
-		Type:        model.SnapshotBackendFullCopy,
+		Type:        composeconfig.SnapshotBackendFullCopy,
 		SizeBytes:   size.N(),
 		StoredBytes: stored.N(),
 		Payload:     Payload{Compression: s.compression},
@@ -152,11 +156,11 @@ func (s *Snapshotter) Snapshot(
 // Restore decodes the stored archive and hands the tar stream to WriteVolume,
 // which wipes the volume and extracts into it. The record's payload names the
 // format; req.SizeBytes is the tar stream's length, the capture's counted size.
-func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreRequest) error {
+func (s *Snapshotter) Restore(ctx context.Context, req composemodel.BackendRestoreRequest) error {
 	var (
 		captureStore storages.Storager
 		payload      Payload
-		src          model.MountSource
+		src          composemodel.MountSource
 		archive      io.ReadCloser
 		tarStream    io.ReadCloser
 		err          error
@@ -197,10 +201,10 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 // mountSource is what a container mounts to reach this volume. Resolved per call
 // rather than held on the instance: it may cost a round trip to the daemon, and
 // only the two methods that move bytes need it.
-func (s *Snapshotter) mountSource(ctx context.Context) (model.MountSource, error) {
+func (s *Snapshotter) mountSource(ctx context.Context) (composemodel.MountSource, error) {
 	src, err := s.docker.ResolveMountSource(ctx, s.volume)
 	if err != nil {
-		return model.MountSource{}, fmt.Errorf("resolve the mount source of volume %s: %w", s.volume.ObjectID, err)
+		return composemodel.MountSource{}, fmt.Errorf("resolve the mount source of volume %s: %w", s.volume.ObjectID, err)
 	}
 	return src, nil
 }

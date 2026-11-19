@@ -14,7 +14,9 @@
 
 package model
 
-import "path/filepath"
+import (
+	"path/filepath"
+)
 
 // MountSourceType says how Source is read.
 type MountSourceType string

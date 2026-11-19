@@ -405,7 +405,7 @@ unsupported capture.mode "freeze" (supported: stop, pause, live)
 unsupported capture.hooks.on_error "ignore" (supported: fail, continue)
 ```
 
-These are the defaults a label overrides: `capture.volumes.bind: false` with `arcave.mounts.include: /app/data` on one service captures that one bind and no other. They steer a running compose project without recreating it, which a label cannot. What a savepoint left out is listed in its `not_covered`.
+These are the defaults a label overrides: `capture.volumes.bind: false` with `arcave.mounts.include: /app/data` on one service captures that one bind and no other. They steer a running compose project without recreating it, which a label cannot. What a savepoint left out is listed in its `detail.not_covered` and spelled out in `summary.notices`.
 
 ## `rollback`
 

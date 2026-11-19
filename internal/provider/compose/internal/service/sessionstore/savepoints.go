@@ -22,13 +22,14 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // SavepointRecords lists, reads and deletes the committed savepoints of one compose project.
 type SavepointRecords interface {
-	ListSavepoints(ctx context.Context) ([]model.Savepoint, error)
+	ListSavepoints(ctx context.Context) ([]composemodel.Savepoint, error)
 	// LoadSavepoints returns the committed records of ids; one not found is left out.
-	LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error)
+	LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]composemodel.Savepoint, error)
 	// DeleteSavepoint uncommits the record, then deletes the tree.
 	DeleteSavepoint(ctx context.Context, id model.SavepointID) error
 }
@@ -43,9 +44,21 @@ func NewSavepoints(records SavepointRecords) provider.Savepoints {
 	return savepoints{records: records}
 }
 
-// List returns every committed savepoint.
+// List returns every committed savepoint, as arcave reads it.
 func (s savepoints) List(ctx context.Context) ([]model.Savepoint, error) {
-	return s.records.ListSavepoints(ctx)
+	records, err := s.records.ListSavepoints(ctx)
+	if err != nil {
+		return nil, err
+	}
+	shared := make([]model.Savepoint, 0, len(records))
+	for _, record := range records {
+		savepoint, err := composemodel.ToSharedSavepoint(record)
+		if err != nil {
+			return nil, err
+		}
+		shared = append(shared, savepoint)
+	}
+	return shared, nil
 }
 
 // Load returns the committed savepoint id names, if any.
@@ -57,7 +70,11 @@ func (s savepoints) Load(ctx context.Context, id model.SavepointID) (model.Savep
 	case err != nil:
 		return model.Savepoint{}, false, err
 	}
-	return savepoint, true, nil
+	shared, err := composemodel.ToSharedSavepoint(savepoint)
+	if err != nil {
+		return model.Savepoint{}, false, err
+	}
+	return shared, true, nil
 }
 
 // Remove uncommits the savepoint id names, then deletes its tree.

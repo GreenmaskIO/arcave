@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -295,12 +296,12 @@ func TestFound_Delete_Progress(t *testing.T) {
 			recorder := &endedRecorder{steps: map[progress.StepID]progress.Step{}}
 			tracker := progress.New(recorder, fixedNow)
 			ctx, root := tracker.Begin(zerolog.Nop().WithContext(context.Background()), progress.Step{Kind: kindRoot})
-			stat := model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadTreeOp}}}
+			stat := composemodel.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadTreeOp}}}
 			garbage := newErasableFound(model.GarbageReport{
-				DataKind:       model.GarbageDataKindSavepointData,
+				DataKind:       composemodel.GarbageDataKindSavepointData,
 				ComposeProject: tt.composeProject,
 				Detail:         stat,
-			}, model.GarbageActionDeleteTree, func(ctx context.Context, ops []model.GarbageOp) model.GarbageDeletion {
+			}, composemodel.GarbageActionDeleteTree, func(ctx context.Context, ops []model.GarbageOp) model.GarbageDeletion {
 				return DeleteOps(ctx, ops, func(context.Context, model.GarbageOp) error { return nil })
 			})
 

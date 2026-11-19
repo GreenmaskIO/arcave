@@ -15,13 +15,12 @@
 package composespec
 
 import (
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"sort"
 	"strings"
 
-	"github.com/compose-spec/compose-go/v2/types"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/compose-spec/compose-go/v2/types"
 )
 
 // defaultBindPropagation is what the daemon reports for a bind nobody configured.
@@ -50,7 +49,7 @@ func declaredVolumes(svc composemodel.Service) []composemodel.ServiceVolume {
 	first := svc.Containers[0].Number
 	declared := make([]composemodel.ServiceVolume, 0, len(svc.Volumes))
 	for _, mount := range svc.Volumes {
-		if mount.Type != model.VolumeTypeAnon || mount.Replica == first {
+		if mount.Type != composemodel.VolumeTypeAnon || mount.Replica == first {
 			declared = append(declared, mount)
 		}
 	}
@@ -68,14 +67,14 @@ func newServiceVolume(mount composemodel.ServiceVolume) types.ServiceVolumeConfi
 	}
 
 	switch mount.Type {
-	case model.VolumeTypeAnon:
+	case composemodel.VolumeTypeAnon:
 		config.Source = ""
 		config.Volume = newVolumeOptions(mount.Volume)
-	case model.VolumeTypeNamed:
+	case composemodel.VolumeTypeNamed:
 		config.Volume = newVolumeOptions(mount.Volume)
-	case model.VolumeTypeBind:
+	case composemodel.VolumeTypeBind:
 		config.Bind = newBindOptions(mount.Bind)
-	case model.VolumeTypeTmpfs:
+	case composemodel.VolumeTypeTmpfs:
 		config.Source = ""
 		if mount.Tmpfs != nil {
 			config.Tmpfs = &types.ServiceVolumeTmpfs{
@@ -83,7 +82,7 @@ func newServiceVolume(mount composemodel.ServiceVolume) types.ServiceVolumeConfi
 				Mode: mount.Tmpfs.Mode,
 			}
 		}
-	case model.VolumeTypeImage:
+	case composemodel.VolumeTypeImage:
 		if mount.Image != nil {
 			config.Image = &types.ServiceVolumeImage{SubPath: mount.Image.Subpath}
 		}

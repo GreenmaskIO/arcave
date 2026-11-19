@@ -16,11 +16,11 @@ package compose
 
 import (
 	"fmt"
+
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/greenmaskio/storages"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capturepolicy"
@@ -38,7 +38,7 @@ import (
 func newBackendRegistry(
 	cfg composeconfig.Config, resticRoot storages.Storager,
 	streamer fullcopy.VolumeStreamer, runner cdc.VolumeRunner, transport cdc.Transport,
-) (model.SnapshotBackendRegistry, error) {
+) (composemodel.SnapshotBackendRegistry, error) {
 	backendRegistry, err := volumebackend.NewRegistry(
 		fullcopy.NewFactory(streamer, fullcopy.Compression(cfg.Backends.FullCopy.Compression)),
 		cdc.NewFactory(cdc.Dependencies{
@@ -64,9 +64,9 @@ func newImageBackend(
 		return nil, fmt.Errorf("re-root store at the shared blob store: %w", err)
 	}
 	dedup := dedupcopy.New(blobStore)
-	return imagebackend.NewCopier(composeProjectStore, origin, engine, map[model.ImageBackendKind]imagebackend.ImageArchiver{
-		model.ImageBackendDedupCopy: dedup,
-		model.ImageBackendFullCopy:  imagefullcopy.New(),
+	return imagebackend.NewCopier(composeProjectStore, origin, engine, map[composeconfig.ImageBackendKind]imagebackend.ImageArchiver{
+		composeconfig.ImageBackendDedupCopy: dedup,
+		composeconfig.ImageBackendFullCopy:  imagefullcopy.New(),
 	}, dedup), nil
 }
 
@@ -76,7 +76,7 @@ func newCaptureDefaults(cfg composeconfig.Config) capturepolicy.CaptureDefaults 
 	return capturepolicy.CaptureDefaults{
 		VolumeBackend:        cfg.Snapshot.BackendKind(),
 		WritableLayerBackend: cfg.WritableLayers.BackendKind(),
-		Mode:                 model.CaptureMode(cfg.Capture.Mode),
+		Mode:                 composeconfig.CaptureMode(cfg.Capture.Mode),
 		HookTimeout:          cfg.Capture.Hooks.Timeout,
 		HookOnError:          cfg.Capture.Hooks.OnErrorKind(),
 		SavepointCapture: capturepolicy.SavepointCaptureSettings{

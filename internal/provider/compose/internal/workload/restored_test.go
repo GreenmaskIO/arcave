@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
@@ -32,7 +32,7 @@ import (
 // The reap removes the anonymous volumes the teardown orphaned whose data the restore replaced, by
 // the docker name they had before it; one it cannot remove is a warning, never a failure.
 func TestRestored_Reap(t *testing.T) {
-	anonVol := model.Volume{ObjectID: "volume-anon-app-1-scratch", Backend: model.SnapshotBackendFullCopy}
+	anonVol := composemodel.Volume{ObjectID: "volume-anon-app-1-scratch", Backend: composeconfig.SnapshotBackendFullCopy}
 	tests := []struct {
 		name      string
 		removeErr error
@@ -49,7 +49,7 @@ func TestRestored_Reap(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			record := composetest.DemoRecord()
-			record.Stats = []model.SnapshotStat{{Volume: anonVol}, {Volume: composetest.DemoVolume()}}
+			record.Detail.Stats = []composemodel.SnapshotStat{{Volume: anonVol}, {Volume: composetest.DemoVolume()}}
 			remover := &composetest.MockVolumeRemover{}
 			remover.On("RemoveVolume", mock.Anything, "9f8e7d").Return(tt.removeErr).Once()
 			restored := restoredWorkload{
@@ -76,13 +76,13 @@ func TestRestored_Reap(t *testing.T) {
 func TestRestored_Reap_LogsTheRestoredLayers(t *testing.T) {
 	tests := []struct {
 		name     string
-		restored []model.WritableLayerRestoreResult
+		restored []composemodel.WritableLayerRestoreResult
 		wantLog  bool
 	}{
 		{name: "no layer restored"},
 		{
 			name:     "layers restored",
-			restored: []model.WritableLayerRestoreResult{composetest.DemoWritableLayerRestoreResult()},
+			restored: []composemodel.WritableLayerRestoreResult{composetest.DemoWritableLayerRestoreResult()},
 			wantLog:  true,
 		},
 	}

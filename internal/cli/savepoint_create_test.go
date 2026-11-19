@@ -31,7 +31,7 @@ func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
 		Description: "schema v2",
 	}
 	savepoint := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "before-migration", Description: "schema v2",
-		NotCovered: &model.NotCovered{ServicesWithoutVolumes: []string{"web"}}}
+		Summary: model.SavepointSummary{Notices: []model.Notice{{Message: "web has no volumes: only its writable layer is held"}}}}
 	svcErr := errors.New("services did not become healthy")
 	printErr := errors.New("stdout closed")
 

@@ -14,6 +14,10 @@
 
 package model
 
+import (
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+)
+
 // Volume is the unit of backup, flattened from the introspection result.
 // Exactly one of Named/Bind/Anon is non-nil, matching Type: addressing is
 // type-specific, so each arm carries only the fields its type has, and reading
@@ -28,9 +32,9 @@ type Volume struct {
 	ObjectID string `json:"object_id"` // stable identity: ServiceVolume.ObjectID() / NamedVolume.ObjectID()
 	// ComposeProject is the project name at capture time — how docker locates
 	// the compose project's containers.
-	ComposeProject string              `json:"compose_project"`
-	Type           VolumeType          `json:"type"`
-	Backend        SnapshotBackendKind `json:"backend"`
+	ComposeProject string                            `json:"compose_project"`
+	Type           VolumeType                        `json:"type"`
+	Backend        composeconfig.SnapshotBackendKind `json:"backend"`
 
 	Named *VolumePropertiesNamed `json:"named,omitempty"`
 	Bind  *VolumePropertiesBind  `json:"bind,omitempty"`

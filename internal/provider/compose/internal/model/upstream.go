@@ -21,13 +21,13 @@ import (
 // ResolveUpstream is the image c's compose file named: its own image, spelled as Docker does,
 // or its layer's labels on an arcave tag. ok is false for a layer carrying no labels or a
 // container with no config.
-func ResolveUpstream(res IntrospectionResult, c Container) (id model.ImageDigestID, ref string, ok bool) {
+func ResolveUpstream(res IntrospectionResult, c Container) (id ImageDigestID, ref string, ok bool) {
 	if c.Inspect.Config == nil {
 		return "", "", false
 	}
 	// Familiar: Podman reports docker.io/library/postgres:16 for the postgres:16 a file names.
 	name := model.ImageRef(c.Inspect.Config.Image).Familiar()
-	if !name.IsRestoredLayerTag() {
+	if !IsRestoredLayerTag(name) {
 		return c.ImageID(), string(name), true
 	}
 	return labelledUpstream(res, c.ImageID())
@@ -35,15 +35,15 @@ func ResolveUpstream(res IntrospectionResult, c Container) (id model.ImageDigest
 
 // labelledUpstream is the upstream a committed layer's labels name. Only the id
 // label is needed: the image it names may be gone from the daemon.
-func labelledUpstream(res IntrospectionResult, layerID model.ImageDigestID) (model.ImageDigestID, string, bool) {
+func labelledUpstream(res IntrospectionResult, layerID ImageDigestID) (ImageDigestID, string, bool) {
 	inspect, ok := res.Images[layerID]
 	if !ok || inspect.Config == nil {
 		return "", "", false
 	}
 	labels := inspect.Config.Labels
-	id, err := model.ParseImageDigestID(labels[string(model.SystemLabelBaseImageID)])
+	id, err := ParseImageDigestID(labels[string(SystemLabelBaseImageID)])
 	if err != nil {
 		return "", "", false
 	}
-	return id, labels[string(model.SystemLabelBaseImageRef)], true
+	return id, labels[string(SystemLabelBaseImageRef)], true
 }

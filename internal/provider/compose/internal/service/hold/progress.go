@@ -15,7 +15,7 @@
 package hold
 
 import (
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -30,8 +30,8 @@ const (
 )
 
 // newHookBatchKind is the kind of the batch of the hooks of phase.
-func newHookBatchKind(phase model.HookPhase) progress.Kind {
-	if phase == model.HookPhasePostCapture {
+func newHookBatchKind(phase composemodel.HookPhase) progress.Kind {
+	if phase == composemodel.HookPhasePostCapture {
 		return kindHookPostCapture
 	}
 	return kindHookPreCapture

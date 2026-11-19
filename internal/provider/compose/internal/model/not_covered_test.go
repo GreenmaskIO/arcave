@@ -15,16 +15,22 @@
 package model
 
 import (
+	"encoding/json"
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 func TestNotCovered_Notices(t *testing.T) {
 	tests := []struct {
 		name       string
 		notCovered NotCovered
-		want       []Notice
+		want       []model.Notice
 	}{
 		{
 			name: "nothing left out",
@@ -35,7 +41,7 @@ func TestNotCovered_Notices(t *testing.T) {
 				{Service: "db", Replica: 1, Container: "0123456789abcdef0123"},
 				{Container: "0123456789abcdef0123"},
 			}},
-			want: []Notice{
+			want: []model.Notice{
 				{
 					Message: "db-1 was killed at the stop deadline: its volumes may hold a crash state",
 					Hint:    "raise compose.stop_timeout or the service's stop_grace_period",
@@ -62,7 +68,7 @@ func TestNotCovered_Notices(t *testing.T) {
 				}},
 				KilledContainers: []KilledContainer{{Service: "app", Replica: 1, Container: "demo-app-1"}},
 			},
-			want: []Notice{
+			want: []model.Notice{
 				{
 					Message: "app-1 was killed at the stop deadline: its volumes may hold a crash state",
 					Hint:    "raise compose.stop_timeout or the service's stop_grace_period",
@@ -85,7 +91,7 @@ func TestNotCovered_Notices(t *testing.T) {
 				{Service: "app", Replica: 2, Target: "/run", Reason: SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"},
 				{Target: "/srv", Reason: SkipReasonUnknownType, Detail: "unknown mount type"},
 			}},
-			want: []Notice{
+			want: []model.Notice{
 				{
 					Message: "app /cache is left out",
 					Hint:    "arcave.mounts.exclude=/cache on service app leaves it out",
@@ -109,7 +115,7 @@ func TestNotCovered_Notices(t *testing.T) {
 				},
 				Images: []SkippedImage{{Service: "web", Image: "nginx:1", Reason: SkipReasonExcluded}},
 			},
-			want: []Notice{
+			want: []model.Notice{
 				{Message: "web: replica 2 gone, only 1, 3 held", Severe: true},
 				{Message: "app has no volumes: only its writable layer is held"},
 				{Message: "web-1 runs on an image arcave cannot name (sha256:ab): only its writable layer brings it back"},
@@ -126,7 +132,7 @@ func TestNotCovered_Notices(t *testing.T) {
 					{Service: "web", Replica: 1, Container: "demo-web-1", Reason: SkipReasonExcluded},
 				},
 			},
-			want: []Notice{
+			want: []model.Notice{
 				{Message: "web has no volumes"},
 				{Message: "web-1: writable layer left out, a rollback creates it fresh from its image"},
 			},
@@ -136,82 +142,6 @@ func TestNotCovered_Notices(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
 			got := tt.notCovered.Notices()
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestSavepoint_Notices(t *testing.T) {
-	tests := []struct {
-		name      string
-		savepoint Savepoint
-		want      []Notice
-	}{
-		{
-			name: "nothing left out",
-		},
-		{
-			name: "an image not stored goes before what only informs",
-			savepoint: Savepoint{
-				NotCovered: &NotCovered{ServicesWithoutVolumes: []string{"web"}},
-				Images: []Image{
-					{ID: "sha256:0123456789abcdef", Stored: true, Refs: []string{"redis:7"}},
-					{ID: "sha256:0123456789abcdef", Stored: false},
-					{ID: "sha256:fedcba9876543210", Stored: false, Refs: []string{"postgres:16"}},
-				},
-			},
-			want: []Notice{
-				{
-					Message: "image 0123456789ab is not stored, only its identity",
-					Hint:    "a rollback needs it pullable to rebuild a container on it",
-					Severe:  true,
-				},
-				{
-					Message: "image postgres:16 is not stored, only its identity",
-					Hint:    "a rollback needs it pullable to rebuild a container on it",
-					Severe:  true,
-				},
-				{Message: "web has no volumes: only its writable layer is held"},
-			},
-		},
-		{
-			name: "an image not stored with nothing else left out",
-			savepoint: Savepoint{
-				Images: []Image{{ID: "sha256:fedcba9876543210", Refs: []string{"postgres:16"}}},
-			},
-			want: []Notice{
-				{
-					Message: "image postgres:16 is not stored, only its identity",
-					Hint:    "a rollback needs it pullable to rebuild a container on it",
-					Severe:  true,
-				},
-			},
-		},
-		{
-			name: "what is left out that is severe stays ahead of an image not stored",
-			savepoint: Savepoint{
-				NotCovered: &NotCovered{ReplicaGaps: []ReplicaGap{{Service: "db", Replicas: []int{1}, Missing: []int{2}}}},
-				Images:     []Image{{ID: "sha256:fedcba9876543210", Refs: []string{"postgres:16"}}},
-			},
-			want: []Notice{
-				{
-					Message: "db: replica 2 gone, only 1 held",
-					Severe:  true,
-				},
-				{
-					Message: "image postgres:16 is not stored, only its identity",
-					Hint:    "a rollback needs it pullable to rebuild a container on it",
-					Severe:  true,
-				},
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got := tt.savepoint.Notices()
 
 			// Assert
 			assert.Equal(t, tt.want, got)
@@ -242,6 +172,43 @@ func TestNotCovered_IsEmpty(t *testing.T) {
 
 			// Assert
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// What is left out travels in the record, so its keys are the wire contract.
+func TestNotCovered_JSONKeys(t *testing.T) {
+	tests := []struct {
+		name   string
+		result any
+		want   []string
+	}{
+		{
+			name:   "a failed hook without an exit code omits it",
+			result: FailedHook{},
+			want:   []string{"service", "replica", "container", "hook", "error"},
+		},
+		{
+			name:   "a failed hook that exited",
+			result: FailedHook{ExitCode: new(3)},
+			want:   []string{"service", "replica", "container", "hook", "exit_code", "error"},
+		},
+		{
+			name:   "not covered by a failed hook",
+			result: NotCovered{FailedHooks: []FailedHook{{}}},
+			want:   []string{"failed_hooks"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			data, err := json.Marshal(tt.result)
+
+			// Assert
+			require.NoError(t, err)
+			var got map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(data, &got))
+			assert.ElementsMatch(t, tt.want, slices.Collect(maps.Keys(got)))
 		})
 	}
 }

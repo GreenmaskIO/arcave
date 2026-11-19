@@ -23,11 +23,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/gctest"
 )
 
 func TestCollector_Find(t *testing.T) {
-	layer := model.WritableLayer{Service: "db", Replica: 1, ImageBackend: model.ImageBackendDedupCopy}
+	layer := composemodel.WritableLayer{Service: "db", Replica: 1, ImageBackend: composeconfig.ImageBackendDedupCopy}
 	manifest := map[string]any{
 		"image_id": "sha256:" + strings.Repeat("9", 64), "format": "oci-blobs",
 		"members": []map[string]any{
@@ -163,9 +165,14 @@ func TestCollector_Find(t *testing.T) {
 			ctx := context.Background()
 			store, root := gctest.NewStore(t)
 			tt.plant(t, root)
-			savepoint := model.Savepoint{
-				ID: gctest.LiveSavepoint, WritableLayers: []model.WritableLayer{layer},
-				Images: []model.Image{{ID: gctest.LiveImage, Stored: true}},
+			savepoint := composemodel.Savepoint{
+				Header: model.Savepoint{
+					ID: gctest.LiveSavepoint,
+				},
+				Detail: composemodel.SavepointDetail{
+					WritableLayers: []composemodel.WritableLayer{layer},
+					Images:         []composemodel.Image{{ID: gctest.LiveImage, Stored: true}},
+				},
 			}
 
 			// Act
@@ -175,7 +182,7 @@ func TestCollector_Find(t *testing.T) {
 
 			// Assert
 			require.NoError(t, err)
-			got := stat.(model.OCIBlobStat)
+			got := stat.(composemodel.OCIBlobStat)
 			assert.Equal(t, tt.wantOps, gctest.Targets(got.Ops))
 			var freedBy []model.SavepointID
 			for _, op := range got.Ops {
@@ -210,7 +217,7 @@ func TestCollector_Find_ZeroConcurrency(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, []string{"shared/oci/blobs/sha256/" + gctest.DeadBlob}, gctest.Targets(stat.(model.OCIBlobStat).Ops))
+	assert.Equal(t, []string{"shared/oci/blobs/sha256/" + gctest.DeadBlob}, gctest.Targets(stat.(composemodel.OCIBlobStat).Ops))
 }
 
 // A read of an unreferenced manifest that falls short of its listed size could be an intact
@@ -236,7 +243,7 @@ func TestCollector_Find_ShortRead(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	got := stat.(model.OCIBlobStat)
+	got := stat.(composemodel.OCIBlobStat)
 	assert.Empty(t, got.Ops)
 	assert.NotEmpty(t, got.Aborted)
 	require.Len(t, got.Unreadable, 1)

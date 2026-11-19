@@ -17,6 +17,7 @@ package cli
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -263,11 +264,14 @@ const (
 		"A deleted image's layers go on the next run; a removed savepoint's restic snapshots " +
 		"are forgotten and pruned; a restored layer tag goes once no container uses it. " +
 		"A busy project is refused: retry when its command finishes."
-	descStatus = "What the daemon runs for a compose project: which savepoint a rollback deployed and when, " +
+	descStatus = "What runs for a compose project: which savepoint a rollback deployed and when, " +
 		"whether every recorded replica is up and healthy, the published ports, and a rollback in progress or " +
 		"interrupted. Call it before tests, after a rollback, or when something looks wrong; it reads only. " +
-		"state sums it up; notices say what is wrong, severe first, each with a stable code to act on. A store " +
-		"that cannot be read leaves unreadable non-empty and the daemon's part whole; a session naming none fails it."
+		"state sums it up: rollback-pending, else the provider's word (compose: running, starting, degraded, " +
+		"stopped, absent). detail is the provider's body; compose's holds source (savepoint, mixed or compose), " +
+		"replaced and services, each with its replicas, states, health and ports. notices say what is wrong, " +
+		"severe first, each with a stable code to act on. A store that cannot be read leaves unreadable " +
+		"non-empty and the daemon's part whole; a session naming none fails it."
 	descSessionShow = "Show one session — by name or id, latest for the newest, else the pinned or current one, " +
 		"which current_source says where it was named — and its committed " +
 		"savepoints, grouped by compose project: compose projects by name, savepoints newest first, each the " +
@@ -501,9 +505,6 @@ func (h *MCPHandler) garbageCollectMCP(
 	req := model.GarbageCollectRequest{
 		DryRun:    in.DryRun == nil || *in.DryRun,
 		DataKinds: in.Kinds,
-	}
-	if err := req.Validate(); err != nil {
-		return nil, model.GarbageCollectResult{}, err
 	}
 	svc, release, err := h.factories.GC(ctx, cmp.Or(in.Session, h.pinRef()))
 	if err != nil {
@@ -783,15 +784,20 @@ func (h *MCPHandler) MCPRun(ctx context.Context) error {
 func (h *MCPHandler) Server() *mcpsdk.Server {
 	srv := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "arcave", Version: serverVersion}, nil)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_create", Description: descCreate}, h.createSavepointMCP)
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_list", Description: descList}, h.listSavepointsMCP)
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_remove", Description: descRemove}, h.removeSavepointsMCP)
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "rollback", Description: descRollback}, h.rollbackMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_create", Description: descCreate,
+		OutputSchema: newOutputSchema[model.Savepoint]()}, h.createSavepointMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_list", Description: descList,
+		OutputSchema: newOutputSchema[listOutput]()}, h.listSavepointsMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_remove", Description: descRemove,
+		OutputSchema: newOutputSchema[model.RemoveResult]()}, h.removeSavepointsMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "rollback", Description: descRollback,
+		OutputSchema: newOutputSchema[model.RollbackResult]()}, h.rollbackMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "up",
 		Description: descUp,
 		// Forced, it drops the compose project.
-		Annotations: &mcpsdk.ToolAnnotations{DestructiveHint: utils.New(true)},
+		Annotations:  &mcpsdk.ToolAnnotations{DestructiveHint: utils.New(true)},
+		OutputSchema: newOutputSchema[model.UpResult](),
 	}, h.upMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:         "down",
@@ -833,10 +839,11 @@ func (h *MCPHandler) Server() *mcpsdk.Server {
 	return srv
 }
 
-// newOutputSchema infers T's schema with a session id as the string it marshals to: inferred from
-// its Go type, it would be an array, and the SDK would refuse every result.
+// newOutputSchema infers T's schema with a session id as a string and a provider's body as an
+// object; inferred from their Go types, both would be arrays the SDK refuses.
 func newOutputSchema[T any]() *jsonschema.Schema {
 	return utils.Must(jsonschema.For[T](&jsonschema.ForOptions{TypeSchemas: map[reflect.Type]*jsonschema.Schema{
 		reflect.TypeFor[model.SessionID](): {Type: "string", Format: "uuid"},
+		reflect.TypeFor[json.RawMessage](): {Type: "object"},
 	}}))
 }

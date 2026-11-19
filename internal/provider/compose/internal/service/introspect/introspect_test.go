@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"maps"
 	"slices"
 	"strconv"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/compose/v5/pkg/api"
@@ -40,7 +41,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider"
 )
 
 const (
@@ -48,8 +48,8 @@ const (
 	anonName       = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	ownedName      = "demo_pgdata"
 
-	testImageID     = model.ImageDigestID("sha256:1111111111111111111111111111111111111111111111111111111111111111")
-	testBaseImageID = model.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+	testImageID     = composemodel.ImageDigestID("sha256:1111111111111111111111111111111111111111111111111111111111111111")
+	testBaseImageID = composemodel.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
 )
 
 func TestReader_Introspect(t *testing.T) {
@@ -79,16 +79,16 @@ func TestReader_Introspect(t *testing.T) {
 	assert.Equal(t, "app", got.Project.Services[0].Name, "services sort by name")
 	assert.Equal(t, "db", got.Project.Services[1].Name)
 	assert.Equal(t, []composemodel.ServiceVolume{
-		{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg",
+		{Type: composemodel.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg",
 			ReadOnly: true, Bind: &composemodel.BindMount{CreateHostPath: true}},
-		{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/mnt/data",
+		{Type: composemodel.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/mnt/data",
 			VolumeName: ownedName},
 	}, got.Project.Services[0].Volumes, "mounts sort by target")
 
 	require.Len(t, got.Project.Volumes, 2)
 	assert.Equal(t, "orphan", got.Project.Volumes[0].Key)
 	assert.Empty(t, got.Project.Volumes[0].UsedBy)
-	assert.Equal(t, []model.ServiceReference{
+	assert.Equal(t, []composemodel.ServiceReference{
 		{Service: "app", Target: "/mnt/data"},
 		{Service: "db", Target: "/var/lib/postgresql/data", ReadOnly: true},
 	}, got.Project.Volumes[1].UsedBy, "users sort by (service, target)")
@@ -221,7 +221,7 @@ func TestReader_Introspect_ClassifiesMounts(t *testing.T) {
 		{
 			name:  "a volume the project owns is named, keyed by its compose key",
 			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeNamed, RawType: "volume",
 				Source: "pgdata", Target: "/data", VolumeName: ownedName},
 		},
 		{
@@ -229,42 +229,42 @@ func TestReader_Introspect_ClassifiesMounts(t *testing.T) {
 			mount:  mountPoint(mount.TypeVolume, "short-name", "", "/data", false),
 			labels: map[string]string{anonymousVolumeLabel: "true"},
 			// The generated name is carried: a reaper has no other way to name the volume.
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeAnon, RawType: "volume",
 				Target: "/data", Replica: 1, VolumeName: "short-name"},
 		},
 		{
 			name:  "a generated name is anonymous where the label is missing",
 			mount: mountPoint(mount.TypeVolume, anonName, "", "/data", false),
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeAnon, RawType: "volume",
 				Target: "/data", Replica: 1, VolumeName: anonName},
 		},
 		{
 			name:  "an unowned, unlabelled volume is an external named one",
 			mount: mountPoint(mount.TypeVolume, "shared", "", "/data", false),
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeNamed, RawType: "volume",
 				Source: "shared", Target: "shared-placeholder", VolumeName: "shared"},
 		},
 		{
 			name:  "a bind carries the host path and its propagation",
 			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", false),
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeBind, RawType: "bind",
 				Source: "/host/cfg", Target: "/etc/cfg", Bind: &composemodel.BindMount{CreateHostPath: true}},
 		},
 		{
 			name:  "tmpfs",
 			mount: mountPoint(mount.TypeTmpfs, "", "", "/run", false),
-			want:  composemodel.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run"},
+			want:  composemodel.ServiceVolume{Type: composemodel.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run"},
 		},
 		{
 			name:  "npipe",
 			mount: mountPoint(mount.TypeNamedPipe, "", `\\.\pipe\d`, "/pipe", false),
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeNPipe, RawType: "npipe",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeNPipe, RawType: "npipe",
 				Target: "/pipe"},
 		},
 		{
 			name:  "an unrecognised type is reported, diagnosed by RawType",
 			mount: mountPoint("newfangled", "", "", "/x", false),
-			want:  composemodel.ServiceVolume{Type: model.VolumeTypeUnknown, RawType: "newfangled", Target: "/x"},
+			want:  composemodel.ServiceVolume{Type: composemodel.VolumeTypeUnknown, RawType: "newfangled", Target: "/x"},
 		},
 	}
 
@@ -311,7 +311,7 @@ func TestReader_Introspect_MountOptions(t *testing.T) {
 				Target: "/data", VolumeOptions: &mount.VolumeOptions{
 					NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"},
 				}}}},
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
 				Target: "/data", VolumeName: ownedName, Volume: &composemodel.VolumeMount{
 					NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"},
 				}},
@@ -321,7 +321,7 @@ func TestReader_Introspect_MountOptions(t *testing.T) {
 			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
 			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: ownedName,
 				Target: "/data", VolumeOptions: &mount.VolumeOptions{}}}},
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
 				Target: "/data", VolumeName: ownedName, Volume: &composemodel.VolumeMount{}},
 		},
 		{
@@ -329,21 +329,21 @@ func TestReader_Introspect_MountOptions(t *testing.T) {
 			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
 			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: ownedName,
 				Target: "/data"}}},
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
 				Target: "/data", VolumeName: ownedName},
 		},
 		{
 			name:  "the bind API's nocopy flag",
 			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
 			host:  container.HostConfig{Binds: []string{ownedName + ":/data:rw,nocopy"}},
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
 				Target: "/data", VolumeName: ownedName, Volume: &composemodel.VolumeMount{NoCopy: true}},
 		},
 		{
 			name:  "the bind API's SELinux relabel",
 			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", true),
 			host:  container.HostConfig{Binds: []string{"/host/cfg:/etc/cfg:ro,Z"}},
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
 				Target: "/etc/cfg", ReadOnly: true, Bind: &composemodel.BindMount{SELinux: "Z", CreateHostPath: true}},
 		},
 		{
@@ -351,7 +351,7 @@ func TestReader_Introspect_MountOptions(t *testing.T) {
 			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", false),
 			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeBind, Source: "/host/cfg",
 				Target: "/etc/cfg"}}},
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
 				Target: "/etc/cfg", Bind: &composemodel.BindMount{}},
 		},
 		{
@@ -361,14 +361,14 @@ func TestReader_Introspect_MountOptions(t *testing.T) {
 				Target: "/etc/cfg", BindOptions: &mount.BindOptions{
 					CreateMountpoint: true, ReadOnlyNonRecursive: true,
 				}}}},
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
 				Target: "/etc/cfg", Bind: &composemodel.BindMount{CreateHostPath: true, Recursive: "writable"}},
 		},
 		{
 			name:  "a bind's source is the path its request names, not the mount's",
 			mount: mountPoint(mount.TypeBind, "", "/host_mnt/srv/cfg", "/etc/cfg", false),
 			host:  container.HostConfig{Binds: []string{"/srv/cfg:/etc/cfg:rw"}},
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/cfg",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeBind, RawType: "bind", Source: "/srv/cfg",
 				Target: "/etc/cfg", Bind: &composemodel.BindMount{CreateHostPath: true}},
 		},
 		{
@@ -376,7 +376,7 @@ func TestReader_Introspect_MountOptions(t *testing.T) {
 			mount: mountPoint(mount.TypeTmpfs, "", "", "/run", false),
 			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeTmpfs, Target: "/run",
 				TmpfsOptions: &mount.TmpfsOptions{SizeBytes: 1 << 20, Mode: 0o1777}}}},
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run",
 				Tmpfs: &composemodel.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
 		},
 		{
@@ -384,7 +384,7 @@ func TestReader_Introspect_MountOptions(t *testing.T) {
 			mount: mountPoint(mount.TypeImage, "", "", "/assets", true),
 			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeImage, Source: "assets:1",
 				Target: "/assets", ReadOnly: true, ImageOptions: &mount.ImageOptions{Subpath: "static"}}}},
-			want: composemodel.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1",
+			want: composemodel.ServiceVolume{Type: composemodel.VolumeTypeImage, RawType: "image", Source: "assets:1",
 				Target: "/assets", ReadOnly: true, Image: &composemodel.ImageMount{Subpath: "static"}},
 		},
 	}
@@ -594,7 +594,7 @@ func TestReader_Observe_DaemonFailures(t *testing.T) {
 
 			// Assert
 			require.ErrorIs(t, err, daemonErr)
-			assert.Equal(t, provider.ObservedWorkload{}, got)
+			assert.Equal(t, composemodel.ObservedComposeProject{}, got)
 			daemon.AssertExpectations(t)
 		})
 	}
@@ -642,10 +642,10 @@ func TestReader_Introspect_AnonymousVolumePerReplica(t *testing.T) {
 	}
 	data := mountPoint(mount.TypeVolume, ownedName, "", "/data", false)
 	wantAnon := func(name string, replica int) composemodel.ServiceVolume {
-		return composemodel.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache",
+		return composemodel.ServiceVolume{Type: composemodel.VolumeTypeAnon, RawType: "volume", Target: "/cache",
 			VolumeName: name, Replica: replica}
 	}
-	wantData := composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+	wantData := composemodel.ServiceVolume{Type: composemodel.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
 		Target: "/data", VolumeName: ownedName}
 
 	tests := []struct {
@@ -801,10 +801,10 @@ func TestReader_Introspect_InheritedMounts(t *testing.T) {
 
 func TestUndeclaredMounts(t *testing.T) {
 	anon := func(target string) composemodel.ServiceVolume {
-		return composemodel.ServiceVolume{Type: model.VolumeTypeAnon, Target: target}
+		return composemodel.ServiceVolume{Type: composemodel.VolumeTypeAnon, Target: target}
 	}
 	bind := func(target string) composemodel.ServiceVolume {
-		return composemodel.ServiceVolume{Type: model.VolumeTypeBind, Target: target}
+		return composemodel.ServiceVolume{Type: composemodel.VolumeTypeBind, Target: target}
 	}
 
 	tests := []struct {
@@ -992,7 +992,7 @@ func TestReader_Introspect_DaemonFailures(t *testing.T) {
 				daemon.expectInspected(inspected("c-db-1", "busybox"))
 				daemon.expectNetworks()
 			},
-			wantErr: model.ErrInvalidDigestID,
+			wantErr: composemodel.ErrInvalidDigestID,
 		},
 		{
 			name:    "inspecting a base image",
@@ -1002,7 +1002,7 @@ func TestReader_Introspect_DaemonFailures(t *testing.T) {
 				daemon.expectVolumes()
 				daemon.expectInspect("c-db-1")
 				daemon.expectNetworks()
-				daemon.expectImage(testImageID, map[string]string{string(model.SystemLabelBaseImageID): testBaseImageID.String()})
+				daemon.expectImage(testImageID, map[string]string{string(composemodel.SystemLabelBaseImageID): testBaseImageID.String()})
 				daemon.On("ImageInspect", mock.Anything, testBaseImageID.String()).
 					Return(image.InspectResponse{}, daemonErr).Once()
 			},
@@ -1031,14 +1031,14 @@ func TestReader_Introspect_DaemonFailures(t *testing.T) {
 }
 
 func TestReader_Introspect_Images(t *testing.T) {
-	labelledBase := map[string]string{string(model.SystemLabelBaseImageID): testBaseImageID.String()}
+	labelledBase := map[string]string{string(composemodel.SystemLabelBaseImageID): testBaseImageID.String()}
 
 	tests := []struct {
 		name     string
 		replicas []replica
-		images   map[model.ImageDigestID]map[string]string // inspected once each, with these labels
-		missing  []model.ImageDigestID                     // inspected once each, not found
-		want     []model.ImageDigestID
+		images   map[composemodel.ImageDigestID]map[string]string // inspected once each, with these labels
+		missing  []composemodel.ImageDigestID                     // inspected once each, not found
+		want     []composemodel.ImageDigestID
 	}{
 		{
 			name: "replicas and services on one image read it once",
@@ -1047,14 +1047,14 @@ func TestReader_Introspect_Images(t *testing.T) {
 				{id: "c-web-2", service: "web", image: testImageID.String()},
 				{id: "c-worker-1", service: "worker", image: testImageID.String()},
 			},
-			images: map[model.ImageDigestID]map[string]string{testImageID: nil},
-			want:   []model.ImageDigestID{testImageID},
+			images: map[composemodel.ImageDigestID]map[string]string{testImageID: nil},
+			want:   []composemodel.ImageDigestID{testImageID},
 		},
 		{
 			name:     "a base named by the label is read",
 			replicas: []replica{{id: "c-web-1", service: "web", image: testImageID.String()}},
-			images:   map[model.ImageDigestID]map[string]string{testImageID: labelledBase, testBaseImageID: nil},
-			want:     []model.ImageDigestID{testImageID, testBaseImageID},
+			images:   map[composemodel.ImageDigestID]map[string]string{testImageID: labelledBase, testBaseImageID: nil},
+			want:     []composemodel.ImageDigestID{testImageID, testBaseImageID},
 		},
 		{
 			name: "a base a container already runs on is not read again",
@@ -1062,23 +1062,23 @@ func TestReader_Introspect_Images(t *testing.T) {
 				{id: "c-web-1", service: "web", image: testImageID.String()},
 				{id: "c-plain-1", service: "plain", image: testBaseImageID.String()},
 			},
-			images: map[model.ImageDigestID]map[string]string{testImageID: labelledBase, testBaseImageID: nil},
-			want:   []model.ImageDigestID{testImageID, testBaseImageID},
+			images: map[composemodel.ImageDigestID]map[string]string{testImageID: labelledBase, testBaseImageID: nil},
+			want:   []composemodel.ImageDigestID{testImageID, testBaseImageID},
 		},
 		{
 			name:     "a base the daemon no longer holds is left out",
 			replicas: []replica{{id: "c-web-1", service: "web", image: testImageID.String()}},
-			images:   map[model.ImageDigestID]map[string]string{testImageID: labelledBase},
-			missing:  []model.ImageDigestID{testBaseImageID},
-			want:     []model.ImageDigestID{testImageID},
+			images:   map[composemodel.ImageDigestID]map[string]string{testImageID: labelledBase},
+			missing:  []composemodel.ImageDigestID{testBaseImageID},
+			want:     []composemodel.ImageDigestID{testImageID},
 		},
 		{
 			name:     "a label that is no id is not followed",
 			replicas: []replica{{id: "c-web-1", service: "web", image: testImageID.String()}},
-			images: map[model.ImageDigestID]map[string]string{
-				testImageID: {string(model.SystemLabelBaseImageID): "postgres:16"},
+			images: map[composemodel.ImageDigestID]map[string]string{
+				testImageID: {string(composemodel.SystemLabelBaseImageID): "postgres:16"},
 			},
-			want: []model.ImageDigestID{testImageID},
+			want: []composemodel.ImageDigestID{testImageID},
 		},
 	}
 
@@ -1221,7 +1221,7 @@ func inspected(id, imageID string, mounts ...container.MountPoint) container.Ins
 }
 
 // imageInspect is what `docker image inspect` reports for an image carrying labels.
-func imageInspect(id model.ImageDigestID, labels map[string]string) image.InspectResponse {
+func imageInspect(id composemodel.ImageDigestID, labels map[string]string) image.InspectResponse {
 	return image.InspectResponse{
 		ID:     id.String(),
 		Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Labels: labels}},
@@ -1269,7 +1269,7 @@ func (m *mockDockerAPI) expectReplicas(replicas ...replica) {
 	m.expectContainers(summaries...)
 }
 
-func (m *mockDockerAPI) expectImage(id model.ImageDigestID, labels map[string]string) {
+func (m *mockDockerAPI) expectImage(id composemodel.ImageDigestID, labels map[string]string) {
 	m.On("ImageInspect", mock.Anything, id.String()).Return(imageInspect(id, labels), nil).Once()
 }
 

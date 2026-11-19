@@ -20,12 +20,13 @@ package composetest
 import (
 	"bytes"
 	"context"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/storages"
@@ -46,13 +47,13 @@ func (m *MockSavepointRepo) SaveSpec(ctx context.Context, id model.SavepointID, 
 	return m.Called(ctx, id, spec).Error(0)
 }
 
-func (m *MockSavepointRepo) SaveSavepoint(ctx context.Context, savepoint model.Savepoint) error {
+func (m *MockSavepointRepo) SaveSavepoint(ctx context.Context, savepoint composemodel.Savepoint) error {
 	return m.Called(ctx, savepoint).Error(0)
 }
 
-func (m *MockSavepointRepo) LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error) {
+func (m *MockSavepointRepo) LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]composemodel.Savepoint, error) {
 	args := m.Called(ctx, ids)
-	savepoints, _ := args.Get(0).([]model.Savepoint)
+	savepoints, _ := args.Get(0).([]composemodel.Savepoint)
 	return savepoints, args.Error(1)
 }
 
@@ -62,9 +63,9 @@ func (m *MockSavepointRepo) LoadSpec(ctx context.Context, id model.SavepointID) 
 	return spec, args.Error(1)
 }
 
-func (m *MockSavepointRepo) ListSavepoints(ctx context.Context) ([]model.Savepoint, error) {
+func (m *MockSavepointRepo) ListSavepoints(ctx context.Context) ([]composemodel.Savepoint, error) {
 	args := m.Called(ctx)
-	savepoints, _ := args.Get(0).([]model.Savepoint)
+	savepoints, _ := args.Get(0).([]composemodel.Savepoint)
 	return savepoints, args.Error(1)
 }
 
@@ -129,55 +130,55 @@ func (m *MockContainerControl) ExecInContainer(
 // MockImageBackend doubles the image backend, both ways.
 type MockImageBackend struct{ mock.Mock }
 
-func (m *MockImageBackend) CaptureImage(ctx context.Context, req composemodel.ImageCaptureRequest) (model.Image, error) {
+func (m *MockImageBackend) CaptureImage(ctx context.Context, req composemodel.ImageCaptureRequest) (composemodel.Image, error) {
 	args := m.Called(ctx, req)
-	image, _ := args.Get(0).(model.Image)
+	image, _ := args.Get(0).(composemodel.Image)
 	return image, args.Error(1)
 }
 
 func (m *MockImageBackend) CaptureWritableLayer(
 	ctx context.Context, req composemodel.WritableLayerCaptureRequest,
-) (model.WritableLayer, error) {
+) (composemodel.WritableLayer, error) {
 	args := m.Called(ctx, req)
-	layer, _ := args.Get(0).(model.WritableLayer)
+	layer, _ := args.Get(0).(composemodel.WritableLayer)
 	return layer, args.Error(1)
 }
 
 func (m *MockImageBackend) RestoreWritableLayer(
 	ctx context.Context, req composemodel.WritableLayerRestoreRequest,
-) (model.WritableLayerRestoreResult, error) {
+) (composemodel.WritableLayerRestoreResult, error) {
 	args := m.Called(ctx, req)
-	result, _ := args.Get(0).(model.WritableLayerRestoreResult)
+	result, _ := args.Get(0).(composemodel.WritableLayerRestoreResult)
 	return result, args.Error(1)
 }
 
-// MockBackend doubles model.VolumeSnapshotBackend; Volume() answers its volume unmocked.
+// MockBackend doubles composemodel.VolumeSnapshotBackend; Volume() answers its volume unmocked.
 type MockBackend struct {
 	mock.Mock
-	volume model.Volume
+	volume composemodel.Volume
 }
 
 // NewMockBackend is a backend of volume.
-func NewMockBackend(volume model.Volume) *MockBackend {
+func NewMockBackend(volume composemodel.Volume) *MockBackend {
 	return &MockBackend{volume: volume}
 }
 
-func (m *MockBackend) Volume() model.Volume { return m.volume }
+func (m *MockBackend) Volume() composemodel.Volume { return m.volume }
 
-func (m *MockBackend) Snapshot(ctx context.Context, req model.BackendSnapshotRequest) (model.SnapshotStat, error) {
+func (m *MockBackend) Snapshot(ctx context.Context, req composemodel.BackendSnapshotRequest) (composemodel.SnapshotStat, error) {
 	args := m.Called(ctx, req)
-	stat, _ := args.Get(0).(model.SnapshotStat)
+	stat, _ := args.Get(0).(composemodel.SnapshotStat)
 	return stat, args.Error(1)
 }
 
-func (m *MockBackend) Restore(ctx context.Context, req model.BackendRestoreRequest) error {
+func (m *MockBackend) Restore(ctx context.Context, req composemodel.BackendRestoreRequest) error {
 	return m.Called(ctx, req).Error(0)
 }
 
 // MatchValidSnapshotID matches a Snapshot request whose id passes the gate; the id comes off the
 // clock, so no literal can name it.
 func MatchValidSnapshotID() any {
-	return mock.MatchedBy(func(req model.BackendSnapshotRequest) bool {
+	return mock.MatchedBy(func(req composemodel.BackendSnapshotRequest) bool {
 		return req.SnapshotID.Validate() == nil
 	})
 }
@@ -185,15 +186,15 @@ func MatchValidSnapshotID() any {
 // FakeVolumeStreamer is a volume streamer with nothing to stream: a factory needs one to build.
 type FakeVolumeStreamer struct{}
 
-func (FakeVolumeStreamer) ResolveMountSource(_ context.Context, v model.Volume) (model.MountSource, error) {
-	return model.MountSource{Type: model.MountSourceVolume, Source: v.ObjectID}, nil
+func (FakeVolumeStreamer) ResolveMountSource(_ context.Context, v composemodel.Volume) (composemodel.MountSource, error) {
+	return composemodel.MountSource{Type: composemodel.MountSourceVolume, Source: v.ObjectID}, nil
 }
 
-func (FakeVolumeStreamer) OpenVolume(context.Context, model.MountSource) (io.ReadCloser, error) {
+func (FakeVolumeStreamer) OpenVolume(context.Context, composemodel.MountSource) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("")), nil
 }
 
-func (FakeVolumeStreamer) WriteVolume(_ context.Context, _ model.MountSource, r io.Reader) error {
+func (FakeVolumeStreamer) WriteVolume(_ context.Context, _ composemodel.MountSource, r io.Reader) error {
 	_, err := io.Copy(io.Discard, r)
 	return err
 }

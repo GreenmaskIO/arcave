@@ -32,6 +32,13 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
+// The provider's garbage vocabulary, as a fake provider spells it.
+const (
+	dataKindSavepointData       model.GarbageDataKind = "savepoint-data"
+	dataKindDeduplicatedVolumes model.GarbageDataKind = "deduplicated-volumes"
+	dataKindRestoredLayers      model.GarbageDataKind = "restored-layers"
+)
+
 var update = flag.Bool("update", false, "rewrite the golden files under testdata")
 
 const (
@@ -63,9 +70,7 @@ func TestPrinter_Print(t *testing.T) {
 			result: model.Savepoint{
 				ID:        savepointID,
 				CreatedAt: createdAt,
-				Stats: []model.SnapshotStat{
-					{Volume: namedVolume("demo_db"), SizeBytes: 1_000, StoredBytes: 1_000},
-				},
+				Summary:   newVolumeSummary(1_000),
 			},
 		},
 		{
@@ -89,14 +94,8 @@ func TestPrinter_Print(t *testing.T) {
 			name: "rollback",
 			opts: Options{ComposeProject: "arcave-demo"},
 			result: model.RollbackResult{
-				RolledBackTo: newSavepoint(),
-				Restored: []model.Volume{
-					namedVolume("demo_db"), namedVolume("demo_minio"), namedVolume("demo_redis"), namedVolume("demo_cache"),
-				},
-				WritableLayers: []model.WritableLayerRestoreResult{
-					{Service: "app", Replica: 1},
-					{Service: "app", Replica: 2},
-				},
+				RolledBackTo:   newSavepoint(),
+				Restored:       newRestored(4, 2),
 				SafetySnapshot: safetyID,
 			},
 		},
@@ -105,7 +104,7 @@ func TestPrinter_Print(t *testing.T) {
 			opts: Options{ComposeProject: "arcave-demo"},
 			result: model.RollbackResult{
 				RolledBackTo:   newSafetySnapshot(model.SavepointRef{ID: savepointID, Name: "test3"}),
-				Restored:       []model.Volume{namedVolume("demo_db")},
+				Restored:       newRestored(1, 0),
 				SafetySnapshot: "01a188ce-0000-7000-8000-000000000003",
 			},
 		},
@@ -114,7 +113,7 @@ func TestPrinter_Print(t *testing.T) {
 			opts: Options{ComposeProject: "arcave-demo"},
 			result: model.RollbackResult{
 				RolledBackTo: newSavepoint(),
-				Restored:     []model.Volume{namedVolume("demo_db")},
+				Restored:     newRestored(1, 0),
 			},
 		},
 		{
@@ -122,8 +121,7 @@ func TestPrinter_Print(t *testing.T) {
 			opts: Options{ComposeProject: "arcave-demo"},
 			result: model.RollbackResult{
 				RolledBackTo:    newSavepoint(),
-				Restored:        []model.Volume{namedVolume("demo_db"), namedVolume("demo_minio")},
-				WritableLayers:  []model.WritableLayerRestoreResult{{Service: "app", Replica: 1}},
+				Restored:        newRestored(2, 1, "demo_db", "demo_minio"),
 				LeftoverVolumes: []string{"demo_db", "demo_minio"},
 			},
 		},
@@ -131,9 +129,8 @@ func TestPrinter_Print(t *testing.T) {
 			name: "up_forced",
 			opts: Options{ComposeProject: "arcave-demo"},
 			result: model.UpResult{
-				RolledBackTo:   newSavepoint(),
-				Restored:       []model.Volume{namedVolume("demo_db")},
-				WritableLayers: []model.WritableLayerRestoreResult{{Service: "app", Replica: 1}},
+				RolledBackTo: newSavepoint(),
+				Restored:     newRestored(1, 1),
 				Discarded: &model.DiscardedResources{
 					Containers: []string{"arcave-demo-app-1"}, Volumes: []string{"demo_db", "demo_extra"},
 					Networks: []string{"arcave-demo_default"},
@@ -188,17 +185,17 @@ func TestPrinter_Print(t *testing.T) {
 				Session: sessionID,
 				Reports: []model.GarbageReport{
 					{
-						DataKind:       model.GarbageDataKindSavepointData,
+						DataKind:       dataKindSavepointData,
 						ComposeProject: "demo",
 						Summary:        model.GarbageSummary{Found: 2, Skipped: 1, Bytes: utils.New[int64](12_400_000)},
 					},
 					{
-						DataKind:       model.GarbageDataKindDeduplicatedVolumes,
+						DataKind:       dataKindDeduplicatedVolumes,
 						ComposeProject: "demo",
 						Summary:        model.GarbageSummary{Aborted: "backend-unreadable"},
 					},
 					{
-						DataKind: model.GarbageDataKindRestoredLayers,
+						DataKind: dataKindRestoredLayers,
 						Summary:  model.GarbageSummary{Found: 1, Unjudged: 2},
 					},
 				},
@@ -216,7 +213,7 @@ func TestPrinter_Print(t *testing.T) {
 				Session: sessionID,
 				Reports: []model.GarbageReport{
 					{
-						DataKind:       model.GarbageDataKindSavepointData,
+						DataKind:       dataKindSavepointData,
 						ComposeProject: "demo",
 						Summary:        model.GarbageSummary{Found: 2, Bytes: utils.New[int64](12_400_000)},
 						Deletion: &model.GarbageDeletion{
@@ -249,7 +246,7 @@ func TestPrinter_Print(t *testing.T) {
 				Session: sessionID,
 				Reports: []model.GarbageReport{
 					{
-						DataKind:       model.GarbageDataKindSavepointData,
+						DataKind:       dataKindSavepointData,
 						ComposeProject: "demo",
 						Summary:        model.GarbageSummary{Found: 2, Bytes: utils.New[int64](12_400_000)},
 						Deletion: &model.GarbageDeletion{
@@ -266,7 +263,7 @@ func TestPrinter_Print(t *testing.T) {
 				Session: sessionID,
 				Reports: []model.GarbageReport{
 					{
-						DataKind:       model.GarbageDataKindDeduplicatedVolumes,
+						DataKind:       dataKindDeduplicatedVolumes,
 						ComposeProject: "demo",
 						Summary:        model.GarbageSummary{Found: 1},
 						Deletion: &model.GarbageDeletion{
@@ -284,7 +281,7 @@ func TestPrinter_Print(t *testing.T) {
 				Session: sessionID,
 				Reports: []model.GarbageReport{
 					{
-						DataKind:       model.GarbageDataKindSavepointData,
+						DataKind:       dataKindSavepointData,
 						ComposeProject: "demo",
 						Summary:        model.GarbageSummary{Bytes: utils.New[int64](0)},
 						Deletion:       &model.GarbageDeletion{},
@@ -423,9 +420,7 @@ func TestPrinter_Print(t *testing.T) {
 							ID:        safetyID,
 							Name:      "init",
 							CreatedAt: createdAt.Add(time.Hour),
-							Stats: []model.SnapshotStat{
-								{Volume: namedVolume("blog_db"), SizeBytes: 48_000_000, StoredBytes: 48_000_000},
-							},
+							Summary:   newVolumeSummary(48_000_000),
 						}},
 					},
 					{
@@ -560,7 +555,7 @@ func newSafetySnapshot(target model.SavepointRef) model.Savepoint {
 		Labels:                map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue},
 		TakenBeforeRollbackTo: &target,
 		CreatedAt:             createdAt.Add(time.Hour),
-		Stats:                 []model.SnapshotStat{{Volume: namedVolume("demo_db"), SizeBytes: 1_000, StoredBytes: 1_000}},
+		Summary:               newVolumeSummary(1_000),
 	}
 }
 
@@ -569,37 +564,61 @@ func newSavepoint() model.Savepoint {
 		ID:        savepointID,
 		Name:      "test3",
 		CreatedAt: createdAt,
-		Stats: []model.SnapshotStat{
-			{Volume: namedVolume("demo_postgres"), SizeBytes: 48_800_000, StoredBytes: 48_800_000},
-			{Volume: namedVolume("demo_minio"), SizeBytes: 53_000, StoredBytes: 53_000},
-			{Volume: namedVolume("demo_redis"), SizeBytes: 6_000, StoredBytes: 6_000},
-			{
-				Volume: model.Volume{
-					ObjectID: "volume-anon-app-1-_tmp",
-					Anon:     &model.VolumePropertiesAnon{Service: "app", Replica: 1, Target: "/tmp"},
-				},
-				SizeBytes:   1_000,
-				StoredBytes: 1_000,
+		Summary: model.SavepointSummary{
+			Units: []model.UnitTotal{
+				{Kind: model.UnitKindVolumes, Count: 4, SizeBytes: 48_860_000, StoredBytes: 48_860_000},
+				{Kind: model.UnitKindLayers, Count: 1, SizeBytes: 274_600_000, StoredBytes: 44_000},
+				{Kind: model.UnitKindImages, Count: 2, SizeBytes: 1_100_000_000},
 			},
-		},
-		WritableLayers: []model.WritableLayer{
-			{Service: "app", Replica: 1, SizeBytes: 274_600_000, StoredBytes: 44_000},
-		},
-		Images: []model.Image{
-			{ID: "sha256:aa", Refs: []string{"postgres:16"}, SizeBytes: 1_100_000_000, Stored: true},
-			{ID: "sha256:0123456789abcdef", Stored: false},
-		},
-		NotCovered: &model.NotCovered{
-			ServicesWithoutVolumes: []string{"worker"},
-			KilledContainers:       []model.KilledContainer{{Service: "db", Replica: 1, Container: "0123456789abcdef"}},
+			Notices: []model.Notice{
+				{
+					Message: "db-1 was killed at the stop deadline: its volumes may hold a crash state",
+					Hint:    "raise compose.stop_timeout or the service's stop_grace_period",
+					Severe:  true,
+				},
+				{
+					Message: "image 0123456789ab is not stored, only its identity",
+					Hint:    "a rollback needs it pullable to rebuild a container on it",
+					Severe:  true,
+				},
+				{Message: "worker has no volumes: only its writable layer is held"},
+			},
 		},
 	}
 }
 
-func namedVolume(name string) model.Volume {
-	return model.Volume{
-		ObjectID: "volume-named-" + name,
-		Named:    &model.VolumePropertiesNamed{VolumeName: name},
+// newRestored is what a build of volumes volumes and layers layers restored, as the compose provider
+// sums it up: each leftover volume overwritten, then the writable layers' hint.
+func newRestored(volumes, layers int, leftover ...string) model.RestoreSummary {
+	units := []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: volumes}}
+	if layers > 0 {
+		units = append(units, model.UnitTotal{Kind: model.UnitKindLayers, Count: layers})
+	}
+	var notices []model.Notice
+	for _, name := range leftover {
+		notices = append(notices, model.Notice{
+			Message: "volume " + name + " outlived the compose project's containers and was overwritten: " +
+				"no safety snapshot holds what it held",
+			Hint:   "compose.leftover_volumes: refuse refuses such a rollback before anything is written",
+			Severe: true,
+		})
+	}
+	if layers > 0 {
+		notices = append(notices, model.Notice{
+			Message: "the containers run on the savepoint's writable layers",
+			Hint:    "`docker compose up` of your compose file recreates them on its images and drops those layers",
+		})
+	}
+	return model.RestoreSummary{
+		Units:   units,
+		Notices: notices,
+	}
+}
+
+// newVolumeSummary is the summary of one volume of size bytes, all of them stored.
+func newVolumeSummary(size int64) model.SavepointSummary {
+	return model.SavepointSummary{
+		Units: []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: size, StoredBytes: size}},
 	}
 }
 

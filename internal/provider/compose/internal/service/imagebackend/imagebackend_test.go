@@ -17,11 +17,12 @@ package imagebackend
 import (
 	"context"
 	"errors"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 	"testing"
 	"time"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
@@ -31,14 +32,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 const (
 	snapshotID  = model.SavepointID("019e843e-1650-7000-8000-000000000000")
 	containerID = "c0ffee"
-	imageID     = model.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	upstreamID  = model.ImageDigestID("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	imageID     = composemodel.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	upstreamID  = composemodel.ImageDigestID("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	commitNote  = "arcave savepoint 019e843e-1650-7000-8000-000000000000"
 )
 
@@ -49,7 +51,7 @@ func demoRequest() composemodel.WritableLayerCaptureRequest {
 			Service: "db", Replica: 1, ID: containerID, Name: "demo-db-1",
 			UpstreamImageID: upstreamID, UpstreamImageRef: "postgres:16",
 		},
-		Backend: model.ImageBackendDedupCopy,
+		Backend: composeconfig.ImageBackendDedupCopy,
 	}
 }
 
@@ -57,24 +59,24 @@ var demoOwner = composemodel.LayerOrigin{ArcaveProject: "app", ComposeProject: "
 
 func demoUpstreamLabels() map[string]string {
 	return map[string]string{
-		string(model.SystemLabelArcaveProject):                       "app",
-		string(model.SystemLabelComposeProject):                      "demo",
-		string(model.SystemLabelBaseImageID):                         upstreamID.String(),
-		string(model.SystemLabelBaseImageRef):                        "postgres:16",
-		string(model.SystemLabelDeploymentDeployedAt):                "",
-		string(model.SystemLabelDeploymentArcaveProject):             "",
-		string(model.SystemLabelDeploymentSessionID):                 "",
-		string(model.SystemLabelDeploymentSessionName):               "",
-		string(model.SystemLabelDeploymentSavepointID):               "",
-		string(model.SystemLabelDeploymentSavepointName):             "",
-		string(model.SystemLabelDeploymentSavepointCreatedAt):        "",
-		string(model.SystemLabelDeploymentSavepointIsSafetySnapshot): "",
-		string(model.SystemLabelDeploymentServiceReplicas):           "",
+		string(composemodel.SystemLabelArcaveProject):                       "app",
+		string(composemodel.SystemLabelComposeProject):                      "demo",
+		string(composemodel.SystemLabelBaseImageID):                         upstreamID.String(),
+		string(composemodel.SystemLabelBaseImageRef):                        "postgres:16",
+		string(composemodel.SystemLabelDeploymentDeployedAt):                "",
+		string(composemodel.SystemLabelDeploymentArcaveProject):             "",
+		string(composemodel.SystemLabelDeploymentSessionID):                 "",
+		string(composemodel.SystemLabelDeploymentSessionName):               "",
+		string(composemodel.SystemLabelDeploymentSavepointID):               "",
+		string(composemodel.SystemLabelDeploymentSavepointName):             "",
+		string(composemodel.SystemLabelDeploymentSavepointCreatedAt):        "",
+		string(composemodel.SystemLabelDeploymentSavepointIsSafetySnapshot): "",
+		string(composemodel.SystemLabelDeploymentServiceReplicas):           "",
 	}
 }
 
-func demoUpstream() model.Image {
-	return model.Image{
+func demoUpstream() composemodel.Image {
+	return composemodel.Image{
 		ID: upstreamID, Refs: []string{"postgres:16"}, RepoDigests: []string{"postgres@sha256:cc"}, SizeBytes: 900,
 	}
 }
@@ -115,7 +117,7 @@ func TestImageStorage_RejectsAnIDThatIsNoDigest(t *testing.T) {
 	_, err := imageStorage(store, "../../escape")
 
 	// Assert
-	require.ErrorIs(t, err, model.ErrInvalidDigestID)
+	require.ErrorIs(t, err, composemodel.ErrInvalidDigestID)
 	assert.Empty(t, objectNames(t, store))
 }
 
@@ -236,9 +238,9 @@ func TestCopier_CaptureWritableLayer(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, model.WritableLayer{
+	assert.Equal(t, composemodel.WritableLayer{
 		Service: "db", Replica: 1, ContainerID: containerID, ContainerName: "demo-db-1",
-		CommittedImageID: imageID, ImageBackend: model.ImageBackendDedupCopy,
+		CommittedImageID: imageID, ImageBackend: composeconfig.ImageBackendDedupCopy,
 		UpstreamImageID: upstreamID, UpstreamImageRef: "postgres:16",
 		SizeBytes: 900, StoredBytes: 100,
 	}, capture)
@@ -257,19 +259,19 @@ func TestCopier_CaptureWritableLayer_StoresByTheRequestedBackend(t *testing.T) {
 		Return(io.NopCloser(strings.NewReader("archive")), nil).Once()
 	engine.On("RemoveImage", mock.Anything, imageID).Return(nil).Once()
 	dedup, full := &stubArchiver{}, &stubArchiver{}
-	copier := NewCopier(newStore(t), demoOwner, engine, map[model.ImageBackendKind]ImageArchiver{
-		model.ImageBackendDedupCopy: dedup,
-		model.ImageBackendFullCopy:  full,
+	copier := NewCopier(newStore(t), demoOwner, engine, map[composeconfig.ImageBackendKind]ImageArchiver{
+		composeconfig.ImageBackendDedupCopy: dedup,
+		composeconfig.ImageBackendFullCopy:  full,
 	}, dedup)
 	req := demoRequest()
-	req.Backend = model.ImageBackendFullCopy
+	req.Backend = composeconfig.ImageBackendFullCopy
 
 	// Act
 	capture, err := copier.CaptureWritableLayer(ctx, req)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, model.ImageBackendFullCopy, capture.ImageBackend)
+	assert.Equal(t, composeconfig.ImageBackendFullCopy, capture.ImageBackend)
 	assert.Equal(t, "archive", full.stored)
 	assert.Empty(t, dedup.stored)
 	engine.AssertExpectations(t)
@@ -281,7 +283,7 @@ func TestCopier_RefusesAnUnknownBackend(t *testing.T) {
 	// Arrange: the imager carries no expectation, so any call fails the test.
 	ctx := zerolog.Nop().WithContext(context.Background())
 	engine := &mockImageEngine{}
-	copier := NewCopier(newStore(t), demoOwner, engine, map[model.ImageBackendKind]ImageArchiver{}, &stubArchiver{})
+	copier := NewCopier(newStore(t), demoOwner, engine, map[composeconfig.ImageBackendKind]ImageArchiver{}, &stubArchiver{})
 	restore := demoRestoreRequest()
 	restore.Layer.ImageBackend = ""
 
@@ -319,8 +321,8 @@ func TestCopier_CaptureWritableLayer_StampsNoUpstreamItWasNotTold(t *testing.T) 
 	ctx := zerolog.Nop().WithContext(context.Background())
 	engine := &mockImageEngine{}
 	labels := demoUpstreamLabels()
-	delete(labels, string(model.SystemLabelBaseImageID))
-	delete(labels, string(model.SystemLabelBaseImageRef))
+	delete(labels, string(composemodel.SystemLabelBaseImageID))
+	delete(labels, string(composemodel.SystemLabelBaseImageRef))
 	engine.On("CommitContainer", mock.Anything, containerID, commitNote, labels).
 		Return(imageID, nil).Once()
 	engine.On("SaveImage", mock.Anything, imageID).
@@ -433,7 +435,7 @@ func TestCopier_RestoreWritableLayer_TagsWhatTheDaemonAlreadyHolds(t *testing.T)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, model.WritableLayerRestoreResult{
+	assert.Equal(t, composemodel.WritableLayerRestoreResult{
 		Service: "db", Replica: 1, ContainerName: "demo-db-1", ImageID: imageID, Tag: "arcave/demo:sp-1",
 	}, restored, "the restore names the container the replica is rebuilt as")
 	assert.False(t, archiver.loaded, "a load costs the whole archive and is not worth taking twice")
@@ -558,7 +560,7 @@ type stubArchiver struct {
 }
 
 func (s *stubArchiver) Store(
-	_ context.Context, _ storages.Writer, _ model.ImageDigestID, archive io.Reader,
+	_ context.Context, _ storages.Writer, _ composemodel.ImageDigestID, archive io.Reader,
 ) (StoredSize, error) {
 	body, err := io.ReadAll(archive)
 	if err != nil {
@@ -571,7 +573,7 @@ func (s *stubArchiver) Store(
 	return s.size, nil
 }
 
-func (s *stubArchiver) Load(_ context.Context, _ storages.Storager, _ model.ImageDigestID, archive io.Writer) error {
+func (s *stubArchiver) Load(_ context.Context, _ storages.Storager, _ composemodel.ImageDigestID, archive io.Writer) error {
 	s.loaded = true
 	if _, err := io.WriteString(archive, s.renders); err != nil {
 		return err
@@ -582,9 +584,9 @@ func (s *stubArchiver) Load(_ context.Context, _ storages.Storager, _ model.Imag
 func demoRestoreRequest() composemodel.WritableLayerRestoreRequest {
 	return composemodel.WritableLayerRestoreRequest{
 		SnapshotID: snapshotID,
-		Layer: model.WritableLayer{
+		Layer: composemodel.WritableLayer{
 			Service: "db", Replica: 1, ContainerID: containerID, ContainerName: "demo-db-1",
-			CommittedImageID: imageID, ImageBackend: model.ImageBackendDedupCopy,
+			CommittedImageID: imageID, ImageBackend: composeconfig.ImageBackendDedupCopy,
 		},
 		Tag: "arcave/demo:sp-1",
 	}
@@ -592,9 +594,9 @@ func demoRestoreRequest() composemodel.WritableLayerRestoreRequest {
 
 // newCopier builds a copier whose every archiver, the images' included, is archiver.
 func newCopier(store storages.Navigator, engine dockerImageEngine, archiver ImageArchiver) *Copier {
-	return NewCopier(store, demoOwner, engine, map[model.ImageBackendKind]ImageArchiver{
-		model.ImageBackendDedupCopy: archiver,
-		model.ImageBackendFullCopy:  archiver,
+	return NewCopier(store, demoOwner, engine, map[composeconfig.ImageBackendKind]ImageArchiver{
+		composeconfig.ImageBackendDedupCopy: archiver,
+		composeconfig.ImageBackendFullCopy:  archiver,
 	}, archiver)
 }
 

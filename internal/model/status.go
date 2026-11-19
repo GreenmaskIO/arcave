@@ -15,45 +15,14 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
 
-// ComposeProjectState sums a compose project up in one word, the first that applies in the order
-// below.
-type ComposeProjectState string
-
-const (
-	// ComposeProjectStateRollbackPending is a compose project an inflight marker names: a rollback
-	// is running, or was interrupted.
-	ComposeProjectStateRollbackPending ComposeProjectState = "rollback-pending"
-	// ComposeProjectStateAbsent is a compose project with no container.
-	ComposeProjectStateAbsent ComposeProjectState = "absent"
-	// ComposeProjectStateStopped is one no container of runs, and one at least is stopped, a
-	// completed job aside, with none missing, paused, restarting, dead or being removed.
-	ComposeProjectStateStopped ComposeProjectState = "stopped"
-	// ComposeProjectStateDegraded is one a replica of is missing, failing or unhealthy: exited with a
-	// code other than 0, restarting, never started, paused, dead or being removed.
-	ComposeProjectStateDegraded ComposeProjectState = "degraded"
-	// ComposeProjectStateStarting is one nothing is wrong with but a healthcheck still starting.
-	ComposeProjectStateStarting ComposeProjectState = "starting"
-	// ComposeProjectStateRunning is one whose every replica runs, healthy where it is checked, or
-	// exited 0: a status cannot tell a finished job no service waits on from a server stopped by
-	// hand, and a notice names each.
-	ComposeProjectStateRunning ComposeProjectState = "running"
-)
-
-// DeploymentSource says what built the containers of a compose project.
-type DeploymentSource string
-
-const (
-	// DeploymentSourceSavepoint is every container built by one rollback.
-	DeploymentSourceSavepoint DeploymentSource = "savepoint"
-	// DeploymentSourceMixed is some containers built by a rollback, others since by something else.
-	DeploymentSourceMixed DeploymentSource = "mixed"
-	// DeploymentSourceCompose is no container a rollback built: compose started them from a file.
-	DeploymentSourceCompose DeploymentSource = "compose"
-)
+// StatusStateRollbackPending is the state of a workload an inflight marker names: a rollback is
+// running, or was interrupted. Every other state is the provider's word.
+const StatusStateRollbackPending = "rollback-pending"
 
 // DeploymentRecordState says whether the store still holds the savepoint a rollback deployed.
 type DeploymentRecordState string
@@ -65,34 +34,6 @@ const (
 	DeploymentRecordUnreadable DeploymentRecordState = "unreadable"
 )
 
-// ReplicaState is one replica in one word, as the daemon reports it.
-type ReplicaState string
-
-const (
-	ReplicaStateRunning ReplicaState = "running"
-	// ReplicaStateCompleted is a job's replica that exited 0: its service is one another waits on
-	// to complete successfully.
-	ReplicaStateCompleted  ReplicaState = "completed"
-	ReplicaStateExited     ReplicaState = "exited"
-	ReplicaStateRestarting ReplicaState = "restarting"
-	// ReplicaStateCreated is a replica created and never started.
-	ReplicaStateCreated  ReplicaState = "created"
-	ReplicaStatePaused   ReplicaState = "paused"
-	ReplicaStateRemoving ReplicaState = "removing"
-	ReplicaStateDead     ReplicaState = "dead"
-	// ReplicaStateMissing is a replica the deployed savepoint recorded that the daemon does not hold.
-	ReplicaStateMissing ReplicaState = "missing"
-)
-
-// ReplicaHealth is a replica's healthcheck; empty for one with none.
-type ReplicaHealth string
-
-const (
-	ReplicaHealthStarting  ReplicaHealth = "starting"
-	ReplicaHealthHealthy   ReplicaHealth = "healthy"
-	ReplicaHealthUnhealthy ReplicaHealth = "unhealthy"
-)
-
 // StatusUnreadableSource names what a status could not read.
 type StatusUnreadableSource string
 
@@ -102,136 +43,76 @@ const (
 	StatusUnreadableInflightMarker StatusUnreadableSource = "inflight-marker"
 )
 
-// The notices a status reports, one code per condition; a code is stable, its message is not.
-const (
-	NoticeCodeRollbackPending            NoticeCode = "rollback-pending"
-	NoticeCodeStoreUnreadable            NoticeCode = "store-unreadable"
-	NoticeCodeSessionUnresolved          NoticeCode = "session-unresolved"
-	NoticeCodeInflightMarkerUnreadable   NoticeCode = "inflight-marker-unreadable"
-	NoticeCodeDeploymentLabelsUnreadable NoticeCode = "deployment-labels-unreadable"
-	NoticeCodeDeployedSavepointGone      NoticeCode = "deployed-savepoint-gone"
-	NoticeCodeOtherArcaveProject         NoticeCode = "other-arcave-project"
-	NoticeCodeOtherSession               NoticeCode = "other-session"
-	NoticeCodeSafetySnapshotDeployed     NoticeCode = "safety-snapshot-deployed"
-	NoticeCodeVolumeNotRestored          NoticeCode = "volume-not-restored"
-	NoticeCodeLayerNotRestored           NoticeCode = "layer-not-restored"
-	NoticeCodeReplicaMissing             NoticeCode = "replica-missing"
-	NoticeCodeReplicaExited              NoticeCode = "replica-exited"
-	NoticeCodeReplicaDead                NoticeCode = "replica-dead"
-	NoticeCodeReplicaRemoving            NoticeCode = "replica-removing"
-	NoticeCodeReplicaRestarting          NoticeCode = "replica-restarting"
-	NoticeCodeReplicaCreated             NoticeCode = "replica-created"
-	NoticeCodeReplicaPaused              NoticeCode = "replica-paused"
-	NoticeCodeReplicaRestarted           NoticeCode = "replica-restarted"
-	NoticeCodeReplicaUnhealthy           NoticeCode = "replica-unhealthy"
-	NoticeCodeReplicaRecreated           NoticeCode = "replica-recreated"
-	NoticeCodeReplicaAdded               NoticeCode = "replica-added"
-	NoticeCodeComposeProjectStopped      NoticeCode = "compose-project-stopped"
-)
-
 // StatusRequest carries what Status needs.
 type StatusRequest struct {
 	// Session names the session the user works in, as given; empty is the current session.
 	Session string
 }
 
-// ComposeProjectStatus is what the daemon runs for a compose project, what built it, and where
-// that stands against the store. Its json tags are the wire contract.
+// ComposeProjectStatus is what runs for a compose project, what built it, and where that stands
+// against the store. Its json tags are the wire contract.
 type ComposeProjectStatus struct {
 	ComposeProject DockerComposeProjectName `json:"compose_project"`
-	// CheckedAt is when the daemon was read; every age is counted from it.
-	CheckedAt time.Time           `json:"checked_at"`
-	State     ComposeProjectState `json:"state"`
+	// CheckedAt is when the workload was read; every age is counted from it.
+	CheckedAt time.Time `json:"checked_at"`
+	// State is StatusStateRollbackPending under an inflight marker, else the provider's word.
+	State string `json:"state"`
 	// Session is the session arcave commands work in; nil when it could not be resolved.
 	Session *SessionRef `json:"session"`
-	// Deployment is what built the containers; nil for a compose project with none.
+	// Deployment is the build the workload carries; nil for none.
 	Deployment *DeploymentStatus `json:"deployment"`
-	Services   []ServiceStatus   `json:"services"`
 	// RollbackInFlight is the inflight marker of this compose project: a rollback running, or
 	// interrupted, which a status does not tell apart.
 	RollbackInFlight *RollbackInFlight `json:"rollback_in_flight"`
 	// Unreadable is what could not be read; any makes the status partial.
 	Unreadable []StatusUnreadable `json:"unreadable"`
-	Notices    []Notice           `json:"notices"`
+	// Notices are arcave's and the provider's, the severe first.
+	Notices []Notice `json:"notices"`
+	// Detail is the provider's body of the status.
+	Detail WorkloadDetail `json:"detail"`
 }
 
-// DeploymentStatus is what built a compose project's containers. Under DeploymentSourceCompose it
-// holds the source alone; otherwise the deployment the containers carry, as their labels spell it.
+// WorkloadReport is what a provider says of a running workload; arcave prints it and reads none of it.
+type WorkloadReport struct {
+	// State sums the workload up in the provider's own word.
+	State   string
+	Notices []Notice
+	Detail  WorkloadDetail
+}
+
+// WorkloadDetail is a provider's body of a report: its JSON for a machine, its table for a reader.
+type WorkloadDetail interface {
+	json.Marshaler
+	// Table lists the workload's members as a text status prints them; no rows when nothing is there.
+	Table() Table
+}
+
+// Table is rows of text under their column names.
+type Table struct {
+	Columns []string
+	Rows    [][]string
+}
+
+// DeploymentStatus is the build a workload carries, as its stamp spells it, and whether the store
+// still holds its savepoint.
 type DeploymentStatus struct {
-	Source     DeploymentSource `json:"source"`
-	DeployedAt time.Time        `json:"deployed_at,omitzero"`
+	DeployedAt time.Time `json:"deployed_at"`
 	// ArcaveProject is the arcave project whose store holds Session.
-	ArcaveProject ArcaveProjectName `json:"arcave_project,omitempty"`
+	ArcaveProject ArcaveProjectName `json:"arcave_project"`
 	// Session is the session the deployed savepoint was rolled back from.
-	Session   SessionRef               `json:"session,omitzero"`
-	Savepoint *DeployedSavepointStatus `json:"savepoint,omitempty"`
-	// Replaced counts the replicas the savepoint recorded that were recreated outside arcave since.
-	Replaced int `json:"replaced,omitempty"`
+	Session   SessionRef               `json:"session"`
+	Savepoint *DeployedSavepointStatus `json:"savepoint"`
 	// Record says whether that session still holds the savepoint; empty when the store was not
 	// read for it.
 	Record DeploymentRecordState `json:"record,omitempty"`
 }
 
-// DeployedSavepointStatus is the savepoint a deployment was built from: what its labels say, and
+// DeployedSavepointStatus is the savepoint a deployment was built from: what its stamp says, and
 // what its record adds while the store holds it.
 type DeployedSavepointStatus struct {
 	DeployedSavepoint
-	// Description and Restored are the record's; empty when it was not found.
-	Description string          `json:"description,omitempty"`
-	Restored    *RestoredCounts `json:"restored,omitempty"`
-}
-
-// RestoredCounts counts the volumes and the writable layers a savepoint's record restores.
-type RestoredCounts struct {
-	Volumes        int `json:"volumes"`
-	WritableLayers int `json:"writable_layers"`
-}
-
-// ServiceStatus is one service: the deployed savepoint's, the daemon's, or both.
-type ServiceStatus struct {
-	Name string `json:"name"`
-	// State is its replicas' worst; completed only when every replica is.
-	State ReplicaState `json:"state"`
-	// Health is its replicas' worst healthcheck; empty when none runs one.
-	Health ReplicaHealth `json:"health,omitempty"`
-	// ReplicasExpected counts the replicas the deployed savepoint recorded; 0 with none deployed.
-	ReplicasExpected int `json:"replicas_expected,omitempty"`
-	// ReplicasUp counts the replicas running, or completed for a job.
-	ReplicasUp int             `json:"replicas_up"`
-	Replicas   []ReplicaStatus `json:"replicas"`
-}
-
-// ReplicaStatus is one replica, a container the daemon holds or one the deployment misses.
-type ReplicaStatus struct {
-	Number       int           `json:"number"`
-	Container    string        `json:"container,omitempty"`
-	ContainerID  string        `json:"container_id,omitempty"`
-	State        ReplicaState  `json:"state"`
-	Health       ReplicaHealth `json:"health,omitempty"`
-	ExitCode     int           `json:"exit_code"`
-	OOMKilled    bool          `json:"oom_killed"`
-	RestartCount int           `json:"restart_count"`
-	// FailingChecks is the healthcheck's failing streak.
-	FailingChecks int        `json:"failing_checks,omitempty"`
-	CreatedAt     *time.Time `json:"created_at,omitempty"`
-	StartedAt     *time.Time `json:"started_at,omitempty"`
-	FinishedAt    *time.Time `json:"finished_at,omitempty"`
-	// Replaces is the container compose recreated this one over.
-	Replaces string `json:"replaces,omitempty"`
-	// InDeployment marks a container the deployment built; InSavepoint a replica the deployed
-	// savepoint recorded. In the savepoint alone: recreated outside arcave; in neither: added since.
-	InDeployment bool            `json:"in_deployment"`
-	InSavepoint  bool            `json:"in_savepoint"`
-	Ports        []PublishedPort `json:"ports,omitempty"`
-}
-
-// PublishedPort is one port a replica publishes on the host.
-type PublishedPort struct {
-	ContainerPort int    `json:"container_port"`
-	Protocol      string `json:"protocol"`
-	// HostIP is empty when the daemon reported none.
-	HostIP   string `json:"host_ip,omitempty"`
-	HostPort int    `json:"host_port"`
+	// Description is the record's; empty when it was not found.
+	Description string `json:"description,omitempty"`
 }
 
 // RollbackInFlight is a compose project's inflight marker as a status reports it.

@@ -219,8 +219,8 @@ func newRollbackResult(
 ) model.RollbackResult {
 	return model.RollbackResult{
 		RolledBackTo:    savepoint,
-		Restored:        prepared.Volumes,
-		WritableLayers:  prepared.WritableLayers,
+		Restored:        prepared.Restored,
+		Detail:          prepared.Detail,
 		SafetySnapshot:  safetySnapshot,
 		LeftoverVolumes: leftover,
 	}

@@ -16,6 +16,10 @@ package model
 
 import (
 	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 var (
@@ -34,4 +38,57 @@ var (
 	ErrInvalidCapturePolicy = errors.New("invalid capture policy label")
 	// ErrContainerNotRunning reports an exec into a container stopped, frozen or gone.
 	ErrContainerNotRunning = errors.New("container is not running")
+
+	// ErrInvalidDigestID reports a string that is not a content digest — a tag, a
+	// truncated id, anything the daemon would resolve by name. ParseImageDigestID wraps
+	// it with the offending value.
+	ErrInvalidDigestID = errors.New("invalid image digest id")
+
+	// ErrLeftoverVolumes refuses a rollback into a compose project that is not running
+	// but still owns volumes the rollback would overwrite.
+	ErrLeftoverVolumes = errors.New("compose project is not running but its volumes survive")
+
+	// ErrUnsupportedDaemon reports a Docker daemon older than arcave supports.
+	ErrUnsupportedDaemon = errors.New("unsupported docker daemon")
 )
+
+// NotDeployedByArcaveError is what a down cannot put down to a rollback: the replicas with no or
+// unreadable deployment labels, as <service>-<number>, or, with no replica left, the containers,
+// volumes and networks of the compose project. It is model.ErrNotDeployedByArcave.
+type NotDeployedByArcaveError struct {
+	Replicas   []string
+	Containers []string
+	Volumes    []string
+	Networks   []string
+}
+
+func (m *NotDeployedByArcaveError) Error() string {
+	if len(m.Replicas) > 0 {
+		return fmt.Sprintf("%v: no deployment labels on %s", model.ErrNotDeployedByArcave, strings.Join(m.Replicas, ", "))
+	}
+	return fmt.Sprintf("%v: no replica is left to name the owner of %s", model.ErrNotDeployedByArcave,
+		model.FormatResources(m.Containers, m.Volumes, m.Networks))
+}
+
+func (m *NotDeployedByArcaveError) Unwrap() error { return model.ErrNotDeployedByArcave }
+
+// ComposeProjectLeftError is what a drop of a compose project could not remove: containers, and
+// volumes something outside the compose project still holds. Cause is the daemon's refusals of
+// those volumes, nil when nothing said why. It is model.ErrComposeProjectLeft.
+type ComposeProjectLeftError struct {
+	Containers []string
+	Volumes    []string
+	Cause      error
+}
+
+func (m *ComposeProjectLeftError) Error() string {
+	msg := fmt.Sprintf("%v: %s", model.ErrComposeProjectLeft, model.FormatResources(m.Containers, m.Volumes, nil))
+	if m.Cause != nil {
+		msg += ": " + m.Cause.Error()
+	}
+	return msg
+}
+
+func (m *ComposeProjectLeftError) Unwrap() []error {
+	return []error{model.ErrComposeProjectLeft, m.Cause}
+}

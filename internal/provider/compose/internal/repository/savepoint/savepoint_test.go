@@ -16,6 +16,7 @@ package savepoint
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -23,6 +24,8 @@ import (
 	"time"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
 	"github.com/stretchr/testify/assert"
@@ -63,27 +66,31 @@ func newStore(t *testing.T) (storages.Storager, string) {
 // record is a savepoint with one captured volume, for the id given. The stat's
 // payload is nil: a typed one would not survive the round trip (it decodes back
 // as a map), which is why nothing outside its own backend reads one.
-func record(id model.SavepointID) model.Savepoint {
-	return model.Savepoint{
-		ID:        id,
-		Name:      "before-migration",
-		CreatedAt: time.Date(2026, 6, 1, 19, 41, 12, 0, time.UTC),
-		Stats: []model.SnapshotStat{{
-			Type:        model.SnapshotBackendFullCopy,
-			SizeBytes:   10485760,
-			StoredBytes: 1048576,
-			Volume: model.Volume{
-				ObjectID: "volume-named-myapp_pgdata",
-				Type:     model.VolumeTypeNamed,
-				Backend:  model.SnapshotBackendFullCopy,
-				Named: &model.VolumePropertiesNamed{
-					VolumeName: "myapp_pgdata",
-					UsedBy: []model.ServiceReference{
-						{Service: "db", Target: "/var/lib/postgresql/data"},
+func record(id model.SavepointID) composemodel.Savepoint {
+	return composemodel.Savepoint{
+		Header: model.Savepoint{
+			ID:        id,
+			Name:      "before-migration",
+			CreatedAt: time.Date(2026, 6, 1, 19, 41, 12, 0, time.UTC),
+		},
+		Detail: composemodel.SavepointDetail{
+			Stats: []composemodel.SnapshotStat{{
+				Type:        composeconfig.SnapshotBackendFullCopy,
+				SizeBytes:   10485760,
+				StoredBytes: 1048576,
+				Volume: composemodel.Volume{
+					ObjectID: "volume-named-myapp_pgdata",
+					Type:     composemodel.VolumeTypeNamed,
+					Backend:  composeconfig.SnapshotBackendFullCopy,
+					Named: &composemodel.VolumePropertiesNamed{
+						VolumeName: "myapp_pgdata",
+						UsedBy: []composemodel.ServiceReference{
+							{Service: "db", Target: "/var/lib/postgresql/data"},
+						},
 					},
 				},
-			},
-		}},
+			}},
+		},
 	}
 }
 
@@ -112,8 +119,16 @@ func TestRepository_Save(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, want, got[0], "the record must survive a save/list round trip")
 
-	// The record is the reserved key at the root of the savepoint's own namespace.
-	assert.FileExists(t, filepath.Join(root, "019e843e-1650-7000-8000-000000000000", "savepoint.json"))
+	// The record is the reserved key at the root of the savepoint's own namespace: the header, the
+	// provider and the body, and no summary.
+	data, err := os.ReadFile(filepath.Join(root, "019e843e-1650-7000-8000-000000000000", "savepoint.json"))
+	require.NoError(t, err)
+	var onDisk map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &onDisk))
+	assert.JSONEq(t, `"compose"`, string(onDisk["provider"]))
+	assert.Contains(t, onDisk, "detail")
+	assert.NotContains(t, onDisk, "summary")
+	assert.NotContains(t, onDisk, "stats", "the body is under detail")
 }
 
 // An id that is not a Unix timestamp must never become a storage key: Save and
@@ -156,6 +171,7 @@ func TestRepository_List(t *testing.T) {
 		plant   func(t *testing.T, root string)
 		wantIDs []string
 		wantMsg string // substring List's error must carry
+		wantErr error
 	}{
 		{
 			name:    "an empty store lists nothing",
@@ -201,6 +217,22 @@ func TestRepository_List(t *testing.T) {
 			},
 			wantMsg: "load savepoint 019e844b-7818-7000-8000-000000000000: parse record",
 		},
+		{
+			name: "another provider's record is an error",
+			plant: func(t *testing.T, root string) {
+				writeObject(t, root, "019e844b-7818-7000-8000-000000000000/savepoint.json",
+					`{"id":"019e844b-7818-7000-8000-000000000000","provider":"kubernetes","detail":{}}`)
+			},
+			wantErr: composemodel.ErrSavepointDetail,
+		},
+		{
+			name: "an earlier version's record, naming no provider, is not read back",
+			plant: func(t *testing.T, root string) {
+				writeObject(t, root, "019e844b-7818-7000-8000-000000000000/savepoint.json",
+					`{"id":"019e844b-7818-7000-8000-000000000000","stats":[]}`)
+			},
+			wantErr: composemodel.ErrSavepointDetail,
+		},
 	}
 
 	for _, tt := range tests {
@@ -224,10 +256,14 @@ func TestRepository_List(t *testing.T) {
 				require.ErrorContains(t, err, tt.wantMsg)
 				return
 			}
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				return
+			}
 			require.NoError(t, err)
 			ids := make([]string, 0, len(got))
 			for _, r := range got {
-				ids = append(ids, r.ID.String())
+				ids = append(ids, r.Header.ID.String())
 			}
 			assert.Equal(t, tt.wantIDs, nilIfEmpty(ids))
 		})
@@ -265,7 +301,7 @@ func TestRepository_DeleteSavepoint_RealStore(t *testing.T) {
 	got, err := repo.ListSavepoints(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.Equal(t, model.SavepointID(neighbour), got[0].ID)
+	assert.Equal(t, model.SavepointID(neighbour), got[0].Header.ID)
 }
 
 // A savepoint already gone is no error.
@@ -481,7 +517,7 @@ func TestRepository_LoadSavepoints(t *testing.T) {
 	require.NoError(t, err)
 	ids := make([]string, 0, len(got))
 	for _, savepoint := range got {
-		ids = append(ids, savepoint.ID.String())
+		ids = append(ids, savepoint.Header.ID.String())
 	}
 	assert.Equal(t, []string{"019e843e-1650-7000-8000-000000000000", "019e844b-7818-7000-8000-000000000000"}, ids)
 }

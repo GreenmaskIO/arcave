@@ -21,12 +21,13 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"maps"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/format"
 	"github.com/compose-spec/compose-go/v2/types"
@@ -317,7 +318,7 @@ func (s *Reader) replicaMounts(
 				Msg("the first replica does not declare this mount; a rollback rebuilds the replica with the first replica's mounts")
 		}
 		for _, mount := range ownMounts {
-			if mount.Type == model.VolumeTypeAnon {
+			if mount.Type == composemodel.VolumeTypeAnon {
 				mounts = append(mounts, mount)
 			}
 		}
@@ -409,7 +410,7 @@ func (s *Reader) readServiceVolumes(
 			return nil, err
 		}
 		applyMountOptions(&mount, mountPoint, declared[mountPoint.Destination])
-		if mount.Type == model.VolumeTypeAnon {
+		if mount.Type == composemodel.VolumeTypeAnon {
 			mount.Replica = replicaNumber(replica.Labels)
 		}
 		mounts = append(mounts, mount)
@@ -430,7 +431,7 @@ func undeclaredMounts(first, own []composemodel.ServiceVolume) []composemodel.Se
 		if at >= 0 && first[at].Type == mount.Type {
 			continue // declared alike
 		}
-		if at < 0 && mount.Type == model.VolumeTypeAnon {
+		if at < 0 && mount.Type == composemodel.VolumeTypeAnon {
 			continue // captured, and the replica's own layer declares it back
 		}
 		undeclared = append(undeclared, mount)
@@ -457,28 +458,28 @@ func (s *Reader) readServiceVolume(
 		serviceVolume.VolumeName = mountPoint.Name
 		switch {
 		case s.owns(dockerVolume):
-			serviceVolume.Type = model.VolumeTypeNamed
+			serviceVolume.Type = composemodel.VolumeTypeNamed
 			serviceVolume.Source = dockerVolume.Labels[api.VolumeLabel]
 		case isAnonymous(dockerVolume):
-			serviceVolume.Type = model.VolumeTypeAnon
+			serviceVolume.Type = composemodel.VolumeTypeAnon
 		default:
 			// External: compose never labelled it, so its compose key is unrecoverable here.
-			serviceVolume.Type = model.VolumeTypeNamed
+			serviceVolume.Type = composemodel.VolumeTypeNamed
 			serviceVolume.Source = mountPoint.Name
 		}
 	case mount.TypeBind:
-		serviceVolume.Type = model.VolumeTypeBind
+		serviceVolume.Type = composemodel.VolumeTypeBind
 		serviceVolume.Source = mountPoint.Source
 	case mount.TypeTmpfs:
-		serviceVolume.Type = model.VolumeTypeTmpfs
+		serviceVolume.Type = composemodel.VolumeTypeTmpfs
 	case mount.TypeNamedPipe:
-		serviceVolume.Type = model.VolumeTypeNPipe
+		serviceVolume.Type = composemodel.VolumeTypeNPipe
 	case mount.TypeCluster:
-		serviceVolume.Type = model.VolumeTypeCluster
+		serviceVolume.Type = composemodel.VolumeTypeCluster
 	case mount.TypeImage:
-		serviceVolume.Type = model.VolumeTypeImage
+		serviceVolume.Type = composemodel.VolumeTypeImage
 	default:
-		serviceVolume.Type = model.VolumeTypeUnknown
+		serviceVolume.Type = composemodel.VolumeTypeUnknown
 	}
 	return serviceVolume, nil
 }
@@ -526,21 +527,21 @@ func newDeclaredMounts(inspect container.InspectResponse) map[string]declaredMou
 // applyMountOptions fills mount's per-type options and source from the declared mount.
 func applyMountOptions(mount *composemodel.ServiceVolume, mountPoint container.MountPoint, declared declaredMount) {
 	switch mount.Type {
-	case model.VolumeTypeNamed, model.VolumeTypeAnon:
+	case composemodel.VolumeTypeNamed, composemodel.VolumeTypeAnon:
 		mount.Volume = newVolumeOptions(declared)
-	case model.VolumeTypeBind:
+	case composemodel.VolumeTypeBind:
 		if declared.source != "" {
 			mount.Source = declared.source
 		}
 		mount.Bind = newBindOptions(mountPoint, declared)
-	case model.VolumeTypeTmpfs:
+	case composemodel.VolumeTypeTmpfs:
 		if declared.mountRequest != nil && declared.mountRequest.TmpfsOptions != nil {
 			mount.Tmpfs = &composemodel.TmpfsMount{
 				SizeBytes: declared.mountRequest.TmpfsOptions.SizeBytes,
 				Mode:      uint32(declared.mountRequest.TmpfsOptions.Mode),
 			}
 		}
-	case model.VolumeTypeImage:
+	case composemodel.VolumeTypeImage:
 		if declared.mountRequest != nil {
 			mount.Source = declared.mountRequest.Source
 			if declared.mountRequest.ImageOptions != nil {
@@ -651,17 +652,17 @@ func (s *Reader) readNetworks(ctx context.Context) ([]composemodel.Network, erro
 	return networks, nil
 }
 
-// readImages inspects each distinct image the containers run on, then the base readImages those name
-// by model.SystemLabelBaseImageID — the true base of a container a rollback rebuilt on an arcave tag.
+// readImages inspects each distinct image the containers run on, then the base images those name
+// by composemodel.SystemLabelBaseImageID — the true base of a container a rollback rebuilt on an arcave tag.
 func (s *Reader) readImages(
 	ctx context.Context, services []composemodel.Service,
-) (map[model.ImageDigestID]image.InspectResponse, error) {
+) (map[composemodel.ImageDigestID]image.InspectResponse, error) {
 	ids, err := containerImageIDs(services)
 	if err != nil {
 		return nil, err
 	}
 
-	images := make(map[model.ImageDigestID]image.InspectResponse, len(ids))
+	images := make(map[composemodel.ImageDigestID]image.InspectResponse, len(ids))
 	for _, id := range ids {
 		inspected, err := s.api.ImageInspect(ctx, id.String())
 		if err != nil {
@@ -681,11 +682,11 @@ func (s *Reader) readImages(
 }
 
 // containerImageIDs are the distinct ids of the images the containers run on, in discovery order.
-func containerImageIDs(services []composemodel.Service) ([]model.ImageDigestID, error) {
-	var ids []model.ImageDigestID
+func containerImageIDs(services []composemodel.Service) ([]composemodel.ImageDigestID, error) {
+	var ids []composemodel.ImageDigestID
 	for _, svc := range services {
 		for _, replica := range svc.Containers {
-			id, err := model.ParseImageDigestID(containerImage(replica.Inspect))
+			id, err := composemodel.ParseImageDigestID(containerImage(replica.Inspect))
 			if err != nil {
 				return nil, fmt.Errorf("image of container %s: %w", replica.ID, err)
 			}
@@ -707,7 +708,7 @@ func containerImage(inspect container.InspectResponse) string {
 // arcave committed on top of it. If the daemon no longer has that image (it was removed), it is
 // just not added to the index; that is not an error.
 func (s *Reader) baseImage(
-	ctx context.Context, id model.ImageDigestID, images map[model.ImageDigestID]image.InspectResponse,
+	ctx context.Context, id composemodel.ImageDigestID, images map[composemodel.ImageDigestID]image.InspectResponse,
 ) error {
 	base, ok := baseImageID(images[id])
 	if !ok {
@@ -727,13 +728,13 @@ func (s *Reader) baseImage(
 	return nil
 }
 
-// baseImageID is the id an image's model.SystemLabelBaseImageID names; false when it carries none
+// baseImageID is the id an image's composemodel.SystemLabelBaseImageID names; false when it carries none
 // or the value is no id.
-func baseImageID(inspect image.InspectResponse) (model.ImageDigestID, bool) {
+func baseImageID(inspect image.InspectResponse) (composemodel.ImageDigestID, bool) {
 	if inspect.Config == nil {
 		return "", false
 	}
-	id, err := model.ParseImageDigestID(inspect.Config.Labels[string(model.SystemLabelBaseImageID)])
+	id, err := composemodel.ParseImageDigestID(inspect.Config.Labels[string(composemodel.SystemLabelBaseImageID)])
 	if err != nil {
 		return "", false
 	}
@@ -822,7 +823,7 @@ func markInherited(services []composemodel.Service, referenced map[string]contai
 // mountingReplica is the replica a reported mount was read off: its own for an anonymous
 // volume, the first otherwise.
 func mountingReplica(svc composemodel.Service, mount composemodel.ServiceVolume) (composemodel.Container, bool) {
-	if mount.Type != model.VolumeTypeAnon {
+	if mount.Type != composemodel.VolumeTypeAnon {
 		if len(svc.Containers) == 0 {
 			return composemodel.Container{}, false
 		}
@@ -893,21 +894,21 @@ func (s *Reader) newNamedVolumes(services []composemodel.Service, volumeIndex ma
 
 // newVolumeUsers inverts the service->volume relation, keyed by docker name and sorted by
 // (service, target); an identical mount declared twice is one reference.
-func newVolumeUsers(services []composemodel.Service) map[string][]model.ServiceReference {
-	users := map[string][]model.ServiceReference{}
+func newVolumeUsers(services []composemodel.Service) map[string][]composemodel.ServiceReference {
+	users := map[string][]composemodel.ServiceReference{}
 	for _, svc := range services {
 		for _, mount := range svc.Volumes {
-			if mount.Type != model.VolumeTypeNamed {
+			if mount.Type != composemodel.VolumeTypeNamed {
 				continue
 			}
-			ref := model.ServiceReference{Service: svc.Name, Target: mount.Target, ReadOnly: mount.ReadOnly}
+			ref := composemodel.ServiceReference{Service: svc.Name, Target: mount.Target, ReadOnly: mount.ReadOnly}
 			if !slices.Contains(users[mount.VolumeName], ref) {
 				users[mount.VolumeName] = append(users[mount.VolumeName], ref)
 			}
 		}
 	}
 	for _, refs := range users {
-		slices.SortStableFunc(refs, func(a, b model.ServiceReference) int {
+		slices.SortStableFunc(refs, func(a, b composemodel.ServiceReference) int {
 			return strings.Compare(a.Service+"\x00"+a.Target, b.Service+"\x00"+b.Target)
 		})
 	}

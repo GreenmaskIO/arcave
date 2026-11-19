@@ -18,9 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"strings"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/greenmaskio/storages"
 	"github.com/stretchr/testify/assert"
@@ -37,8 +38,8 @@ func TestTreeEraser_Erase(t *testing.T) {
 		dead      = gctest.DeadSavepoint.String()
 		otherDead = gctest.OtherDeadSavepoint.String()
 		ops       = []model.GarbageOp{
-			{Action: model.GarbageActionDeleteTree, Target: dead, Bytes: utils.New(int64(5))},
-			{Action: model.GarbageActionDeleteTree, Target: otherDead, Bytes: utils.New(int64(2))},
+			{Action: composemodel.GarbageActionDeleteTree, Target: dead, Bytes: utils.New(int64(5))},
+			{Action: composemodel.GarbageActionDeleteTree, Target: otherDead, Bytes: utils.New(int64(2))},
 		}
 		bothDeleted = []model.GarbageDeleted{
 			{Target: dead, Bytes: utils.New(int64(5))}, {Target: otherDead, Bytes: utils.New(int64(2))},
@@ -112,8 +113,8 @@ func TestImageEraser_Erase(t *testing.T) {
 		image2 = "shared/oci/images/sha256/" + strings.Repeat("2", 64)
 		image3 = "shared/oci/images/sha256/" + strings.Repeat("3", 64)
 		ops    = []model.GarbageOp{
-			{Action: model.GarbageActionDeleteImage, Target: image2, Bytes: utils.New(int64(4))},
-			{Action: model.GarbageActionDeleteImage, Target: image3, Bytes: utils.New(int64(2))},
+			{Action: composemodel.GarbageActionDeleteImage, Target: image2, Bytes: utils.New(int64(4))},
+			{Action: composemodel.GarbageActionDeleteImage, Target: image3, Bytes: utils.New(int64(2))},
 		}
 		missing  = &storages.MissingObjectsError{Paths: []string{image3 + "/image.json"}}
 		denied   = errors.New("access denied")
@@ -203,8 +204,8 @@ func TestObjectEraser_Erase(t *testing.T) {
 		dead    = "shared/oci/blobs/sha256/" + gctest.DeadBlob
 		newDead = "shared/oci/blobs/sha256/" + gctest.NewBlob
 		ops     = []model.GarbageOp{
-			{Action: model.GarbageActionDeleteObject, Target: dead, Bytes: utils.New(int64(1))},
-			{Action: model.GarbageActionDeleteObject, Target: newDead, Bytes: utils.New(int64(1))},
+			{Action: composemodel.GarbageActionDeleteObject, Target: dead, Bytes: utils.New(int64(1))},
+			{Action: composemodel.GarbageActionDeleteObject, Target: newDead, Bytes: utils.New(int64(1))},
 		}
 		bothDeleted = []model.GarbageDeleted{
 			{Target: dead, Bytes: utils.New(int64(1))}, {Target: newDead, Bytes: utils.New(int64(1))},
@@ -278,8 +279,8 @@ func TestTagEraser_Erase(t *testing.T) {
 		otherRef = "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000001"
 	)
 	ops := []model.GarbageOp{
-		{Action: model.GarbageActionUntag, Target: ref},
-		{Action: model.GarbageActionUntag, Target: otherRef},
+		{Action: composemodel.GarbageActionUntag, Target: ref},
+		{Action: composemodel.GarbageActionUntag, Target: otherRef},
 	}
 
 	tests := []struct {

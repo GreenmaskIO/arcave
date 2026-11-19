@@ -82,7 +82,7 @@ func TestUpDown_TheEnvironmentCycle(t *testing.T) {
 	writeStorageConfig(t, projectRoot, config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: t.TempDir()},
-	}, composeconfig.SnapshotBackendFullCopy)
+	}, string(composeconfig.SnapshotBackendFullCopy))
 	run := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, projectRoot, nil, append([]string{"-p", env.project}, args...)...)
@@ -225,7 +225,7 @@ volumes:
 	writeStorageConfig(t, projectRoot, config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: t.TempDir()},
-	}, composeconfig.SnapshotBackendFullCopy)
+	}, string(composeconfig.SnapshotBackendFullCopy))
 	run := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, projectRoot, nil, append([]string{"-p", env.project}, args...)...)
@@ -287,7 +287,7 @@ func TestUpDown_VolumesSharingALogicalName(t *testing.T) {
 			writeStorageConfig(t, projectRoot, config.Storage{
 				Type:      config.StorageTypeDirectory,
 				Directory: &config.DirectoryStorage{Path: t.TempDir()},
-			}, composeconfig.SnapshotBackendFullCopy)
+			}, string(composeconfig.SnapshotBackendFullCopy))
 
 			// Act
 			runArcave(t, projectRoot, nil, "-p", env.project, "down", "--force")
@@ -418,7 +418,7 @@ func initDownProject(t *testing.T) string {
 	writeStorageConfig(t, projectRoot, config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: t.TempDir()},
-	}, composeconfig.SnapshotBackendFullCopy)
+	}, string(composeconfig.SnapshotBackendFullCopy))
 	return projectRoot
 }
 

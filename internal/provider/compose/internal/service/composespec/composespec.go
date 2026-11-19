@@ -30,7 +30,6 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
@@ -430,7 +429,7 @@ func userLabels(labels map[string]string) types.Labels {
 	for key, value := range labels {
 		if !strings.HasPrefix(key, composeLabelPrefix) && !strings.HasPrefix(key, desktopLabelPrefix) &&
 			// arcave's own labels: a committed layer's statement about its upstream, or a stamp.
-			!strings.HasPrefix(key, model.SystemLabelPrefix) {
+			!strings.HasPrefix(key, composemodel.SystemLabelPrefix) {
 			kept[key] = value
 		}
 	}

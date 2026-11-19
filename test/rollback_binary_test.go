@@ -71,13 +71,13 @@ func TestRollback_ThroughTheBuiltBinary(t *testing.T) {
 	writeStorageConfig(t, projectRoot, config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: t.TempDir()},
-	}, composeconfig.SnapshotBackendFullCopy)
+	}, string(composeconfig.SnapshotBackendFullCopy))
 	run := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, projectRoot, nil, append([]string{"-p", env.project}, args...)...)
 	}
 	savepoint := decode[model.Savepoint](t, run("savepoint", "create", "two-replicas"))
-	require.Len(t, savepoint.WritableLayers, 2, "one layer per replica, so the second has to be rebuilt")
+	require.Equal(t, 2, savepoint.Summary.Unit(model.UnitKindLayers).Count, "one layer per replica, so the second has to be rebuilt")
 	busybox(t, env.daemon, shared, "printf %s drifted > /data/app/marker && chown 0:0 /data/app/marker")
 
 	// Act

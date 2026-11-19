@@ -21,6 +21,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/sessionstore"
+	"github.com/rs/zerolog"
 )
 
 // liveWorkload is the compose project as one introspection found it.
@@ -38,7 +39,7 @@ func (l liveWorkload) Absent() bool {
 // opts.Restoring is read first, and one that cannot be read is no provider.CapturePolicyError.
 func (l liveWorkload) PlanCapture(ctx context.Context, opts provider.CaptureOptions) (provider.CapturePlan, error) {
 	var (
-		restoring *model.Savepoint
+		restoring *composemodel.Savepoint
 		plan      composemodel.Plan
 		err       error
 	)
@@ -70,11 +71,21 @@ func (l liveWorkload) PrepareSavepoint(
 			return nil, err
 		}
 	}
+	if opts.Recovering {
+		// What the project still owns is the interrupted rollback's partial writes, not volumes a
+		// `compose down` left: overwriting them is the recovery, and no leftover to name.
+		for _, name := range overwritten {
+			zerolog.Ctx(ctx).Info().Str("volume", name).
+				Msg("the compose project is not running but this volume survives; the rollback overwrites it, " +
+					"and no safety snapshot is taken")
+		}
+		overwritten = nil
+	}
 	target, err := l.service.preparer.Prepare(ctx, savepoint, opts.Deployment, overwritten)
 	if err != nil {
 		return nil, err
 	}
-	return preparedSavepoint{Target: target}, nil
+	return newPreparedSavepoint(target)
 }
 
 // Teardown resumes the replicas found frozen and runs `compose down` of prepared's project; over

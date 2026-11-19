@@ -29,24 +29,24 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // serviceLabelKeys are the labels a service may carry; volumeLabelKeys those a named
 // volume may.
 var (
-	serviceLabelKeys = []model.CaptureLabel{
-		model.CaptureLabelCapture, model.CaptureLabelVolumeBackend, model.CaptureLabelMountsExclude,
-		model.CaptureLabelMountsInclude, model.CaptureLabelMountsFullCopy, model.CaptureLabelMountsCDC,
-		model.CaptureLabelWritableLayerCapture, model.CaptureLabelWritableLayerBackend, model.CaptureLabelImageCapture,
-		model.CaptureLabelCaptureMode,
-		model.CaptureLabelHookPreCapture, model.CaptureLabelHookPreCaptureUser,
-		model.CaptureLabelHookPreCaptureTimeout, model.CaptureLabelHookPreCaptureOnError,
-		model.CaptureLabelHookPostCapture, model.CaptureLabelHookPostCaptureUser,
-		model.CaptureLabelHookPostCaptureTimeout, model.CaptureLabelHookPostCaptureOnError,
+	serviceLabelKeys = []composemodel.CaptureLabel{
+		composemodel.CaptureLabelCapture, composemodel.CaptureLabelVolumeBackend, composemodel.CaptureLabelMountsExclude,
+		composemodel.CaptureLabelMountsInclude, composemodel.CaptureLabelMountsFullCopy, composemodel.CaptureLabelMountsCDC,
+		composemodel.CaptureLabelWritableLayerCapture, composemodel.CaptureLabelWritableLayerBackend, composemodel.CaptureLabelImageCapture,
+		composemodel.CaptureLabelCaptureMode,
+		composemodel.CaptureLabelHookPreCapture, composemodel.CaptureLabelHookPreCaptureUser,
+		composemodel.CaptureLabelHookPreCaptureTimeout, composemodel.CaptureLabelHookPreCaptureOnError,
+		composemodel.CaptureLabelHookPostCapture, composemodel.CaptureLabelHookPostCaptureUser,
+		composemodel.CaptureLabelHookPostCaptureTimeout, composemodel.CaptureLabelHookPostCaptureOnError,
 	}
-	volumeLabelKeys = []model.CaptureLabel{model.CaptureLabelCapture, model.CaptureLabelBackend}
+	volumeLabelKeys = []composemodel.CaptureLabel{composemodel.CaptureLabelCapture, composemodel.CaptureLabelBackend}
 )
 
 // Why a hook's command label cannot be run.
@@ -59,13 +59,13 @@ var (
 // CaptureDefaults are what the config says of a resource no label names: its backend,
 // and whether its kind is captured.
 type CaptureDefaults struct {
-	VolumeBackend        model.SnapshotBackendKind
-	WritableLayerBackend model.ImageBackendKind
+	VolumeBackend        composeconfig.SnapshotBackendKind
+	WritableLayerBackend composeconfig.ImageBackendKind
 	// Mode holds a service no arcave.capture.mode label names.
-	Mode model.CaptureMode
+	Mode composeconfig.CaptureMode
 	// HookTimeout and HookOnError tune a hook whose labels leave them unset.
 	HookTimeout      time.Duration
-	HookOnError      model.HookOnError
+	HookOnError      composeconfig.HookOnError
 	SavepointCapture SavepointCaptureSettings
 }
 
@@ -85,14 +85,14 @@ type serviceLabels struct {
 	// rawLabels are the service's labels as set, for the sources that name them.
 	rawLabels            map[string]string
 	capture              *composemodel.CaptureDecision
-	volumeBackend        *model.SnapshotBackendKind
+	volumeBackend        *composeconfig.SnapshotBackendKind
 	excludedTargets      []string
 	includedTargets      []string
-	backendByTarget      map[string]model.SnapshotBackendKind
+	backendByTarget      map[string]composeconfig.SnapshotBackendKind
 	writableLayerCapture *composemodel.CaptureDecision
-	writableLayerBackend *model.ImageBackendKind
+	writableLayerBackend *composeconfig.ImageBackendKind
 	imageCapture         *composemodel.CaptureDecision
-	mode                 *model.CaptureMode
+	mode                 *composeconfig.CaptureMode
 	// preCapture and postCapture are the hooks as the labels set them, their defaults not applied.
 	preCapture  *composemodel.Hook
 	postCapture *composemodel.Hook
@@ -101,7 +101,7 @@ type serviceLabels struct {
 // volumeLabels is one named volume's arcave.* labels, parsed; a nil field is unset.
 type volumeLabels struct {
 	capture *composemodel.CaptureDecision
-	backend *model.SnapshotBackendKind
+	backend *composeconfig.SnapshotBackendKind
 }
 
 // Resolve decides every resource of the compose project from its labels and defaults, a bind or
@@ -197,24 +197,24 @@ func findImageLabels(introspection composemodel.IntrospectionResult, service com
 // anonymous volume, not inherited through volumes_from. A named volume is decided once
 // for every service mounting it.
 func isMountOwnedByService(mount composemodel.ServiceVolume) bool {
-	isOwnType := mount.Type == model.VolumeTypeBind || mount.Type == model.VolumeTypeAnon
+	isOwnType := mount.Type == composemodel.VolumeTypeBind || mount.Type == composemodel.VolumeTypeAnon
 	return isOwnType && mount.InheritedFrom == ""
 }
 
 // refuseAnonymousVolumeLabels refuses any arcave.* label on an anonymous volume's mount request.
 func refuseAnonymousVolumeLabels(mount composemodel.ServiceVolume, serviceName string) error {
-	if mount.Type != model.VolumeTypeAnon || mount.Volume == nil {
+	if mount.Type != composemodel.VolumeTypeAnon || mount.Volume == nil {
 		return nil
 	}
 	labels := mount.Volume.Labels
 	for _, key := range slices.Sorted(maps.Keys(labels)) {
-		if !strings.HasPrefix(key, model.CaptureLabelPrefix) {
+		if !strings.HasPrefix(key, composemodel.CaptureLabelPrefix) {
 			continue
 		}
 		return newInvalidLabelError("the anonymous volume at "+mount.Target+" of service "+serviceName,
-			model.CaptureLabel(key), labels[key],
+			composemodel.CaptureLabel(key), labels[key],
 			fmt.Sprintf("not a label arcave reads here; name the target in the service's %smounts.* lists",
-				model.CaptureLabelPrefix))
+				composemodel.CaptureLabelPrefix))
 	}
 	return nil
 }
@@ -232,61 +232,61 @@ func parseServiceLabels(
 		return serviceLabels{}, err
 	}
 
-	labels := serviceLabels{name: service.Name, rawLabels: raw, backendByTarget: map[string]model.SnapshotBackendKind{}}
+	labels := serviceLabels{name: service.Name, rawLabels: raw, backendByTarget: map[string]composeconfig.SnapshotBackendKind{}}
 	var err error
-	if labels.capture, err = parseCaptureLabel(raw, model.CaptureLabelCapture, where); err != nil {
+	if labels.capture, err = parseCaptureLabel(raw, composemodel.CaptureLabelCapture, where); err != nil {
 		return serviceLabels{}, err
 	}
-	if labels.writableLayerCapture, err = parseCaptureLabel(raw, model.CaptureLabelWritableLayerCapture, where); err != nil {
+	if labels.writableLayerCapture, err = parseCaptureLabel(raw, composemodel.CaptureLabelWritableLayerCapture, where); err != nil {
 		return serviceLabels{}, err
 	}
-	if labels.imageCapture, err = parseCaptureLabel(raw, model.CaptureLabelImageCapture, where); err != nil {
+	if labels.imageCapture, err = parseCaptureLabel(raw, composemodel.CaptureLabelImageCapture, where); err != nil {
 		return serviceLabels{}, err
 	}
-	if labels.volumeBackend, err = parseVolumeBackend(raw, model.CaptureLabelVolumeBackend, where); err != nil {
+	if labels.volumeBackend, err = parseVolumeBackend(raw, composemodel.CaptureLabelVolumeBackend, where); err != nil {
 		return serviceLabels{}, err
 	}
-	if value, ok := raw[string(model.CaptureLabelWritableLayerBackend)]; ok {
-		backend, ok := model.ParseImageBackend(value)
+	if value, ok := raw[string(composemodel.CaptureLabelWritableLayerBackend)]; ok {
+		backend, ok := composeconfig.ParseImageBackend(value)
 		if !ok {
 			return serviceLabels{}, newInvalidLabelError(
-				where, model.CaptureLabelWritableLayerBackend, value, "want dedupcopy or fullcopy")
+				where, composemodel.CaptureLabelWritableLayerBackend, value, "want dedupcopy or fullcopy")
 		}
 		labels.writableLayerBackend = &backend
 	}
-	if value, ok := raw[string(model.CaptureLabelCaptureMode)]; ok {
-		mode, ok := model.ParseCaptureMode(value)
+	if value, ok := raw[string(composemodel.CaptureLabelCaptureMode)]; ok {
+		mode, ok := composeconfig.ParseCaptureMode(value)
 		if !ok {
 			return serviceLabels{}, newInvalidLabelError(
-				where, model.CaptureLabelCaptureMode, value, "want stop, pause or live")
+				where, composemodel.CaptureLabelCaptureMode, value, "want stop, pause or live")
 		}
 		labels.mode = &mode
 	}
-	if labels.preCapture, err = parseHookLabels(raw, model.HookPhasePreCapture, where); err != nil {
+	if labels.preCapture, err = parseHookLabels(raw, composemodel.HookPhasePreCapture, where); err != nil {
 		return serviceLabels{}, err
 	}
-	if labels.postCapture, err = parseHookLabels(raw, model.HookPhasePostCapture, where); err != nil {
+	if labels.postCapture, err = parseHookLabels(raw, composemodel.HookPhasePostCapture, where); err != nil {
 		return serviceLabels{}, err
 	}
 
-	if labels.excludedTargets, err = parseTargets(service, raw, model.CaptureLabelMountsExclude); err != nil {
+	if labels.excludedTargets, err = parseTargets(service, raw, composemodel.CaptureLabelMountsExclude); err != nil {
 		return serviceLabels{}, err
 	}
-	if labels.includedTargets, err = parseTargets(service, raw, model.CaptureLabelMountsInclude); err != nil {
+	if labels.includedTargets, err = parseTargets(service, raw, composemodel.CaptureLabelMountsInclude); err != nil {
 		return serviceLabels{}, err
 	}
 	for _, target := range labels.includedTargets {
 		if slices.Contains(labels.excludedTargets, target) {
-			return serviceLabels{}, newInvalidLabelError(where, model.CaptureLabelMountsInclude, raw[string(model.CaptureLabelMountsInclude)],
-				fmt.Sprintf("target %s is also in %s", target, model.CaptureLabelMountsExclude))
+			return serviceLabels{}, newInvalidLabelError(where, composemodel.CaptureLabelMountsInclude, raw[string(composemodel.CaptureLabelMountsInclude)],
+				fmt.Sprintf("target %s is also in %s", target, composemodel.CaptureLabelMountsExclude))
 		}
 	}
 	for _, targetList := range []struct {
-		key     model.CaptureLabel
-		backend model.SnapshotBackendKind
+		key     composemodel.CaptureLabel
+		backend composeconfig.SnapshotBackendKind
 	}{
-		{model.CaptureLabelMountsFullCopy, model.SnapshotBackendFullCopy},
-		{model.CaptureLabelMountsCDC, model.SnapshotBackendCDC},
+		{composemodel.CaptureLabelMountsFullCopy, composeconfig.SnapshotBackendFullCopy},
+		{composemodel.CaptureLabelMountsCDC, composeconfig.SnapshotBackendCDC},
 	} {
 		targets, err := parseTargets(service, raw, targetList.key)
 		if err != nil {
@@ -296,7 +296,7 @@ func parseServiceLabels(
 			if _, taken := labels.backendByTarget[target]; taken {
 				return serviceLabels{}, newInvalidLabelError(where, targetList.key, raw[string(targetList.key)],
 					fmt.Sprintf("target %s is listed for both %s and %s",
-						target, model.CaptureLabelMountsFullCopy, model.CaptureLabelMountsCDC))
+						target, composemodel.CaptureLabelMountsFullCopy, composemodel.CaptureLabelMountsCDC))
 			}
 			labels.backendByTarget[target] = targetList.backend
 		}
@@ -334,7 +334,7 @@ func (sl serviceLabels) decideService(defaults CaptureDefaults) composemodel.Ser
 // the target lists, the service's defaults, the config.
 func (sl serviceLabels) decideMount(mount composemodel.ServiceVolume, defaults CaptureDefaults) composemodel.VolumeDecision {
 	configDecision := newConfigDecision(defaults.SavepointCapture.BindVolumes, "volumes.bind")
-	if mount.Type == model.VolumeTypeAnon {
+	if mount.Type == composemodel.VolumeTypeAnon {
 		configDecision = newConfigDecision(defaults.SavepointCapture.AnonymousVolumes, "volumes.anonymous")
 	}
 	capture, listed := sl.decideByTargetLists(mount.Target)
@@ -357,22 +357,22 @@ func (sl serviceLabels) decideMount(mount composemodel.ServiceVolume, defaults C
 func (sl serviceLabels) decideByTargetLists(target string) (composemodel.CaptureDecision, bool) {
 	switch {
 	case slices.Contains(sl.excludedTargets, target):
-		return newLabelDecision(false, sl.formatListSource(model.CaptureLabelMountsExclude)), true
+		return newLabelDecision(false, sl.formatListSource(composemodel.CaptureLabelMountsExclude)), true
 	case slices.Contains(sl.includedTargets, target):
-		return newLabelDecision(true, sl.formatListSource(model.CaptureLabelMountsInclude)), true
+		return newLabelDecision(true, sl.formatListSource(composemodel.CaptureLabelMountsInclude)), true
 	default:
 		return composemodel.CaptureDecision{}, false
 	}
 }
 
 // findListedBackend is the backend the target lists name for a target.
-func (sl serviceLabels) findListedBackend(target string) (model.SnapshotBackendKind, bool) {
+func (sl serviceLabels) findListedBackend(target string) (composeconfig.SnapshotBackendKind, bool) {
 	backend, ok := sl.backendByTarget[target]
 	return backend, ok
 }
 
 // formatListSource names a target list label of the service as a decision's source.
-func (sl serviceLabels) formatListSource(key model.CaptureLabel) string {
+func (sl serviceLabels) formatListSource(key composemodel.CaptureLabel) string {
 	return formatLabelSource(key, sl.rawLabels[string(key)], "service "+sl.name)
 }
 
@@ -441,10 +441,10 @@ func newDefaultNamedDecision(defaults CaptureDefaults) composemodel.VolumeDecisi
 // they name, which they must agree on.
 func decideNamedByTargetLists(
 	named composemodel.NamedVolume, services map[string]serviceLabels,
-) (*composemodel.CaptureDecision, *model.SnapshotBackendKind, error) {
+) (*composemodel.CaptureDecision, *composeconfig.SnapshotBackendKind, error) {
 	var (
 		capture       *composemodel.CaptureDecision
-		agreedBackend *model.SnapshotBackendKind
+		agreedBackend *composeconfig.SnapshotBackendKind
 		agreedBy      string
 	)
 	for _, ref := range named.UsedBy {
@@ -468,7 +468,7 @@ func decideNamedByTargetLists(
 // decideByServicesCapture is what the arcave.capture of the services mounting a volume
 // says of it: taken if any takes it, left out if all leave it out.
 func decideByServicesCapture(
-	refs []model.ServiceReference, services map[string]serviceLabels,
+	refs []composemodel.ServiceReference, services map[string]serviceLabels,
 ) (composemodel.CaptureDecision, bool) {
 	excluded := len(refs) > 0
 	for _, ref := range refs {
@@ -481,7 +481,7 @@ func decideByServicesCapture(
 		}
 	}
 	if excluded {
-		return newLabelDecision(false, formatLabelSource(model.CaptureLabelCapture, "false", "every service mounting it")), true
+		return newLabelDecision(false, formatLabelSource(composemodel.CaptureLabelCapture, "false", "every service mounting it")), true
 	}
 	return composemodel.CaptureDecision{}, false
 }
@@ -501,7 +501,7 @@ func newLabelDecision(capture bool, source string) composemodel.CaptureDecision 
 }
 
 // formatLabelSource is how every decision a label made names it: "<key>=<value> on <where>".
-func formatLabelSource(key model.CaptureLabel, value, where string) string {
+func formatLabelSource(key composemodel.CaptureLabel, value, where string) string {
 	return fmt.Sprintf("%s=%s on %s", key, value, where)
 }
 
@@ -510,11 +510,11 @@ func parseVolumeLabels(ctx context.Context, labels map[string]string, where stri
 	if err := refuseUnknownLabels(ctx, labels, volumeLabelKeys, nil, where); err != nil {
 		return volumeLabels{}, err
 	}
-	capture, err := parseCaptureLabel(labels, model.CaptureLabelCapture, where)
+	capture, err := parseCaptureLabel(labels, composemodel.CaptureLabelCapture, where)
 	if err != nil {
 		return volumeLabels{}, err
 	}
-	backend, err := parseVolumeBackend(labels, model.CaptureLabelBackend, where)
+	backend, err := parseVolumeBackend(labels, composemodel.CaptureLabelBackend, where)
 	if err != nil {
 		return volumeLabels{}, err
 	}
@@ -524,11 +524,11 @@ func parseVolumeLabels(ctx context.Context, labels map[string]string, where stri
 // refuseUnknownLabels refuses an arcave.* label not among allowed. One the image carries
 // with the same value is the image's, not the user's: it is skipped with a warning.
 func refuseUnknownLabels(
-	ctx context.Context, labels map[string]string, allowed []model.CaptureLabel, imageLabels map[string]string, where string,
+	ctx context.Context, labels map[string]string, allowed []composemodel.CaptureLabel, imageLabels map[string]string, where string,
 ) error {
 	// Sorted, so of several unknown keys the same one is named every run.
 	for _, key := range slices.Sorted(maps.Keys(labels)) {
-		if !strings.HasPrefix(key, model.CaptureLabelPrefix) || slices.Contains(allowed, model.CaptureLabel(key)) {
+		if !strings.HasPrefix(key, composemodel.CaptureLabelPrefix) || slices.Contains(allowed, composemodel.CaptureLabel(key)) {
 			continue
 		}
 		if value, ok := imageLabels[key]; ok && value == labels[key] {
@@ -536,14 +536,14 @@ func refuseUnknownLabels(
 				Msg("the image carries a label arcave does not read; it is ignored")
 			continue
 		}
-		return newInvalidLabelError(where, model.CaptureLabel(key), labels[key],
+		return newInvalidLabelError(where, composemodel.CaptureLabel(key), labels[key],
 			fmt.Sprintf("not a label arcave reads here; it reads %s", joinLabels(allowed)))
 	}
 	return nil
 }
 
 // joinLabels lists labels comma-separated, as an error names them.
-func joinLabels(labels []model.CaptureLabel) string {
+func joinLabels(labels []composemodel.CaptureLabel) string {
 	names := make([]string, 0, len(labels))
 	for _, label := range labels {
 		names = append(names, label.String())
@@ -552,7 +552,7 @@ func joinLabels(labels []model.CaptureLabel) string {
 }
 
 // parseCaptureLabel reads a "true"/"false" label into a decision naming it.
-func parseCaptureLabel(labels map[string]string, key model.CaptureLabel, where string) (*composemodel.CaptureDecision, error) {
+func parseCaptureLabel(labels map[string]string, key composemodel.CaptureLabel, where string) (*composemodel.CaptureDecision, error) {
 	value, ok := labels[string(key)]
 	if !ok {
 		return nil, nil
@@ -570,12 +570,12 @@ func parseCaptureLabel(labels map[string]string, key model.CaptureLabel, where s
 }
 
 // parseVolumeBackend reads a volume backend token label.
-func parseVolumeBackend(labels map[string]string, key model.CaptureLabel, where string) (*model.SnapshotBackendKind, error) {
+func parseVolumeBackend(labels map[string]string, key composemodel.CaptureLabel, where string) (*composeconfig.SnapshotBackendKind, error) {
 	value, ok := labels[string(key)]
 	if !ok {
 		return nil, nil
 	}
-	backend, ok := model.ParseVolumeBackend(value)
+	backend, ok := composeconfig.ParseVolumeBackend(value)
 	if !ok {
 		return nil, newInvalidLabelError(where, key, value, "want fullcopy or cdc")
 	}
@@ -583,7 +583,7 @@ func parseVolumeBackend(labels map[string]string, key model.CaptureLabel, where 
 }
 
 // parseTargets reads a comma-separated target list.
-func parseTargets(service composemodel.Service, labels map[string]string, key model.CaptureLabel) ([]string, error) {
+func parseTargets(service composemodel.Service, labels map[string]string, key composemodel.CaptureLabel) ([]string, error) {
 	value, ok := labels[string(key)]
 	if !ok {
 		return nil, nil
@@ -605,7 +605,7 @@ func parseTargets(service composemodel.Service, labels map[string]string, key mo
 
 // requireMountedTarget refuses a target that is not one of the service's binds,
 // anonymous volumes or named volume mounts.
-func requireMountedTarget(service composemodel.Service, key model.CaptureLabel, value, target string) error {
+func requireMountedTarget(service composemodel.Service, key composemodel.CaptureLabel, value, target string) error {
 	where := "service " + service.Name
 	volumeIdx := slices.IndexFunc(service.Volumes, func(mount composemodel.ServiceVolume) bool {
 		return mount.Target == target
@@ -613,13 +613,13 @@ func requireMountedTarget(service composemodel.Service, key model.CaptureLabel, 
 	switch {
 	case volumeIdx < 0:
 		return newInvalidLabelError(where, key, value, "the service mounts nothing at "+target)
-	case service.Volumes[volumeIdx].Type != model.VolumeTypeNamed && !isMountOwnedByService(service.Volumes[volumeIdx]):
+	case service.Volumes[volumeIdx].Type != composemodel.VolumeTypeNamed && !isMountOwnedByService(service.Volumes[volumeIdx]):
 		return newInvalidLabelError(where, key, value, target+" is not a volume or bind of the service's own")
 	}
 	return nil
 }
 
 // newInvalidLabelError is composemodel.ErrInvalidCapturePolicy naming the label and why.
-func newInvalidLabelError(where string, key model.CaptureLabel, value, why string) error {
+func newInvalidLabelError(where string, key composemodel.CaptureLabel, value, why string) error {
 	return fmt.Errorf("%w: %s=%q on %s: %s", composemodel.ErrInvalidCapturePolicy, key, value, where, why)
 }

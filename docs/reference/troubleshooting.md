@@ -296,7 +296,7 @@ If there is no `savepoint.json` there, nothing lists what is in it and nothing p
 
 | Error | What happened, what to do |
 |---|---|
-| `pre-capture hook of db-1 failed: exit 3: <its last line of stderr>` | The hook exited non-zero, so nothing was held or captured, and the `post-capture` hooks ran. The line quoted is the last of its stderr, else of its stdout; `--log-level debug` logs its command and the tail of both streams. Fix the hook, or set `arcave.hook.pre-capture.on-error: continue` — or run once with `ARCAVE_CAPTURE_HOOKS_ON_ERROR=continue`; the savepoint then lists the failure in `not_covered.failed_hooks`. |
+| `pre-capture hook of db-1 failed: exit 3: <its last line of stderr>` | The hook exited non-zero, so nothing was held or captured, and the `post-capture` hooks ran. The line quoted is the last of its stderr, else of its stdout; `--log-level debug` logs its command and the tail of both streams. Fix the hook, or set `arcave.hook.pre-capture.on-error: continue` — or run once with `ARCAVE_CAPTURE_HOOKS_ON_ERROR=continue`; the savepoint then lists the failure in `detail.not_covered.failed_hooks` and `summary.notices`. |
 | `pre-capture hook of db-1 failed: timed out after 1m0s` | It ran past its `.timeout` ([`capture.hooks.timeout`](configuration.md#capture), 60s). The process is not killed: it runs on in the container. Raise the timeout or make the hook shorter. |
 | `pre-capture hook of db-1 failed: exit 127: OCI runtime exec failed: …` | The command is not in the image (`127`), or not executable (`126`): the container's runtime could not start it. |
 | `pre-capture hook of db-1 failed: <the daemon's error>` | The daemon did not run it — a user that does not exist (`.user`). |
@@ -328,7 +328,7 @@ In-flight steps — `Waiting`, `Starting`, `Creating`, image-pull progress — a
 
 ## A database needs recovery after a rollback
 
-The grace period was probably too short when the savepoint was taken: arcave captures the volumes the moment the containers are down, so a container killed mid-shutdown is captured mid-shutdown — and that capture reported success, with a warning on stderr: `container <name> did not exit within <bound> and was killed`. The savepoint names it in `not_covered.killed_containers`.
+The grace period was probably too short when the savepoint was taken: arcave captures the volumes the moment the containers are down, so a container killed mid-shutdown is captured mid-shutdown — and that capture reported success, with a warning on stderr: `container <name> did not exit within <bound> and was killed`. The savepoint names it in `detail.not_covered.killed_containers` and, as a severe notice, in `summary.notices`.
 
 The bound is `compose.stop_timeout`, raised by the longest `stop_grace_period` a service declares. Declare what the database needs on the service itself, or raise the floor for every service:
 

@@ -29,23 +29,28 @@ import (
 
 // storedSavepoint is what a capture stored under its id, short of the record.
 type storedSavepoint struct {
-	stats          []model.SnapshotStat
-	images         []model.Image
-	writableLayers []model.WritableLayer
+	stats          []composemodel.SnapshotStat
+	images         []composemodel.Image
+	writableLayers []composemodel.WritableLayer
 }
 
 // capturedSavepoint is a capture stored and not committed: its record, written by Commit.
 type capturedSavepoint struct {
 	capturer  *Capturer
-	savepoint model.Savepoint
+	savepoint composemodel.Savepoint
 }
 
 // Commit writes the record, the last object; core names the savepoint in a failure.
 func (c capturedSavepoint) Commit(ctx context.Context) (model.Savepoint, error) {
+	// Summed up first: nothing may fail past the commit marker.
+	shared, err := composemodel.ToSharedSavepoint(c.savepoint)
+	if err != nil {
+		return model.Savepoint{}, err
+	}
 	if err := c.capturer.savepointRepo.SaveSavepoint(ctx, c.savepoint); err != nil {
 		return model.Savepoint{}, err
 	}
-	return c.savepoint, nil
+	return shared, nil
 }
 
 // Capture stores a savepoint of a project already held still under req.ID, short of its record;
@@ -74,18 +79,22 @@ func (s *Capturer) Capture(
 	}
 	return capturedSavepoint{
 		capturer: s,
-		savepoint: model.Savepoint{
-			ID:                    req.ID,
-			Name:                  req.Name,
-			Description:           req.Description,
-			Labels:                req.Labels,
-			CreatedAt:             createdAt,
-			TakenBeforeRollbackTo: req.TakenBefore,
-			Stats:                 stored.stats,
-			Images:                stored.images,
-			WritableLayers:        stored.writableLayers,
-			Spec:                  &model.SpecRef{Format: model.SpecFormatComposeYAML},
-			NotCovered:            notCovered,
+		savepoint: composemodel.Savepoint{
+			Header: model.Savepoint{
+				ID:                    req.ID,
+				Name:                  req.Name,
+				Description:           req.Description,
+				Labels:                req.Labels,
+				CreatedAt:             createdAt,
+				TakenBeforeRollbackTo: req.TakenBefore,
+			},
+			Detail: composemodel.SavepointDetail{
+				Stats:          stored.stats,
+				Images:         stored.images,
+				WritableLayers: stored.writableLayers,
+				Spec:           &composemodel.SpecRef{Format: composemodel.SpecFormatComposeYAML},
+				NotCovered:     notCovered,
+			},
 		},
 	}, nil
 }
@@ -96,9 +105,9 @@ func (s *Capturer) captureSavepoint(
 	ctx context.Context, id model.SavepointID, req provider.CaptureRequest, plan composemodel.Plan,
 ) (storedSavepoint, error) {
 	var (
-		stats          []model.SnapshotStat
-		images         []model.Image
-		writableLayers []model.WritableLayer
+		stats          []composemodel.SnapshotStat
+		images         []composemodel.Image
+		writableLayers []composemodel.WritableLayer
 		err            error
 	)
 	if stats, err = s.captureVolumes(ctx, id, req.Labels, plan.Volumes); err != nil {

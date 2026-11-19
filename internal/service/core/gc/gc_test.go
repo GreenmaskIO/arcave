@@ -31,23 +31,39 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
+// The provider's garbage vocabulary, as a fake provider spells it.
+const (
+	dataKindSavepointData       model.GarbageDataKind = "savepoint-data"
+	dataKindDeduplicatedVolumes model.GarbageDataKind = "deduplicated-volumes"
+	dataKindImageLayers         model.GarbageDataKind = "image-layers"
+	actionDeleteObject          model.GarbageAction   = "delete-object"
+	actionDeleteTree            model.GarbageAction   = "delete-tree"
+	reasonBackendUnreadable     model.GarbageReason   = "backend-unreadable"
+)
+
+// providerDataKinds are the data kinds the fake provider looks at.
+var providerDataKinds = []model.GarbageDataKind{dataKindSavepointData, dataKindDeduplicatedVolumes, dataKindImageLayers}
+
+// fakeGarbageStat is a provider's stat with nothing of its own beside the findings.
+type fakeGarbageStat struct{ model.GarbageFindings }
+
 var (
 	gcSession = mustParseSessionID("019e843e-1650-7000-8000-00000000000a")
 	// gcDeadSavepoint is a savepoint tree no record commits, whose capture is dead.
 	gcDeadSavepoint = model.SavepointID("019e843e-1650-7000-8000-000000000002")
 	// blobKinds asks for the image layers alone: no retention runs.
-	blobKinds = []model.GarbageDataKind{model.GarbageDataKindImageLayers}
+	blobKinds = []model.GarbageDataKind{dataKindImageLayers}
 
 	deadTreeOp = model.GarbageOp{
-		Action: model.GarbageActionDeleteTree, Target: gcDeadSavepoint.String(), Bytes: utils.New(int64(10)),
+		Action: actionDeleteTree, Target: gcDeadSavepoint.String(), Bytes: utils.New(int64(10)),
 		Savepoint: gcDeadSavepoint,
 	}
 	deadBlobOp = model.GarbageOp{
-		Action: model.GarbageActionDeleteObject, Target: "shared/oci/blobs/sha256/" + strings.Repeat("b", 64),
+		Action: actionDeleteObject, Target: "shared/oci/blobs/sha256/" + strings.Repeat("b", 64),
 		Bytes: utils.New(int64(3)),
 	}
-	deadTreeStat = model.GarbageStat(model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadTreeOp}}})
-	deadBlobStat = model.GarbageStat(model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadBlobOp}}})
+	deadTreeStat = model.GarbageStat(fakeGarbageStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadTreeOp}}})
+	deadBlobStat = model.GarbageStat(fakeGarbageStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadBlobOp}}})
 	notRunOne    = &model.GarbageDeletion{NotRun: 1}
 )
 
@@ -116,6 +132,9 @@ func newMockGarbage(report model.GarbageReport) *mockGarbage {
 // newFindingSession is a session finding found among dataKinds once.
 func newFindingSession(dataKinds []model.GarbageDataKind, found ...provider.Garbage) *mockSession {
 	session := &mockSession{}
+	if len(dataKinds) > 0 {
+		session.On("GarbageDataKinds").Return(providerDataKinds).Once()
+	}
 	session.On("FindGarbage", mock.Anything, dataKinds).Return(found).Once()
 	return session
 }
@@ -206,7 +225,7 @@ func TestGarbageCollector_GarbageCollect_LockLostMidway(t *testing.T) {
 			grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
 			sessions := &mockSessions{}
 			sessions.On("LoadSession", mock.Anything, gcSession).Return(model.Session{ID: gcSession}, true, nil).Once()
-			trees := newMockGarbage(newReport(model.GarbageDataKindSavepointData, "demo", deadTreeStat))
+			trees := newMockGarbage(newReport(dataKindSavepointData, "demo", deadTreeStat))
 			session := &mockSession{}
 			session.On("FindGarbage", mock.Anything, []model.GarbageDataKind(nil)).
 				Run(func(mock.Arguments) { loseLock(model.ErrSessionLockLost) }).
@@ -297,17 +316,32 @@ func TestGarbageCollector_GarbageCollect_SessionRemovedBeforeTheLock(t *testing.
 
 // A request refused for what it asks stops before the lock.
 func TestGarbageCollector_GarbageCollect_InvalidRequest(t *testing.T) {
-	// Arrange
-	locker := &mockLocker{}
-	svc := New(newDeps(model.DefaultSession, &mockSessions{}, &mockSession{}, locker))
-	req := model.GarbageCollectRequest{DryRun: true, DataKinds: []model.GarbageDataKind{"restic"}}
+	tests := []struct {
+		name      string
+		dataKinds []model.GarbageDataKind
+	}{
+		{name: "a kind no one looks at", dataKinds: []model.GarbageDataKind{"restic"}},
+		{name: "a known kind beside an unknown", dataKinds: []model.GarbageDataKind{dataKindImageLayers, "restic"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			locker := &mockLocker{}
+			session := &mockSession{}
+			session.On("GarbageDataKinds").Return([]model.GarbageDataKind{dataKindSavepointData, dataKindImageLayers}).Once()
+			svc := New(newDeps(model.DefaultSession, &mockSessions{}, session, locker))
+			req := model.GarbageCollectRequest{DryRun: true, DataKinds: tt.dataKinds}
 
-	// Act
-	_, err := svc.GarbageCollect(context.Background(), req)
+			// Act
+			_, err := svc.GarbageCollect(context.Background(), req)
 
-	// Assert
-	require.ErrorIs(t, err, model.ErrInvalidGarbageCollectRequest)
-	locker.AssertExpectations(t)
+			// Assert
+			require.ErrorIs(t, err, model.ErrInvalidGarbageCollectRequest)
+			assert.ErrorContains(t, err, `"restic"`)
+			locker.AssertExpectations(t)
+			session.AssertExpectations(t)
+		})
+	}
 }
 
 // The provider's reports come first, the retention's after them, each compose project's safety
@@ -319,11 +353,11 @@ func TestGarbageCollector_GarbageCollect(t *testing.T) {
 		newest   = model.SavepointID("019e843e-1650-7000-8000-00000000000c")
 		plain    = model.SavepointID("019e843e-1650-7000-8000-00000000000d")
 		safety   = map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue}
-		blobStat = model.GarbageStat(model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{
-			{Action: model.GarbageActionDeleteObject, Target: "shared/oci/blobs/sha256/y", Bytes: utils.New(int64(3)), Savepoint: gcDeadSavepoint},
+		blobStat = model.GarbageStat(fakeGarbageStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{
+			{Action: actionDeleteObject, Target: "shared/oci/blobs/sha256/y", Bytes: utils.New(int64(3)), Savepoint: gcDeadSavepoint},
 		}}})
-		trees = newMockGarbage(newReport(model.GarbageDataKindSavepointData, "demo", deadTreeStat))
-		blobs = newMockGarbage(newReport(model.GarbageDataKindImageLayers, "demo", blobStat))
+		trees = newMockGarbage(newReport(dataKindSavepointData, "demo", deadTreeStat))
+		blobs = newMockGarbage(newReport(dataKindImageLayers, "demo", blobStat))
 	)
 	demoSavepoints := &mockSavepoints{}
 	demoSavepoints.On("List", mock.Anything).Return([]model.Savepoint{
@@ -349,8 +383,8 @@ func TestGarbageCollector_GarbageCollect(t *testing.T) {
 		Retained: 1,
 	}
 	assert.Equal(t, []model.GarbageReport{
-		newReport(model.GarbageDataKindSavepointData, "demo", deadTreeStat),
-		newReport(model.GarbageDataKindImageLayers, "demo", blobStat),
+		newReport(dataKindSavepointData, "demo", deadTreeStat),
+		newReport(dataKindImageLayers, "demo", blobStat),
 		{
 			DataKind:       model.GarbageDataKindSafetySnapshots,
 			Collector:      model.GarbageCollectorKindSafetySnapshotRetention,
@@ -378,23 +412,23 @@ func TestGarbageCollector_GarbageCollect_Partial(t *testing.T) {
 	}{
 		{
 			name: "an unjudged object",
-			report: newReport(model.GarbageDataKindImageLayers, "demo", model.OCIBlobStat{GarbageFindings: model.GarbageFindings{
+			report: newReport(dataKindImageLayers, "demo", fakeGarbageStat{GarbageFindings: model.GarbageFindings{
 				Ops:      []model.GarbageOp{},
-				Unjudged: []model.GarbageSkip{{Target: "shared/oci/blobs/sha256/x", Reason: model.GarbageReasonBackendUnreadable}},
+				Unjudged: []model.GarbageSkip{{Target: "shared/oci/blobs/sha256/x", Reason: reasonBackendUnreadable}},
 			}}),
 			wantTotal: model.GarbageTotal{BytesComplete: true, Unjudged: 1},
 		},
 		{
 			name: "an aborted report",
 			report: model.GarbageReport{
-				DataKind: model.GarbageDataKindImageLayers, ComposeProject: "demo",
+				DataKind: dataKindImageLayers, ComposeProject: "demo",
 				Summary: model.GarbageSummary{Aborted: "cannot read the scope: corrupt record"},
 			},
 			wantTotal: model.GarbageTotal{Aborted: 1},
 		},
 		{
 			name:      "a failed report",
-			report:    model.GarbageReport{DataKind: model.GarbageDataKindImageLayers, ComposeProject: "demo", Error: "listing failed"},
+			report:    model.GarbageReport{DataKind: dataKindImageLayers, ComposeProject: "demo", Error: "listing failed"},
 			wantTotal: model.GarbageTotal{Failed: 1},
 		},
 	}
@@ -533,7 +567,7 @@ func TestGarbageCollector_GarbageCollect_Retention(t *testing.T) {
 func TestGarbageCollector_GarbageCollect_DryRunDeletesNothing(t *testing.T) {
 	// Arrange: no Delete or Remove is expected, so one would fail the mock.
 	safety := map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue}
-	trees := newMockGarbage(newReport(model.GarbageDataKindSavepointData, "demo", deadTreeStat))
+	trees := newMockGarbage(newReport(dataKindSavepointData, "demo", deadTreeStat))
 	demoSavepoints := &mockSavepoints{}
 	demoSavepoints.On("List", mock.Anything).Return([]model.Savepoint{
 		{ID: "019e843e-1650-7000-8000-00000000000b", Labels: safety},
@@ -571,8 +605,8 @@ func TestGarbageCollector_GarbageCollect_Deletes(t *testing.T) {
 		oldest = model.SavepointID("019e843e-1650-7000-8000-00000000000a")
 		newest = model.SavepointID("019e843e-1650-7000-8000-00000000000c")
 		safety = map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue}
-		trees  = newMockGarbage(newReport(model.GarbageDataKindSavepointData, "demo", deadTreeStat))
-		blobs  = newMockGarbage(newReport(model.GarbageDataKindImageLayers, "demo", deadBlobStat))
+		trees  = newMockGarbage(newReport(dataKindSavepointData, "demo", deadTreeStat))
+		blobs  = newMockGarbage(newReport(dataKindImageLayers, "demo", deadBlobStat))
 	)
 	grantedLock := &mockGrantedSessionLock{}
 	demoSavepoints := &mockSavepoints{}
@@ -623,9 +657,9 @@ func TestGarbageCollector_GarbageCollect_Deletes(t *testing.T) {
 // refusal stops the run beside what was deleted before it.
 func TestGarbageCollector_GarbageCollect_VerifyRefuses(t *testing.T) {
 	// Arrange: the last two findings expect no Delete, so one would fail the mock.
-	trees := newMockGarbage(newReport(model.GarbageDataKindSavepointData, "demo", deadTreeStat))
-	blobs := newMockGarbage(newReport(model.GarbageDataKindImageLayers, "demo", deadBlobStat))
-	otherBlobs := newMockGarbage(newReport(model.GarbageDataKindImageLayers, "other", deadBlobStat))
+	trees := newMockGarbage(newReport(dataKindSavepointData, "demo", deadTreeStat))
+	blobs := newMockGarbage(newReport(dataKindImageLayers, "demo", deadBlobStat))
+	otherBlobs := newMockGarbage(newReport(dataKindImageLayers, "other", deadBlobStat))
 	grantedLock := &mockGrantedSessionLock{}
 	session := newFindingSession(blobKinds, trees, blobs, otherBlobs)
 	mock.InOrder(
@@ -659,7 +693,7 @@ func TestGarbageCollector_GarbageCollect_VerifyRefuses(t *testing.T) {
 // A failed or aborted report deletes nothing, one with no ops verifies nothing, an unjudged object
 // holds no op back, and a failed or unstarted deletion makes the run partial.
 func TestGarbageCollector_GarbageCollect_DeletesAReport(t *testing.T) {
-	unknownSizeOp := model.GarbageOp{Action: model.GarbageActionDeleteObject, Target: deadBlobOp.Target}
+	unknownSizeOp := model.GarbageOp{Action: actionDeleteObject, Target: deadBlobOp.Target}
 
 	tests := []struct {
 		name   string
@@ -672,13 +706,13 @@ func TestGarbageCollector_GarbageCollect_DeletesAReport(t *testing.T) {
 	}{
 		{
 			name:        "a failed report",
-			report:      model.GarbageReport{DataKind: model.GarbageDataKindImageLayers, ComposeProject: "demo", Error: "listing failed"},
+			report:      model.GarbageReport{DataKind: dataKindImageLayers, ComposeProject: "demo", Error: "listing failed"},
 			wantTotal:   model.GarbageTotal{Failed: 1},
 			wantPartial: true,
 		},
 		{
 			name: "an aborted report",
-			report: newReport(model.GarbageDataKindImageLayers, "demo", model.OCIBlobStat{GarbageFindings: model.GarbageFindings{
+			report: newReport(dataKindImageLayers, "demo", fakeGarbageStat{GarbageFindings: model.GarbageFindings{
 				Ops: []model.GarbageOp{}, Aborted: "1 image manifests cannot be read",
 			}}),
 			wantTotal:   model.GarbageTotal{Aborted: 1},
@@ -686,7 +720,7 @@ func TestGarbageCollector_GarbageCollect_DeletesAReport(t *testing.T) {
 		},
 		{
 			name: "a report with an unjudged object",
-			report: newReport(model.GarbageDataKindImageLayers, "demo", model.OCIBlobStat{GarbageFindings: model.GarbageFindings{
+			report: newReport(dataKindImageLayers, "demo", fakeGarbageStat{GarbageFindings: model.GarbageFindings{
 				Ops: []model.GarbageOp{deadBlobOp}, Unjudged: []model.GarbageSkip{{Target: "shared/oci/blobs/sha256/x"}},
 			}}),
 			deletion:     utils.New(newDeletedOps(deadBlobOp)),
@@ -698,13 +732,13 @@ func TestGarbageCollector_GarbageCollect_DeletesAReport(t *testing.T) {
 		},
 		{
 			name:         "a report with no ops",
-			report:       newReport(model.GarbageDataKindImageLayers, "demo", model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}),
+			report:       newReport(dataKindImageLayers, "demo", fakeGarbageStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}),
 			wantDeletion: &model.GarbageDeletion{},
 			wantTotal:    model.GarbageTotal{BytesComplete: true, FreedBytes: utils.New(int64(0))},
 		},
 		{
 			name: "a deleted op of unknown size",
-			report: newReport(model.GarbageDataKindImageLayers, "demo", model.OCIBlobStat{GarbageFindings: model.GarbageFindings{
+			report: newReport(dataKindImageLayers, "demo", fakeGarbageStat{GarbageFindings: model.GarbageFindings{
 				Ops: []model.GarbageOp{unknownSizeOp},
 			}}),
 			deletion:     utils.New(newDeletedOps(unknownSizeOp)),
@@ -713,7 +747,7 @@ func TestGarbageCollector_GarbageCollect_DeletesAReport(t *testing.T) {
 		},
 		{
 			name:   "an op failed",
-			report: newReport(model.GarbageDataKindImageLayers, "demo", deadBlobStat),
+			report: newReport(dataKindImageLayers, "demo", deadBlobStat),
 			deletion: &model.GarbageDeletion{
 				Failed: []model.GarbageDeleteFailure{{Target: deadBlobOp.Target, Error: "access denied"}},
 			},
@@ -725,7 +759,7 @@ func TestGarbageCollector_GarbageCollect_DeletesAReport(t *testing.T) {
 		},
 		{
 			name:         "an op not run",
-			report:       newReport(model.GarbageDataKindImageLayers, "demo", deadBlobStat),
+			report:       newReport(dataKindImageLayers, "demo", deadBlobStat),
 			deletion:     notRunOne,
 			wantDeletion: notRunOne,
 			wantTotal:    model.GarbageTotal{Found: 1, Bytes: 3, BytesComplete: true, NotRun: 1, FreedBytes: utils.New(int64(0))},
@@ -775,7 +809,7 @@ func TestGarbageCollector_GarbageCollect_LockLostAfterTheLastDeletion(t *testing
 	// Arrange: the mock locker hands the caller's context back as the lock's.
 	ctx, loseLock := context.WithCancelCause(context.Background())
 	defer loseLock(nil)
-	trees := newMockGarbage(newReport(model.GarbageDataKindSavepointData, "demo", deadTreeStat))
+	trees := newMockGarbage(newReport(dataKindSavepointData, "demo", deadTreeStat))
 	grantedLock := &mockGrantedSessionLock{}
 	mock.InOrder(
 		grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
@@ -807,8 +841,8 @@ func TestGarbageCollector_GarbageCollect_LockLostWhileDeleting(t *testing.T) {
 	// Arrange: the mock locker hands the caller's context back as the lock's; blobs expects no Delete.
 	ctx, loseLock := context.WithCancelCause(context.Background())
 	defer loseLock(nil)
-	trees := newMockGarbage(newReport(model.GarbageDataKindSavepointData, "demo", deadTreeStat))
-	blobs := newMockGarbage(newReport(model.GarbageDataKindImageLayers, "demo", deadBlobStat))
+	trees := newMockGarbage(newReport(dataKindSavepointData, "demo", deadTreeStat))
+	blobs := newMockGarbage(newReport(dataKindImageLayers, "demo", deadBlobStat))
 	grantedLock := &mockGrantedSessionLock{}
 	mock.InOrder(
 		grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
@@ -862,7 +896,7 @@ func TestGarbageCollector_GarbageCollect_LockLostFailingTheLastDeletion(t *testi
 			ctx, loseLock := context.WithCancelCause(context.Background())
 			defer loseLock(nil)
 			failed := model.GarbageDeletion{Failed: []model.GarbageDeleteFailure{tt.failure}}
-			trees := newMockGarbage(newReport(model.GarbageDataKindSavepointData, "demo", deadTreeStat))
+			trees := newMockGarbage(newReport(dataKindSavepointData, "demo", deadTreeStat))
 			grantedLock := &mockGrantedSessionLock{}
 			mock.InOrder(
 				grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
@@ -991,12 +1025,12 @@ func TestLogGarbageFound(t *testing.T) {
 	ctx := zerolog.New(logs).WithContext(context.Background())
 	reports := []model.GarbageReport{
 		{
-			DataKind:       model.GarbageDataKindDeduplicatedVolumes,
+			DataKind:       dataKindDeduplicatedVolumes,
 			ComposeProject: "demo",
 			Summary:        model.GarbageSummary{Found: 2},
 		},
 		{
-			DataKind:       model.GarbageDataKindSavepointData,
+			DataKind:       dataKindSavepointData,
 			ComposeProject: "demo",
 			Summary:        model.GarbageSummary{Found: 1, Bytes: utils.New(int64(10))},
 		},
@@ -1038,6 +1072,7 @@ func TestGarbageCollector_GarbageCollect_InterruptedRollback(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange: a refused run finds nothing, so a finding would fail the mock.
 			session := &mockSession{}
+			session.On("GarbageDataKinds").Return(providerDataKinds).Once()
 			if !tt.wantRefused {
 				session = newFindingSession(blobKinds)
 			}

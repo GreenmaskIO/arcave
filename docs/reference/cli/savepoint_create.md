@@ -17,7 +17,7 @@ arcave savepoint create [name] [flags]
 
 The services are stopped for the capture and started again when it completes — that is what makes the result application-consistent. A service with [`arcave.capture.mode: pause`](../../capture_modes.md) is frozen instead, and one with `live` is left running. The sequence is [the savepoint flow](../../how_it_works.md#the-savepoint-flow); what ends up inside is [what a savepoint covers](../../how_it_works.md#what-a-savepoint-covers).
 
-Everything is captured by default. The `capture` section of the [config](../configuration.md) turns a kind off for the whole project, and `arcave.*` labels in the compose file leave out or include a service, a volume, a mount, a layer or an image — see [Capture labels](../capture_labels.md). What a savepoint does not hold is listed in its `not_covered`.
+Everything is captured by default. The `capture` section of the [config](../configuration.md) turns a kind off for the whole project, and `arcave.*` labels in the compose file leave out or include a service, a volume, a mount, a layer or an image — see [Capture labels](../capture_labels.md). What a savepoint does not hold is listed in its `detail.not_covered` and spelled out in `summary.notices`.
 
 ## Flags
 
@@ -43,7 +43,7 @@ A name is unique within the compose project and session: `savepoint create` refu
 
 ## Output
 
-On a terminal, the final tree of the steps on stderr and a summary of what was captured on stdout; in a script, or with `--format json`, the savepoint record as JSON on stdout. The summary's `size` is what the savepoint holds and `stored` what it added to the store; its `Warnings` spell out `not_covered` and any image not stored.
+On a terminal, the final tree of the steps on stderr and a summary of what was captured on stdout; in a script, or with `--format json`, the savepoint record as JSON on stdout. The summary's `size` is what the savepoint holds and `stored` what it added to the store; its `Warnings` spell out `summary.notices`: what `detail.not_covered` lists and any image not stored.
 
 <Tabs groupId="output">
 <TabItem value="terminal" label="Terminal" default>
@@ -76,77 +76,90 @@ Warnings (1)
   "name": "before-migration",
   "description": "before the v2 schema",
   "created_at": "2026-06-01T19:41:12.123456789Z",
-  "stats": [
-    {
-      "volume": {
-        "object_id": "volume-named-myapp_pgdata",
-        "compose_project": "myapp",
-        "type": "named",
-        "backend": "fullcopy",
-        "named": {
-          "volume_name": "myapp_pgdata",
-          "used_by": [
-            { "service": "db", "target": "/var/lib/postgresql/data" }
-          ]
-        }
+  "provider": "compose",
+  "summary": {
+    "units": [
+      { "kind": "volumes", "count": 1, "size_bytes": 40863232, "stored_bytes": 3919032 },
+      { "kind": "layers", "count": 2, "size_bytes": 163009508, "stored_bytes": 20590 },
+      { "kind": "images", "count": 2, "size_bytes": 671166325, "stored_bytes": 168795900 }
+    ],
+    "notices": [
+      { "message": "app has no volumes: only its writable layer is held" }
+    ]
+  },
+  "detail": {
+    "stats": [
+      {
+        "volume": {
+          "object_id": "volume-named-myapp_pgdata",
+          "compose_project": "myapp",
+          "type": "named",
+          "backend": "fullcopy",
+          "named": {
+            "volume_name": "myapp_pgdata",
+            "used_by": [
+              { "service": "db", "target": "/var/lib/postgresql/data" }
+            ]
+          }
+        },
+        "type": "fullcopy",
+        "size_bytes": 40863232,
+        "stored_bytes": 3919032,
+        "payload": { "compression": "zstd" }
+      }
+    ],
+    "writable_layers": [
+      {
+        "service": "app",
+        "replica": 1,
+        "container_id": "1886b4bf7a8a88a70845594686adddfd78aad8ce96a2ecab4e4468a4c98db8ca",
+        "container_name": "myapp-app-1",
+        "committed_image_id": "sha256:f68cd146c87c7e1e7606d02065a872eed3eafafa97ca55b8836c2785445b72da",
+        "imagebackend": "dedupcopy",
+        "upstream_image_id": "sha256:39c1995c80982badee967125886cce5097338509b7f56d05105e8ccbd3375ec5",
+        "upstream_image_ref": "myapp:latest",
+        "size_bytes": 4096126,
+        "stored_bytes": 3807
       },
-      "type": "fullcopy",
-      "size_bytes": 40863232,
-      "stored_bytes": 3919032,
-      "payload": { "compression": "zstd" }
+      {
+        "service": "db",
+        "replica": 1,
+        "container_id": "22c7d216e10d814dfaba822285cd82e0d59d118ba6c1a941e170a5c4a7f3fc1f",
+        "container_name": "myapp-db-1",
+        "committed_image_id": "sha256:6b3f960b737dff8f5ac90b9538610413cafe14be340f3635dc4cbb279ddc3035",
+        "imagebackend": "dedupcopy",
+        "upstream_image_id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
+        "upstream_image_ref": "postgres:16",
+        "size_bytes": 158913382,
+        "stored_bytes": 16783
+      }
+    ],
+    "images": [
+      {
+        "id": "sha256:39c1995c80982badee967125886cce5097338509b7f56d05105e8ccbd3375ec5",
+        "refs": ["myapp:latest"],
+        "repo_digests": [
+          "myapp@sha256:39c1995c80982badee967125886cce5097338509b7f56d05105e8ccbd3375ec5"
+        ],
+        "size_bytes": 13580222,
+        "stored_bytes": 4097189,
+        "stored": true
+      },
+      {
+        "id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
+        "refs": ["postgres:16"],
+        "repo_digests": [
+          "postgres@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54"
+        ],
+        "size_bytes": 657586103,
+        "stored_bytes": 164698711,
+        "stored": true
+      }
+    ],
+    "spec": { "format": "compose-yaml" },
+    "not_covered": {
+      "services_without_volumes": ["app"]
     }
-  ],
-  "writable_layers": [
-    {
-      "service": "app",
-      "replica": 1,
-      "container_id": "1886b4bf7a8a88a70845594686adddfd78aad8ce96a2ecab4e4468a4c98db8ca",
-      "container_name": "myapp-app-1",
-      "committed_image_id": "sha256:f68cd146c87c7e1e7606d02065a872eed3eafafa97ca55b8836c2785445b72da",
-      "imagebackend": "dedupcopy",
-      "upstream_image_id": "sha256:39c1995c80982badee967125886cce5097338509b7f56d05105e8ccbd3375ec5",
-      "upstream_image_ref": "myapp:latest",
-      "size_bytes": 4096126,
-      "stored_bytes": 3807
-    },
-    {
-      "service": "db",
-      "replica": 1,
-      "container_id": "22c7d216e10d814dfaba822285cd82e0d59d118ba6c1a941e170a5c4a7f3fc1f",
-      "container_name": "myapp-db-1",
-      "committed_image_id": "sha256:6b3f960b737dff8f5ac90b9538610413cafe14be340f3635dc4cbb279ddc3035",
-      "imagebackend": "dedupcopy",
-      "upstream_image_id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
-      "upstream_image_ref": "postgres:16",
-      "size_bytes": 158913382,
-      "stored_bytes": 16783
-    }
-  ],
-  "images": [
-    {
-      "id": "sha256:39c1995c80982badee967125886cce5097338509b7f56d05105e8ccbd3375ec5",
-      "refs": ["myapp:latest"],
-      "repo_digests": [
-        "myapp@sha256:39c1995c80982badee967125886cce5097338509b7f56d05105e8ccbd3375ec5"
-      ],
-      "size_bytes": 13580222,
-      "stored_bytes": 4097189,
-      "stored": true
-    },
-    {
-      "id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
-      "refs": ["postgres:16"],
-      "repo_digests": [
-        "postgres@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54"
-      ],
-      "size_bytes": 657586103,
-      "stored_bytes": 164698711,
-      "stored": true
-    }
-  ],
-  "spec": { "format": "compose-yaml" },
-  "not_covered": {
-    "services_without_volumes": ["app"]
   }
 }
 ```
@@ -159,14 +172,18 @@ Warnings (1)
 | `id` | A UUIDv7 in canonical form, assigned at capture. What `rollback` and `savepoint remove` take. |
 | `name`, `description` | What you passed, or empty strings. |
 | `created_at` | RFC3339Nano. |
-| `stats` | One entry per captured volume, keyed by `volume.object_id` — see [Storage layout](../storage_layout.md#object-ids). `volume.type` is `named`, `bind` or `anon`; `volume.backend` and `type` are `fullcopy` or `cdc`. `size_bytes` is the volume's size, `stored_bytes` what this capture added to the store; `payload` is the backend's own bookkeeping. |
-| `writable_layers` | One entry per container whose writable layer was committed. `imagebackend` is `dedupcopy` or `fullcopy`; `size_bytes` is the committed image's size, `stored_bytes` what it added to the store after deduplication. |
-| `images` | One entry per distinct image the services run on, stored once however many savepoints and replicas name it. `stored_bytes` is what this savepoint added, omitted when the image was already stored; `stored: false` means only its identity could be recorded. |
-| `spec` | The compose spec committed beside the record. `format` is always `compose-yaml`. |
-| `not_covered` | What the savepoint does not hold: skipped mounts with a reason code, services with no captured volume, containers killed at the stop deadline, replica gaps, unresolvable images, layers and images a label left out. Omitted when it holds everything. **Read it before relying on the savepoint.** |
+| `provider` | The provider that took the savepoint: `compose`. |
+| `summary.units` | What the savepoint holds by kind — `volumes`, then `layers` and `images` when it holds any — with `count`, `size_bytes` and `stored_bytes`: the summary's table. |
+| `summary.notices` | The summary's `Warnings`: what the capture left out and any image not stored, the severe first. **Read them before relying on the savepoint.** |
+| `detail` | The compose provider's own body, which arcave does not interpret; its fields follow. |
+| `detail.stats` | One entry per captured volume, keyed by `volume.object_id` — see [Storage layout](../storage_layout.md#object-ids). `volume.type` is `named`, `bind` or `anon`; `volume.backend` and `type` are `fullcopy` or `cdc`. `size_bytes` is the volume's size, `stored_bytes` what this capture added to the store; `payload` is the backend's own bookkeeping. |
+| `detail.writable_layers` | One entry per container whose writable layer was committed. `imagebackend` is `dedupcopy` or `fullcopy`; `size_bytes` is the committed image's size, `stored_bytes` what it added to the store after deduplication. |
+| `detail.images` | One entry per distinct image the services run on, stored once however many savepoints and replicas name it. `stored_bytes` is what this savepoint added, omitted when the image was already stored; `stored: false` means only its identity could be recorded. |
+| `detail.spec` | The compose spec committed beside the record. `format` is always `compose-yaml`. |
+| `detail.not_covered` | What the savepoint does not hold: skipped mounts with a reason code, services with no captured volume, containers killed at the stop deadline, replica gaps, unresolvable images, layers and images a label left out. Omitted when it holds everything; `summary.notices` spells each entry out. |
 | `labels` | Present only on a [safety snapshot](savepoint_list.md#safety-snapshots-are-hidden). |
 
-Each field is omitted when empty, except `id`, `name`, `description` and `created_at`.
+Each field is omitted when empty, except `id`, `name`, `description`, `created_at`, `provider` and `summary.units`.
 
 Full shapes for every command are in [Output](../output.md).
 

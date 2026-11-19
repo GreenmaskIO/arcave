@@ -32,7 +32,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 func TestMatchMount(t *testing.T) {
@@ -149,9 +149,9 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		volume  model.Volume
+		volume  composemodel.Volume
 		arrange func(api *mockAPI)
-		want    model.MountSource
+		want    composemodel.MountSource
 		wantErr string
 	}{
 		{
@@ -161,15 +161,15 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 				api.On("VolumeInspect", mock.Anything, "demo_pgdata", client.VolumeInspectOptions{}).
 					Return(volume.Volume{Name: "demo_pgdata"}, nil).Once()
 			},
-			want: model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
+			want: composemodel.MountSource{Type: composemodel.MountSourceVolume, Source: "demo_pgdata"},
 		},
 		{
 			name: "a bind is its host path, and the daemon is not asked at all",
-			volume: model.Volume{
-				ObjectID: "volume-service-app-etc-cfg", ComposeProject: "demo", Type: model.VolumeTypeBind,
-				Bind: &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg"},
+			volume: composemodel.Volume{
+				ObjectID: "volume-service-app-etc-cfg", ComposeProject: "demo", Type: composemodel.VolumeTypeBind,
+				Bind: &composemodel.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg"},
 			},
-			want: model.MountSource{Type: model.MountSourceBind, Source: "/host/cfg"},
+			want: composemodel.MountSource{Type: composemodel.MountSourceBind, Source: "/host/cfg"},
 		},
 		{
 			name:   "a named volume the daemon does not have is refused before anything creates it",
@@ -188,13 +188,13 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 					Return([]container.Summary{{ID: "pg-1", Labels: map[string]string{composeNumberLabel: "1"}, Mounts: []container.MountPoint{
 						{Type: mount.TypeVolume, Name: "9f2c0a", Destination: target}}}}, nil).Once()
 			},
-			want: model.MountSource{Type: model.MountSourceVolume, Source: "9f2c0a"},
+			want: composemodel.MountSource{Type: composemodel.MountSourceVolume, Source: "9f2c0a"},
 		},
 		{
 			name: "another replica's anonymous volume is looked up through that replica",
-			volume: model.Volume{
-				ObjectID: "volume-anon-worker-2-cache", ComposeProject: "demo", Type: model.VolumeTypeAnon,
-				Anon: &model.VolumePropertiesAnon{Service: "worker", Replica: 2, Target: "/cache"},
+			volume: composemodel.Volume{
+				ObjectID: "volume-anon-worker-2-cache", ComposeProject: "demo", Type: composemodel.VolumeTypeAnon,
+				Anon: &composemodel.VolumePropertiesAnon{Service: "worker", Replica: 2, Target: "/cache"},
 			},
 			arrange: func(api *mockAPI) {
 				api.On("ContainerList", mock.Anything, matchComposeLabels("demo", "worker")).
@@ -205,20 +205,20 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 							{Type: mount.TypeVolume, Name: "a2", Destination: "/cache"}}},
 					}, nil).Once()
 			},
-			want: model.MountSource{Type: model.MountSourceVolume, Source: "a2"},
+			want: composemodel.MountSource{Type: composemodel.MountSourceVolume, Source: "a2"},
 		},
 		{
 			name: "a bind whose source never resolved falls back to the same lookup",
-			volume: model.Volume{
-				ObjectID: "volume-service-app-etc-cfg", ComposeProject: "demo", Type: model.VolumeTypeBind,
-				Bind: &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "./cfg"},
+			volume: composemodel.Volume{
+				ObjectID: "volume-service-app-etc-cfg", ComposeProject: "demo", Type: composemodel.VolumeTypeBind,
+				Bind: &composemodel.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "./cfg"},
 			},
 			arrange: func(api *mockAPI) {
 				api.On("ContainerList", mock.Anything, matchComposeLabels("demo", "app")).
 					Return([]container.Summary{{ID: "app-1", Mounts: []container.MountPoint{
 						{Type: mount.TypeBind, Source: "/host/cfg", Destination: "/etc/cfg"}}}}, nil).Once()
 			},
-			want: model.MountSource{Type: model.MountSourceBind, Source: "/host/cfg"},
+			want: composemodel.MountSource{Type: composemodel.MountSourceBind, Source: "/host/cfg"},
 		},
 		{
 			name:   "an anonymous volume with no container left names the service it needed",
@@ -231,7 +231,7 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 		},
 		{
 			name:    "a volume carrying no way to reach its data",
-			volume:  model.Volume{ObjectID: "volume-named-broken", ComposeProject: "demo", Type: model.VolumeTypeNamed},
+			volume:  composemodel.Volume{ObjectID: "volume-named-broken", ComposeProject: "demo", Type: composemodel.VolumeTypeNamed},
 			wantErr: "no way to reach its data",
 		},
 	}
@@ -253,7 +253,7 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			// Assert
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
-				assert.Equal(t, model.MountSource{}, got)
+				assert.Equal(t, composemodel.MountSource{}, got)
 				api.AssertExpectations(t)
 				return
 			}
@@ -281,8 +281,8 @@ func TestEngine_OpenVolume(t *testing.T) {
 	e := &Engine{api: api}
 
 	// Act
-	rc, err := e.OpenVolume(context.Background(), model.MountSource{
-		Type: model.MountSourceVolume, Source: "demo_pgdata"})
+	rc, err := e.OpenVolume(context.Background(), composemodel.MountSource{
+		Type: composemodel.MountSourceVolume, Source: "demo_pgdata"})
 
 	// Assert
 	require.NoError(t, err)
@@ -326,7 +326,7 @@ func TestEngine_WriteVolume(t *testing.T) {
 
 	// Act
 	err := e.WriteVolume(context.Background(),
-		model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
+		composemodel.MountSource{Type: composemodel.MountSourceVolume, Source: "demo_pgdata"},
 		source)
 
 	// Assert
@@ -359,7 +359,7 @@ func TestEngine_WriteVolume_AFailedWipeWritesNothing(t *testing.T) {
 
 	// Act
 	err := e.WriteVolume(context.Background(),
-		model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
+		composemodel.MountSource{Type: composemodel.MountSourceVolume, Source: "demo_pgdata"},
 		strings.NewReader("payload"))
 
 	// Assert
@@ -372,23 +372,23 @@ func TestEngine_WriteVolume_AFailedWipeWritesNothing(t *testing.T) {
 func TestEngine_WipeVolume(t *testing.T) {
 	tests := []struct {
 		name      string
-		src       model.MountSource
+		src       composemodel.MountSource
 		wantBinds []string
 		wantErr   string
 	}{
 		{
 			name:      "a volume is cleared by its docker name",
-			src:       model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
+			src:       composemodel.MountSource{Type: composemodel.MountSourceVolume, Source: "demo_pgdata"},
 			wantBinds: []string{"demo_pgdata:" + wipeMountPath},
 		},
 		{
 			name:      "a bind is cleared by its host path",
-			src:       model.MountSource{Type: model.MountSourceBind, Source: "/host/data"},
+			src:       composemodel.MountSource{Type: composemodel.MountSourceBind, Source: "/host/data"},
 			wantBinds: []string{"/host/data:" + wipeMountPath},
 		},
 		{
 			name:    "an address with no source never reaches the daemon",
-			src:     model.MountSource{Type: model.MountSourceVolume},
+			src:     composemodel.MountSource{Type: composemodel.MountSourceVolume},
 			wantErr: "no source",
 		},
 	}
@@ -427,18 +427,18 @@ func TestMountAddress(t *testing.T) {
 	tests := []struct {
 		name    string
 		mnt     mountInfo
-		want    model.MountSource
+		want    composemodel.MountSource
 		wantErr string
 	}{
 		{
 			name: "a volume by its docker name",
 			mnt:  mountInfo{Type: "volume", Name: "demo_pgdata"},
-			want: model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
+			want: composemodel.MountSource{Type: composemodel.MountSourceVolume, Source: "demo_pgdata"},
 		},
 		{
 			name: "a bind by its host path",
 			mnt:  mountInfo{Type: "bind", Source: "/host/cfg"},
-			want: model.MountSource{Type: model.MountSourceBind, Source: "/host/cfg"},
+			want: composemodel.MountSource{Type: composemodel.MountSourceBind, Source: "/host/cfg"},
 		},
 		{name: "a type no container can bind", mnt: mountInfo{Type: "tmpfs"}, wantErr: "unsupported mount type"},
 		{name: "a volume with no name", mnt: mountInfo{Type: "volume"}, wantErr: "cannot resolve backing storage"},
@@ -452,7 +452,7 @@ func TestMountAddress(t *testing.T) {
 			// Assert
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
-				assert.Equal(t, model.MountSource{}, got)
+				assert.Equal(t, composemodel.MountSource{}, got)
 				return
 			}
 			require.NoError(t, err)
@@ -462,21 +462,21 @@ func TestMountAddress(t *testing.T) {
 }
 
 // namedVolume and anonVolume are the two arms these tests address a volume by.
-func namedVolume(dockerName string) model.Volume {
-	return model.Volume{
+func namedVolume(dockerName string) composemodel.Volume {
+	return composemodel.Volume{
 		ObjectID:       "volume-named-" + dockerName,
 		ComposeProject: "demo",
-		Type:           model.VolumeTypeNamed,
-		Named:          &model.VolumePropertiesNamed{VolumeName: dockerName},
+		Type:           composemodel.VolumeTypeNamed,
+		Named:          &composemodel.VolumePropertiesNamed{VolumeName: dockerName},
 	}
 }
 
-func anonVolume(service, target string) model.Volume {
-	return model.Volume{
+func anonVolume(service, target string) composemodel.Volume {
+	return composemodel.Volume{
 		ObjectID:       "volume-anon-" + service + "-1" + target,
 		ComposeProject: "demo",
-		Type:           model.VolumeTypeAnon,
-		Anon:           &model.VolumePropertiesAnon{Service: service, Replica: 1, Target: target},
+		Type:           composemodel.VolumeTypeAnon,
+		Anon:           &composemodel.VolumePropertiesAnon{Service: service, Replica: 1, Target: target},
 	}
 }
 

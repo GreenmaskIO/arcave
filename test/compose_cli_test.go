@@ -88,7 +88,7 @@ func TestRollback_KeepsComposeImageLabel(t *testing.T) {
 	require.NotEmpty(t, want, "compose labels the container with its image")
 	projectRoot := t.TempDir()
 	runArcave(t, projectRoot, nil, "init", "--name", project)
-	writeStorageConfig(t, projectRoot, startDirectoryStorage(t).file, composeconfig.SnapshotBackendFullCopy)
+	writeStorageConfig(t, projectRoot, startDirectoryStorage(t).file, string(composeconfig.SnapshotBackendFullCopy))
 	noLayers := []string{"ARCAVE_CAPTURE_WRITABLE_LAYERS=false"}
 	runArcave(t, projectRoot, noLayers, "-p", project, "savepoint", "create", "sp1")
 
@@ -117,7 +117,7 @@ func TestRollback_RecreatesOnlyARestoredVolume(t *testing.T) {
 	busybox(t, daemon, kept, "printf a > /data/marker")
 	projectRoot := t.TempDir()
 	runArcave(t, projectRoot, nil, "init", "--name", project)
-	writeStorageConfig(t, projectRoot, startDirectoryStorage(t).file, composeconfig.SnapshotBackendFullCopy)
+	writeStorageConfig(t, projectRoot, startDirectoryStorage(t).file, string(composeconfig.SnapshotBackendFullCopy))
 	runArcave(t, projectRoot, nil, "-p", project, "savepoint", "create", "sp1")
 	runComposeCLI(t, dir, project, "down")
 	writeComposeFile(t, dir, fmt.Sprintf(volumeDriftSpec, project, "b"))

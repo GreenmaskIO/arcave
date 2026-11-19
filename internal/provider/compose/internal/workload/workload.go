@@ -17,14 +17,16 @@ package workload
 
 import (
 	"context"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"time"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/storages"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/captureplan"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capturepolicy"
@@ -37,9 +39,9 @@ import (
 // by id.
 type savepointRepository interface {
 	SaveSpec(ctx context.Context, id model.SavepointID, spec []byte) error
-	SaveSavepoint(ctx context.Context, savepoint model.Savepoint) error
+	SaveSavepoint(ctx context.Context, savepoint composemodel.Savepoint) error
 	// LoadSavepoints returns the committed records of ids; one not found is left out.
-	LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error)
+	LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]composemodel.Savepoint, error)
 	LoadSpec(ctx context.Context, id model.SavepointID) ([]byte, error)
 }
 
@@ -65,9 +67,9 @@ type specCodec interface {
 // imageBackend commits writable layers into the store and keeps the images they were taken over,
 // and loads a layer back out of the store under a tag of its own.
 type imageBackend interface {
-	CaptureImage(ctx context.Context, req composemodel.ImageCaptureRequest) (model.Image, error)
-	CaptureWritableLayer(ctx context.Context, req composemodel.WritableLayerCaptureRequest) (model.WritableLayer, error)
-	RestoreWritableLayer(ctx context.Context, req composemodel.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error)
+	CaptureImage(ctx context.Context, req composemodel.ImageCaptureRequest) (composemodel.Image, error)
+	CaptureWritableLayer(ctx context.Context, req composemodel.WritableLayerCaptureRequest) (composemodel.WritableLayer, error)
+	RestoreWritableLayer(ctx context.Context, req composemodel.WritableLayerRestoreRequest) (composemodel.WritableLayerRestoreResult, error)
 }
 
 // composeRunner is the compose project's lifecycle: stop it for a capture and start it after, tear
@@ -141,7 +143,7 @@ type Deps struct {
 	ComposeReader composeIntrospector
 	ImageBackend  imageBackend
 	ComposeRunner composeRunner
-	// ContainerControl pauses the services captured with model.CaptureModePause, resumes a
+	// ContainerControl pauses the services captured with composeconfig.CaptureModePause, resumes a
 	// replica found frozen, and runs the hooks.
 	ContainerControl containerControl
 	VolumeRemover    volumeRemover
@@ -152,12 +154,12 @@ type Deps struct {
 	ImageLookup        imageLookup
 	ProjectAssembler   projectAssembler
 	SpecCodec          specCodec
-	BackendRegistry    model.SnapshotBackendRegistry
+	BackendRegistry    composemodel.SnapshotBackendRegistry
 	// CaptureDefaults are the backends a unit no arcave.* label names is captured by.
 	CaptureDefaults capturepolicy.CaptureDefaults
 	// LeftoverVolumes is what preparing a savepoint over an absent compose project does with a
-	// volume that outlived it and the build overwrites; empty is model.LeftoverVolumesOverwrite.
-	LeftoverVolumes model.LeftoverVolumesPolicy
+	// volume that outlived it and the build overwrites; empty is composeconfig.LeftoverVolumesOverwrite.
+	LeftoverVolumes composeconfig.LeftoverVolumesPolicy
 	// DaemonVersion is the version the engine reports; Inspect judges it.
 	DaemonVersion string
 	// MinDaemonMajor is the oldest major of that engine a workflow runs on; 0 requires none.
