@@ -19,7 +19,9 @@
 // The record is the commit marker. It is written last on create and deleted
 // first on remove, so the only states a reader can observe are "fully present"
 // and "gone". A savepoint whose data was written but whose record never was is
-// incomplete: ListSavepoints skips it, and it is safe to garbage-collect.
+// incomplete: ListSavepoints skips it, and it is safe to garbage-collect. So is one whose
+// record decodes but whose body this arcave cannot read — an earlier version's, another
+// provider's: it is skipped with a warning, never refused, and gc collects its tree.
 //
 // This replaces a single manifest.json holding every savepoint. Storager writes
 // are not atomic on purpose (see the directory backend), so a torn write to a
@@ -138,8 +140,8 @@ func (r *Repository) LoadSpec(ctx context.Context, id model.SavepointID) ([]byte
 // It walks the store's namespace directories, keeps those whose name is a valid
 // savepoint id, and reads each one's record. A namespace with no record is an
 // incomplete savepoint — a create that died before committing — and is skipped;
-// a record that is present but will not decode is a corrupt commit and is an
-// error, never a silent skip.
+// so, with a warning, is one whose body is not this provider's (ErrSavepointDetail).
+// A record that will not decode as JSON is a corrupt commit and is an error.
 //
 // That is a listing plus two requests per savepoint (Exists, then GetObject)
 // rather than a single index read: free on a local filesystem, a round trip each
@@ -158,6 +160,10 @@ func (r *Repository) ListSavepoints(ctx context.Context) ([]composemodel.Savepoi
 			continue
 		}
 		record, found, err := r.load(ctx, id)
+		if errors.Is(err, composemodel.ErrSavepointDetail) {
+			warnUnreadable(ctx, id, err)
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("load savepoint %s: %w", id, err)
 		}
@@ -175,7 +181,7 @@ func (r *Repository) ListSavepoints(ctx context.Context) ([]composemodel.Savepoi
 
 // LoadSavepoints reads the record of every savepoint of ids, oldest first: one request per
 // record, and no listing of its own. One with no record, never committed or removed since,
-// is skipped.
+// is skipped, and so, with a warning, is one whose body is not this provider's.
 func (r *Repository) LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]composemodel.Savepoint, error) {
 	var records []composemodel.Savepoint
 	for _, id := range ids {
@@ -187,6 +193,10 @@ func (r *Repository) LoadSavepoints(ctx context.Context, ids []model.SavepointID
 			log.Ctx(ctx).Debug().Str("savepoint", id.String()).Msg("skipping savepoint without a record")
 			continue
 		}
+		if errors.Is(err, composemodel.ErrSavepointDetail) {
+			warnUnreadable(ctx, id, err)
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("load savepoint %s: %w", id, err)
 		}
@@ -196,6 +206,12 @@ func (r *Repository) LoadSavepoints(ctx context.Context, ids []model.SavepointID
 		return strings.Compare(a.Header.ID.String(), b.Header.ID.String())
 	})
 	return records, nil
+}
+
+// warnUnreadable logs the savepoint id names as skipped: its record is not this provider's.
+func warnUnreadable(ctx context.Context, id model.SavepointID, err error) {
+	log.Ctx(ctx).Warn().Err(err).Str("savepoint", id.String()).
+		Msg("skipping a savepoint this arcave cannot read; arcave gc removes it")
 }
 
 // load reads one savepoint's record. found is false when the namespace holds no

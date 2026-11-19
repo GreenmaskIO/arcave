@@ -171,7 +171,6 @@ func TestRepository_List(t *testing.T) {
 		plant   func(t *testing.T, root string)
 		wantIDs []string
 		wantMsg string // substring List's error must carry
-		wantErr error
 	}{
 		{
 			name:    "an empty store lists nothing",
@@ -218,20 +217,20 @@ func TestRepository_List(t *testing.T) {
 			wantMsg: "load savepoint 019e844b-7818-7000-8000-000000000000: parse record",
 		},
 		{
-			name: "another provider's record is an error",
+			name: "another provider's record is skipped",
 			plant: func(t *testing.T, root string) {
 				writeObject(t, root, "019e844b-7818-7000-8000-000000000000/savepoint.json",
 					`{"id":"019e844b-7818-7000-8000-000000000000","provider":"kubernetes","detail":{}}`)
 			},
-			wantErr: composemodel.ErrSavepointDetail,
+			wantIDs: []string{"019e843e-1650-7000-8000-000000000000"},
 		},
 		{
-			name: "an earlier version's record, naming no provider, is not read back",
+			name: "an earlier version's record, naming no provider, is skipped",
 			plant: func(t *testing.T, root string) {
 				writeObject(t, root, "019e844b-7818-7000-8000-000000000000/savepoint.json",
 					`{"id":"019e844b-7818-7000-8000-000000000000","stats":[]}`)
 			},
-			wantErr: composemodel.ErrSavepointDetail,
+			wantIDs: []string{"019e843e-1650-7000-8000-000000000000"},
 		},
 	}
 
@@ -241,7 +240,7 @@ func TestRepository_List(t *testing.T) {
 			ctx := context.Background()
 			store, root := newStore(t)
 			repo := New(store)
-			// Every case but the two that must fail carries the one committed
+			// Every case but the one that must fail carries the one committed
 			// savepoint, so "skipped" is distinguishable from "store is empty".
 			if len(tt.wantIDs) > 0 {
 				require.NoError(t, repo.SaveSavepoint(ctx, record("019e843e-1650-7000-8000-000000000000")))
@@ -254,10 +253,6 @@ func TestRepository_List(t *testing.T) {
 			// Assert
 			if tt.wantMsg != "" {
 				require.ErrorContains(t, err, tt.wantMsg)
-				return
-			}
-			if tt.wantErr != nil {
-				require.ErrorIs(t, err, tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
@@ -507,10 +502,13 @@ func TestRepository_LoadSavepoints(t *testing.T) {
 	require.NoError(t, repo.SaveSavepoint(ctx, record("019e844b-7818-7000-8000-000000000000")))
 	require.NoError(t, repo.SaveSavepoint(ctx, record("019e843e-1650-7000-8000-000000000000")))
 	writeObject(t, root, "019e8450-0000-7000-8000-000000000000/db/data/data.tar", "payload")
+	writeObject(t, root, "019e8460-0000-7000-8000-000000000000/savepoint.json",
+		`{"id":"019e8460-0000-7000-8000-000000000000","stats":[]}`)
 
 	// Act
 	got, err := repo.LoadSavepoints(ctx, []model.SavepointID{
-		"019e844b-7818-7000-8000-000000000000", "019e843e-1650-7000-8000-000000000000", "019e8450-0000-7000-8000-000000000000",
+		"019e844b-7818-7000-8000-000000000000", "019e843e-1650-7000-8000-000000000000",
+		"019e8450-0000-7000-8000-000000000000", "019e8460-0000-7000-8000-000000000000",
 	})
 
 	// Assert
