@@ -296,7 +296,7 @@ func (e *sessionEnv) newGarbageCollector(
 			ResticPruners:      resticPrunerOpener{opener},
 		}
 	}
-	return newGC(t, arcaveProjectStore, e.projectRoot, session, gcDeps)
+	return newGC(t, e.arcaveProject, arcaveProjectStore, e.projectRoot, session, gcDeps)
 }
 
 // A cdc savepoint whose record is gone — a remove interrupted past its record — leaves its
@@ -324,7 +324,7 @@ func TestGC_DryRun_ForgetsTheSnapshotsOfADeadSavepoint(t *testing.T) {
 	t.Cleanup(func() { _ = root.Close() })
 	arcaveProjectStore, err := storefactory.ArcaveProject(root, model.ArcaveProjectName(env.arcaveProject))
 	require.NoError(t, err)
-	svc := newGC(t, arcaveProjectStore, env.projectRoot, model.DefaultSession, newCDCGarbage(t, env))
+	svc := newGC(t, env.arcaveProject, arcaveProjectStore, env.projectRoot, model.DefaultSession, newCDCGarbage(t, env))
 
 	// Act
 	result, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{
@@ -446,7 +446,7 @@ var resticKinds = []model.GarbageDataKind{model.GarbageDataKindDeduplicatedVolum
 func newCDCGarbageCollector(t *testing.T, env *cdcEnv) *gc.GarbageCollector {
 	t.Helper()
 	arcaveProjectStore := env.arcaveProjectStore(t)
-	return newGC(t, arcaveProjectStore, env.projectRoot, model.DefaultSession, newCDCGarbage(t, env))
+	return newGC(t, env.arcaveProject, arcaveProjectStore, env.projectRoot, model.DefaultSession, newCDCGarbage(t, env))
 }
 
 // newCDCGarbage is what a gc of env finds its garbage with, its restic repositories served over
@@ -464,11 +464,11 @@ func newCDCGarbage(t *testing.T, env *cdcEnv) gcfinder.Deps {
 	}
 }
 
-// newGC wires a gc of session over arcaveProjectStore the way openGCService does, its provider
+// newGC wires a gc of session over arcaveProject's store the way openGCService does, its provider
 // finding garbage as gcDeps says.
 func newGC(
-	t *testing.T, arcaveProjectStore storages.Storager, projectRoot string, session model.SessionID,
-	gcDeps gcfinder.Deps,
+	t *testing.T, arcaveProject string, arcaveProjectStore storages.Storager, projectRoot string,
+	session model.SessionID, gcDeps gcfinder.Deps,
 ) *gc.GarbageCollector {
 	t.Helper()
 	return gc.New(gc.Deps{
@@ -484,7 +484,9 @@ func newGC(
 		Locker:         lock.New(projectRoot),
 		SessionLocker:  newSessionLocker(t, arcaveProjectStore, session),
 		WriteAdmission: newPlainAdmission(arcaveProjectStore),
-		RetainRecent:   config.DefaultSafetySnapshotRetainRecent,
+		// gc only reads the marker, as openGCService opens it: under no compose project.
+		Inflight:     openInflightMarkers(t, arcaveProject, ""),
+		RetainRecent: config.DefaultSafetySnapshotRetainRecent,
 	})
 }
 
