@@ -62,10 +62,10 @@ type PreparedSummary struct {
 	Restored model.RestoreSummary
 	// Detail is the provider's body of what the build restores.
 	Detail json.RawMessage
-	// Overwritten names what outlived an absent workload and the build overwrites.
+	// Overwritten names what outlived an absent workload and the build overwrites; none when
+	// recovering, whose own partial writes those are.
 	Overwritten []string
-	// Warnings say what the build overwrites that nothing holds, to warn of before it starts; none
-	// when recovering.
+	// Warnings say what Overwritten names, to warn of before the build starts.
 	Warnings []model.Notice
 }
 

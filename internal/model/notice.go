@@ -16,8 +16,9 @@ package model
 
 import "slices"
 
-// Notice is one thing a savepoint does not hold or a status finds, for a reader: what it is, and,
-// on a savepoint's, what to change when there is something to.
+// Notice is one thing a reader should know of a result: what a savepoint leaves out, what a build
+// or a down warns of, what a status finds. Hint says what to change; Severe means the data is at
+// risk and is listed first; Code, where defined, is stable for a machine to act on.
 type Notice struct {
 	// Code names the condition, stable for a machine to act on; empty where none is defined.
 	Code    NoticeCode `json:"code,omitempty"`
@@ -29,6 +30,33 @@ type Notice struct {
 
 // NoticeCode names the condition a notice reports.
 type NoticeCode string
+
+// The notices a status reports, one code per condition; a code is stable, its message is not.
+const (
+	NoticeCodeRollbackPending            NoticeCode = "rollback-pending"
+	NoticeCodeStoreUnreadable            NoticeCode = "store-unreadable"
+	NoticeCodeSessionUnresolved          NoticeCode = "session-unresolved"
+	NoticeCodeInflightMarkerUnreadable   NoticeCode = "inflight-marker-unreadable"
+	NoticeCodeDeploymentLabelsUnreadable NoticeCode = "deployment-labels-unreadable"
+	NoticeCodeDeployedSavepointGone      NoticeCode = "deployed-savepoint-gone"
+	NoticeCodeOtherArcaveProject         NoticeCode = "other-arcave-project"
+	NoticeCodeOtherSession               NoticeCode = "other-session"
+	NoticeCodeSafetySnapshotDeployed     NoticeCode = "safety-snapshot-deployed"
+	NoticeCodeVolumeNotRestored          NoticeCode = "volume-not-restored"
+	NoticeCodeLayerNotRestored           NoticeCode = "layer-not-restored"
+	NoticeCodeReplicaMissing             NoticeCode = "replica-missing"
+	NoticeCodeReplicaExited              NoticeCode = "replica-exited"
+	NoticeCodeReplicaDead                NoticeCode = "replica-dead"
+	NoticeCodeReplicaRemoving            NoticeCode = "replica-removing"
+	NoticeCodeReplicaRestarting          NoticeCode = "replica-restarting"
+	NoticeCodeReplicaCreated             NoticeCode = "replica-created"
+	NoticeCodeReplicaPaused              NoticeCode = "replica-paused"
+	NoticeCodeReplicaRestarted           NoticeCode = "replica-restarted"
+	NoticeCodeReplicaUnhealthy           NoticeCode = "replica-unhealthy"
+	NoticeCodeReplicaRecreated           NoticeCode = "replica-recreated"
+	NoticeCodeReplicaAdded               NoticeCode = "replica-added"
+	NoticeCodeComposeProjectStopped      NoticeCode = "compose-project-stopped"
+)
 
 // SortSevereFirst orders notices severe first, keeping their order otherwise.
 func SortSevereFirst(notices []Notice) []Notice {

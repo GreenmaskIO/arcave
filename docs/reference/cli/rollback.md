@@ -116,42 +116,60 @@ Warnings (1)
     "name": "before-migration",
     "description": "before the v2 schema",
     "created_at": "2026-06-01T19:41:12.123456789Z",
-    "stats": [ … ],
-    "writable_layers": [ … ],
-    "images": [ … ],
-    "spec": { "format": "compose-yaml" },
-    "not_covered": { … }
+    "provider": "compose",
+    "summary": { "units": [ … ], "notices": [ … ] },
+    "detail": {
+      "stats": [ … ],
+      "writable_layers": [ … ],
+      "images": [ … ],
+      "spec": { "format": "compose-yaml" },
+      "not_covered": { … }
+    }
   },
-  "restored": [
-    {
-      "object_id": "volume-named-myapp_pgdata",
-      "compose_project": "myapp",
-      "type": "named",
-      "backend": "fullcopy",
-      "named": {
-        "volume_name": "myapp_pgdata",
-        "used_by": [
-          { "service": "db", "target": "/var/lib/postgresql/data" }
-        ]
+  "restored": {
+    "units": [
+      { "kind": "volumes", "count": 1, "size_bytes": 0, "stored_bytes": 0 },
+      { "kind": "layers", "count": 2, "size_bytes": 0, "stored_bytes": 0 }
+    ],
+    "notices": [
+      {
+        "message": "the containers run on the savepoint's writable layers",
+        "hint": "`docker compose up` of your compose file recreates them on its images and drops those layers"
       }
-    }
-  ],
-  "writable_layers": [
-    {
-      "service": "app",
-      "replica": 1,
-      "container_name": "myapp-app-1",
-      "image_id": "sha256:f68cd146c87c7e1e7606d02065a872eed3eafafa97ca55b8836c2785445b72da",
-      "tag": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000"
-    },
-    {
-      "service": "db",
-      "replica": 1,
-      "container_name": "myapp-db-1",
-      "image_id": "sha256:6b3f960b737dff8f5ac90b9538610413cafe14be340f3635dc4cbb279ddc3035",
-      "tag": "arcave/myapp-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000"
-    }
-  ],
+    ]
+  },
+  "detail": {
+    "volumes": [
+      {
+        "object_id": "volume-named-myapp_pgdata",
+        "compose_project": "myapp",
+        "type": "named",
+        "backend": "fullcopy",
+        "named": {
+          "volume_name": "myapp_pgdata",
+          "used_by": [
+            { "service": "db", "target": "/var/lib/postgresql/data" }
+          ]
+        }
+      }
+    ],
+    "writable_layers": [
+      {
+        "service": "app",
+        "replica": 1,
+        "container_name": "myapp-app-1",
+        "image_id": "sha256:f68cd146c87c7e1e7606d02065a872eed3eafafa97ca55b8836c2785445b72da",
+        "tag": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000"
+      },
+      {
+        "service": "db",
+        "replica": 1,
+        "container_name": "myapp-db-1",
+        "image_id": "sha256:6b3f960b737dff8f5ac90b9538610413cafe14be340f3635dc4cbb279ddc3035",
+        "tag": "arcave/myapp-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000"
+      }
+    ]
+  },
   "safety_snapshot": "019e8491-04c8-7000-8000-000000000000"
 }
 ```
@@ -168,8 +186,10 @@ Rolled back to the state before rollback to before-migration · 019e8491-04c8-70
 | Field | Meaning |
 |---|---|
 | `rolled_back_to` | The savepoint record that was applied, whole. A safety snapshot's has an empty `name` and carries `taken_before_rollback_to`. |
-| `restored` | One entry per volume written back, as the savepoint recorded it. `type` is `named`, `bind` or `anon`, with the matching block. |
-| `writable_layers` | One entry per container layer put back: the container it was rebuilt as, the image id, and the `tag` it now answers to in your local daemon. Omitted when the savepoint held no layer. |
+| `restored` | What was put back, as the provider sums it up: `units` counts the volumes, and the layers when there were any; `notices` are the summary's `Warnings`. |
+| `detail` | The compose provider's own body, which arcave does not interpret. |
+| `detail.volumes` | One entry per volume written back, as the savepoint recorded it. `type` is `named`, `bind` or `anon`, with the matching block. |
+| `detail.writable_layers` | One entry per container layer put back: the container it was rebuilt as, the image id, and the `tag` it now answers to in your local daemon. Omitted when the savepoint held no layer. |
 | `safety_snapshot` | The id of the safety snapshot the rollback took: rolling back to it undoes the rollback. Omitted when none was taken. |
 | `leftover_volumes` | The Docker names of the named volumes a rollback of a compose project with no containers overwrote: `compose down` kept them, and no safety snapshot holds what they held. Omitted when there are none. |
 

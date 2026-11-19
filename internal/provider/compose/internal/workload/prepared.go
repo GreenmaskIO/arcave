@@ -32,17 +32,11 @@ type preparedSavepoint struct {
 	summary provider.PreparedSummary
 }
 
-// newPreparedSavepoint is target ready to build, summed up; a recovery warns of no leftover volume.
-func newPreparedSavepoint(target composemodel.Target, recovering bool) (preparedSavepoint, error) {
-	var (
-		detail = composemodel.RestoreDetail{
-			Volumes:        composemodel.VolumesOf(target.Savepoint),
-			WritableLayers: target.Restored,
-		}
-		leftover []string
-	)
-	if !recovering {
-		leftover = target.Overwritten
+// newPreparedSavepoint is target ready to build, summed up, each volume it overwrites warned of.
+func newPreparedSavepoint(target composemodel.Target) (preparedSavepoint, error) {
+	detail := composemodel.RestoreDetail{
+		Volumes:        composemodel.VolumesOf(target.Savepoint),
+		WritableLayers: target.Restored,
 	}
 	encoded, err := json.Marshal(detail)
 	if err != nil {
@@ -51,10 +45,10 @@ func newPreparedSavepoint(target composemodel.Target, recovering bool) (prepared
 	return preparedSavepoint{
 		Target: target,
 		summary: provider.PreparedSummary{
-			Restored:    composemodel.NewRestoreSummary(detail, leftover),
+			Restored:    composemodel.NewRestoreSummary(detail, target.Overwritten),
 			Detail:      encoded,
 			Overwritten: target.Overwritten,
-			Warnings:    composemodel.NewLeftoverVolumeNotices(leftover),
+			Warnings:    composemodel.NewLeftoverVolumeNotices(target.Overwritten),
 		},
 	}, nil
 }

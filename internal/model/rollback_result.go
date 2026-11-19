@@ -35,7 +35,7 @@ type RollbackResult struct {
 // RestoreSummary is what a provider sums a build of a savepoint up as.
 type RestoreSummary struct {
 	// Units count what the build restored by kind, in the order to print them.
-	Units []UnitTally `json:"units"`
+	Units []UnitTotal `json:"units"`
 	// Notices say what the build warns of, the severe first.
 	Notices []Notice `json:"notices,omitempty"`
 }

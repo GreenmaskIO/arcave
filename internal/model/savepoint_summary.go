@@ -16,11 +16,13 @@ package model
 
 import "slices"
 
-// The kinds of unit a summary tallies, as its rows and columns name them.
+// UnitKind is a kind of unit a summary totals, as its rows and columns name it.
+type UnitKind string
+
 const (
-	UnitKindVolumes = "volumes"
-	UnitKindLayers  = "layers"
-	UnitKindImages  = "images"
+	UnitKindVolumes UnitKind = "volumes"
+	UnitKindLayers  UnitKind = "layers"
+	UnitKindImages  UnitKind = "images"
 )
 
 // ReplicaHeldLayer is what a replica holding marks a writable layer by.
@@ -29,8 +31,8 @@ const ReplicaHeldLayer = "layer"
 // SavepointSummary is what a provider sums a savepoint up as, for arcave to print and judge by
 // without reading the body.
 type SavepointSummary struct {
-	// Units tally what the savepoint holds by kind, in the order to print them.
-	Units []UnitTally `json:"units"`
+	// Units total what the savepoint holds by kind, in the order to print them.
+	Units []UnitTotal `json:"units"`
 	// Notices say what the capture left out, the severe first.
 	Notices []Notice `json:"notices,omitempty"`
 	// Gaps say what a rollback to the savepoint does not put back, as a status of its deployment
@@ -40,12 +42,12 @@ type SavepointSummary struct {
 	Replicas []ReplicaHolding `json:"replicas,omitempty"`
 }
 
-// UnitTally is one kind of unit a savepoint holds: how many, their size and what storing them took.
-type UnitTally struct {
-	Kind        string `json:"kind"`
-	Count       int    `json:"count"`
-	SizeBytes   int64  `json:"size_bytes"`
-	StoredBytes int64  `json:"stored_bytes"`
+// UnitTotal is one kind of unit a savepoint holds: how many, their size and what storing them took.
+type UnitTotal struct {
+	Kind        UnitKind `json:"kind"`
+	Count       int      `json:"count"`
+	SizeBytes   int64    `json:"size_bytes"`
+	StoredBytes int64    `json:"stored_bytes"`
 }
 
 // ReplicaHolding is what a savepoint holds of one replica: ReplicaHeldLayer for its writable layer.
@@ -55,14 +57,14 @@ type ReplicaHolding struct {
 	Held    []string `json:"held"`
 }
 
-// Unit is the tally of kind; the zero tally of it when the savepoint holds none.
-func (m SavepointSummary) Unit(kind string) UnitTally {
+// Unit is the total of kind; its zero total when the savepoint holds none.
+func (m SavepointSummary) Unit(kind UnitKind) UnitTotal {
 	for _, unit := range m.Units {
 		if unit.Kind == kind {
 			return unit
 		}
 	}
-	return UnitTally{Kind: kind}
+	return UnitTotal{Kind: kind}
 }
 
 // StoredBytes is what the savepoint wrote to the store, every kind of unit together.

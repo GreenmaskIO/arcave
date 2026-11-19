@@ -123,5 +123,3 @@ func TestGCOutputSchema_AcceptsADetail(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 }
-
-// A request the service would refuse is refused before anything is opened.

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -523,13 +524,14 @@ func introspectionOf(volumes []cdcVolume) composemodel.IntrospectionResult {
 	}}
 }
 
-// resticPayload reads a stat's payload as the backend reported it — in memory,
-// so it is still the struct rather than the map a stored record decodes to.
+// resticPayload reads a stat's payload, the map a record decodes it to, as the cdc backend's.
 func resticPayload(t *testing.T, stat composemodel.SnapshotStat) cdc.Payload {
 	t.Helper()
 
-	payload, ok := stat.Payload.(cdc.Payload)
-	require.Truef(t, ok, "stat for %s carries no cdc payload: %T", stat.Volume.ObjectID, stat.Payload)
+	encoded, err := json.Marshal(stat.Payload)
+	require.NoError(t, err)
+	var payload cdc.Payload
+	require.NoErrorf(t, json.Unmarshal(encoded, &payload), "stat for %s carries no cdc payload", stat.Volume.ObjectID)
 	return payload
 }
 

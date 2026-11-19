@@ -131,12 +131,12 @@ func (s *Printer) formatSavepointTitle(savepoint model.Savepoint, layout string)
 	return strings.Join(parts, " · ")
 }
 
-// newCaptureRows is a savepoint's tally by kind of unit, in the order the provider gave it. Kinds
+// newCaptureRows is a savepoint's totals by kind of unit, in the order the provider gave it. Kinds
 // are not totalled: a layer's archive holds its image's layers.
 func newCaptureRows(savepoint model.Savepoint) []captureRow {
 	rows := make([]captureRow, 0, len(savepoint.Summary.Units))
 	for _, unit := range savepoint.Summary.Units {
-		rows = append(rows, newCaptureRow(unit.Kind, unit.Count, unit.SizeBytes, unit.StoredBytes))
+		rows = append(rows, newCaptureRow(string(unit.Kind), unit.Count, unit.SizeBytes, unit.StoredBytes))
 	}
 	return rows
 }
@@ -146,7 +146,7 @@ func newRestoreRows(restored model.RestoreSummary) []captureRow {
 	rows := make([]captureRow, 0, len(restored.Units))
 	for _, unit := range restored.Units {
 		rows = append(rows, captureRow{
-			kind:  unit.Kind,
+			kind:  string(unit.Kind),
 			cells: []string{strconv.Itoa(unit.Count)},
 		})
 	}

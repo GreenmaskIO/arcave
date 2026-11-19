@@ -42,10 +42,15 @@ type capturedSavepoint struct {
 
 // Commit writes the record, the last object; core names the savepoint in a failure.
 func (c capturedSavepoint) Commit(ctx context.Context) (model.Savepoint, error) {
+	// Summed up first: nothing may fail past the commit marker.
+	shared, err := composemodel.ToSharedSavepoint(c.savepoint)
+	if err != nil {
+		return model.Savepoint{}, err
+	}
 	if err := c.capturer.savepointRepo.SaveSavepoint(ctx, c.savepoint); err != nil {
 		return model.Savepoint{}, err
 	}
-	return composemodel.ToSharedSavepoint(c.savepoint)
+	return shared, nil
 }
 
 // Capture stores a savepoint of a project already held still under req.ID, short of its record;

@@ -4,13 +4,14 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package model
 
 import (
@@ -34,12 +35,12 @@ func TestNewRestoreSummary(t *testing.T) {
 		leftover []string
 		want     model.RestoreSummary
 	}{
-		{name: "nothing restored", want: model.RestoreSummary{Units: []model.UnitTally{{Kind: model.UnitKindVolumes}}}},
+		{name: "nothing restored", want: model.RestoreSummary{Units: []model.UnitTotal{{Kind: model.UnitKindVolumes}}}},
 		{
 			name:   "the writable layers alone",
 			detail: RestoreDetail{Volumes: []Volume{{}}, WritableLayers: []WritableLayerRestoreResult{{}}},
 			want: model.RestoreSummary{
-				Units:   []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1}, {Kind: model.UnitKindLayers, Count: 1}},
+				Units:   []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1}, {Kind: model.UnitKindLayers, Count: 1}},
 				Notices: []model.Notice{layersHint},
 			},
 		},
@@ -48,7 +49,7 @@ func TestNewRestoreSummary(t *testing.T) {
 			detail:   RestoreDetail{WritableLayers: []WritableLayerRestoreResult{{}}},
 			leftover: []string{"shop_pgdata", "shop_cache"},
 			want: model.RestoreSummary{
-				Units:   []model.UnitTally{{Kind: model.UnitKindVolumes}, {Kind: model.UnitKindLayers, Count: 1}},
+				Units:   []model.UnitTotal{{Kind: model.UnitKindVolumes}, {Kind: model.UnitKindLayers, Count: 1}},
 				Notices: append(NewLeftoverVolumeNotices([]string{"shop_pgdata", "shop_cache"}), layersHint),
 			},
 		},

@@ -64,7 +64,7 @@ func (w surveyedWorkload) PrepareSavepoint(
 	if err != nil {
 		return nil, err
 	}
-	return newPreparedSavepoint(target, false)
+	return newPreparedSavepoint(target)
 }
 
 // Drop removes everything of the compose project and proves it gone; on an empty one it removes

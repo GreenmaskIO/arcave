@@ -51,7 +51,7 @@ clean      019e83ff-30c0-7000-8000-000000000000  2026-06-01 18:36  3        3   
 </TabItem>
 </Tabs>
 
-One row per savepoint. In the JSON each entry is the full savepoint record — `stats`, `writable_layers`, `images`, `spec` and the rest; the samples on this page keep only the fields that tell the savepoints apart.
+One row per savepoint. In the JSON each entry is the full savepoint record — its `summary`, the compose provider's `detail` and the rest; the samples on this page keep only the fields that tell the savepoints apart.
 
 The listing is newest first; `--sort asc` turns it around.
 

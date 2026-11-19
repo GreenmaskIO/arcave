@@ -49,7 +49,7 @@ func TestSavepoints_Load(t *testing.T) {
 				ID:       id,
 				Provider: composemodel.ProviderName,
 				Summary: model.SavepointSummary{
-					Units: []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: 10, StoredBytes: 4}},
+					Units: []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: 10, StoredBytes: 4}},
 				},
 				Detail: json.RawMessage(`{"stats":[{"volume":{"object_id":"","compose_project":"","type":"","backend":""},"type":"","size_bytes":10,"stored_bytes":4}]}`),
 			},

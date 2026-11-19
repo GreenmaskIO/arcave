@@ -143,59 +143,72 @@ Savepoint before-migration · 019e843e-1650-7000-8000-000000000000 · 19:41:12 �
   "name": "before-migration",
   "description": "",
   "created_at": "2026-06-01T19:41:12.123456789Z",
-  "stats": [
-    {
-      "volume": {
-        "object_id": "volume-named-myapp_pgdata",
-        "compose_project": "myapp",
-        "type": "named",
-        "backend": "fullcopy",
-        "named": {
-          "volume_name": "myapp_pgdata",
-          "used_by": [
-            {
-              "service": "db",
-              "target": "/var/lib/postgresql/data"
-            }
-          ]
-        }
-      },
-      "type": "fullcopy",
-      "size_bytes": 40805376,
-      "stored_bytes": 3913483,
-      "payload": { "compression": "zstd" }
+  "provider": "compose",
+  "summary": {
+    "units": [
+      { "kind": "volumes", "count": 1, "size_bytes": 40805376, "stored_bytes": 3913483 },
+      { "kind": "layers", "count": 1, "size_bytes": 158913306, "stored_bytes": 16707 },
+      { "kind": "images", "count": 1, "size_bytes": 657586103, "stored_bytes": 164698711 }
+    ],
+    "replicas": [
+      { "service": "db", "replica": 1, "held": ["layer"] }
+    ]
+  },
+  "detail": {
+    "stats": [
+      {
+        "volume": {
+          "object_id": "volume-named-myapp_pgdata",
+          "compose_project": "myapp",
+          "type": "named",
+          "backend": "fullcopy",
+          "named": {
+            "volume_name": "myapp_pgdata",
+            "used_by": [
+              {
+                "service": "db",
+                "target": "/var/lib/postgresql/data"
+              }
+            ]
+          }
+        },
+        "type": "fullcopy",
+        "size_bytes": 40805376,
+        "stored_bytes": 3913483,
+        "payload": { "compression": "zstd" }
+      }
+    ],
+    "writable_layers": [
+      {
+        "service": "db",
+        "replica": 1,
+        "container_id": "b6477db82dd008786a6819c72ff68799bbd4f669a696aef1ac2d8fb447dd24cb",
+        "container_name": "myapp-db-1",
+        "committed_image_id": "sha256:8769512644fabe547bc758133294a85b95543624a65f84924708eb2cb64b1d24",
+        "imagebackend": "dedupcopy",
+        "upstream_image_id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
+        "upstream_image_ref": "postgres:16",
+        "size_bytes": 158913306,
+        "stored_bytes": 16707
+      }
+    ],
+    "images": [
+      {
+        "id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
+        "refs": [
+          "postgres:16"
+        ],
+        "repo_digests": [
+          "postgres@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54"
+        ],
+        "size_bytes": 657586103,
+        "stored_bytes": 164698711,
+        "stored": true
+      }
+    ],
+    "spec": {
+      "format": "compose-yaml"
     }
-  ],
-  "writable_layers": [
-    {
-      "service": "db",
-      "replica": 1,
-      "container_id": "b6477db82dd008786a6819c72ff68799bbd4f669a696aef1ac2d8fb447dd24cb",
-      "container_name": "myapp-db-1",
-      "committed_image_id": "sha256:8769512644fabe547bc758133294a85b95543624a65f84924708eb2cb64b1d24",
-      "imagebackend": "dedupcopy",
-      "upstream_image_id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
-      "upstream_image_ref": "postgres:16",
-      "size_bytes": 158913306,
-      "stored_bytes": 16707
-    }
-  ],
-  "images": [
-    {
-      "id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
-      "refs": [
-        "postgres:16"
-      ],
-      "repo_digests": [
-        "postgres@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54"
-      ],
-      "size_bytes": 657586103,
-      "stored_bytes": 164698711,
-      "stored": true
-    }
-  ],
-  "spec": {
-    "format": "compose-yaml"
   }
 }
 ```
@@ -219,7 +232,7 @@ INF savepoint.create[before-migration] elapsed=10.873s status=succeeded
 </TabItem>
 </Tabs>
 
-`size` is what the savepoint holds and `stored` what it added to the store. The layer adds little because only what the container wrote over `postgres:16` is new; the image is stored once and reused by every later savepoint. Anything the savepoint left out, or that puts its data at risk, is listed under `Warnings`. In the JSON, `stats` holds one entry per captured volume, `writable_layers` one per container, and `images` one per distinct image; a savepoint that left something out also carries `not_covered`. [Output](reference/output.md) has every field.
+`size` is what the savepoint holds and `stored` what it added to the store. The layer adds little because only what the container wrote over `postgres:16` is new; the image is stored once and reused by every later savepoint. Anything the savepoint left out, or that puts its data at risk, is listed under `Warnings`. In the JSON, `summary.units` holds the same table, and a savepoint that left something out also carries `summary.notices`. `detail` is the compose provider's own body: `stats` holds one entry per captured volume, `writable_layers` one per container, and `images` one per distinct image; a savepoint that left something out also carries `not_covered`. [Output](reference/output.md) has every field.
 
 `rollback` and `savepoint remove` take that `id` or the name.
 
@@ -270,32 +283,46 @@ Warnings (1)
     "created_at": "2026-06-01T19:41:12.123456789Z",
     …
   },
-  "restored": [
-    {
-      "object_id": "volume-named-myapp_pgdata",
-      "compose_project": "myapp",
-      "type": "named",
-      "backend": "fullcopy",
-      "named": {
-        "volume_name": "myapp_pgdata",
-        "used_by": [
-          {
-            "service": "db",
-            "target": "/var/lib/postgresql/data"
-          }
-        ]
+  "restored": {
+    "units": [
+      { "kind": "volumes", "count": 1, "size_bytes": 0, "stored_bytes": 0 },
+      { "kind": "layers", "count": 1, "size_bytes": 0, "stored_bytes": 0 }
+    ],
+    "notices": [
+      {
+        "message": "the containers run on the savepoint's writable layers",
+        "hint": "`docker compose up` of your compose file recreates them on its images and drops those layers"
       }
-    }
-  ],
-  "writable_layers": [
-    {
-      "service": "db",
-      "replica": 1,
-      "container_name": "myapp-db-1",
-      "image_id": "sha256:8769512644fabe547bc758133294a85b95543624a65f84924708eb2cb64b1d24",
-      "tag": "arcave/myapp-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000"
-    }
-  ],
+    ]
+  },
+  "detail": {
+    "volumes": [
+      {
+        "object_id": "volume-named-myapp_pgdata",
+        "compose_project": "myapp",
+        "type": "named",
+        "backend": "fullcopy",
+        "named": {
+          "volume_name": "myapp_pgdata",
+          "used_by": [
+            {
+              "service": "db",
+              "target": "/var/lib/postgresql/data"
+            }
+          ]
+        }
+      }
+    ],
+    "writable_layers": [
+      {
+        "service": "db",
+        "replica": 1,
+        "container_name": "myapp-db-1",
+        "image_id": "sha256:8769512644fabe547bc758133294a85b95543624a65f84924708eb2cb64b1d24",
+        "tag": "arcave/myapp-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000"
+      }
+    ]
+  },
   "safety_snapshot": "019e8491-04c8-7000-8000-000000000000"
 }
 ```
@@ -303,7 +330,7 @@ Warnings (1)
 </TabItem>
 </Tabs>
 
-In the JSON, `rolled_back_to` is the whole savepoint record, as `savepoint create` printed it. `restored` lists the volumes written back, and `writable_layers` the containers put back on their captured layer.
+In the JSON, `rolled_back_to` is the whole savepoint record, as `savepoint create` printed it. `restored` counts what was put back and carries the warning above; `detail.volumes` lists the volumes written back, and `detail.writable_layers` the containers put back on their captured layer.
 
 The table is back. So is everything else the project held at 19:41:12.
 

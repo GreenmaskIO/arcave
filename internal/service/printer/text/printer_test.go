@@ -566,7 +566,7 @@ func newSavepoint() model.Savepoint {
 		Name:      "test3",
 		CreatedAt: createdAt,
 		Summary: model.SavepointSummary{
-			Units: []model.UnitTally{
+			Units: []model.UnitTotal{
 				{Kind: model.UnitKindVolumes, Count: 4, SizeBytes: 48_860_000, StoredBytes: 48_860_000},
 				{Kind: model.UnitKindLayers, Count: 1, SizeBytes: 274_600_000, StoredBytes: 44_000},
 				{Kind: model.UnitKindImages, Count: 2, SizeBytes: 1_100_000_000},
@@ -591,9 +591,9 @@ func newSavepoint() model.Savepoint {
 // newRestored is what a build of volumes volumes and layers layers restored, as the compose provider
 // sums it up: each leftover volume overwritten, then the writable layers' hint.
 func newRestored(volumes, layers int, leftover ...string) model.RestoreSummary {
-	units := []model.UnitTally{{Kind: model.UnitKindVolumes, Count: volumes}}
+	units := []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: volumes}}
 	if layers > 0 {
-		units = append(units, model.UnitTally{Kind: model.UnitKindLayers, Count: layers})
+		units = append(units, model.UnitTotal{Kind: model.UnitKindLayers, Count: layers})
 	}
 	var notices []model.Notice
 	for _, name := range leftover {
@@ -619,7 +619,7 @@ func newRestored(volumes, layers int, leftover ...string) model.RestoreSummary {
 // newVolumeSummary is the summary of one volume of size bytes, all of them stored.
 func newVolumeSummary(size int64) model.SavepointSummary {
 	return model.SavepointSummary{
-		Units: []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: size, StoredBytes: size}},
+		Units: []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: size, StoredBytes: size}},
 	}
 }
 

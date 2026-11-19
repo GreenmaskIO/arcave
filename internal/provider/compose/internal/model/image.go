@@ -31,8 +31,7 @@ type Image struct {
 	RepoDigests []string      `json:"repo_digests,omitempty"` // registry digests, e.g. postgres@sha256:…
 	SizeBytes   int64         `json:"size_bytes,omitempty"`   // image size as the daemon reports it
 	StoredBytes int64         `json:"stored_bytes,omitempty"` // bytes this savepoint added; 0 when already stored
-	// Stored is whether the store holds the bytes; false when neither the store nor
-	// the daemon had them, or the daemon failed to hand them over, and only the
-	// identity is recorded.
+	// Stored is whether the store holds the bytes; false when only the identity is recorded, the
+	// daemon having lacked them or failed to hand them over.
 	Stored bool `json:"stored"`
 }

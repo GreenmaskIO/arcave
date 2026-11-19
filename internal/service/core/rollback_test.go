@@ -106,7 +106,7 @@ func TestService_Rollback_RestoresAndKeepsTheSafetySnapshot(t *testing.T) {
 	stages := newMockStages(false)
 	summary := provider.PreparedSummary{
 		Restored: model.RestoreSummary{
-			Units:   []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1}, {Kind: model.UnitKindLayers, Count: 1}},
+			Units:   []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1}, {Kind: model.UnitKindLayers, Count: 1}},
 			Notices: []model.Notice{{Message: "the containers run on the savepoint's writable layers"}},
 		},
 		Detail: json.RawMessage(`{"writable_layers":[{"tag":"arcave/demo-db-1:sp"}]}`),
@@ -956,17 +956,19 @@ func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
 	tests := []struct {
 		name         string
 		standing     *model.InflightMarker
+		overwritten  []string
 		warnings     []model.Notice
 		wantLeftover []string
 		wantPhase    model.InflightPhase
 	}{
 		{
 			name:         "a leftover volume overwritten",
+			overwritten:  []string{"demo_db"},
 			warnings:     []model.Notice{{Message: "volume demo_db was overwritten", Severe: true}},
 			wantLeftover: []string{"demo_db"},
 			wantPhase:    model.InflightRecreating,
 		},
-		{name: "a recovery names none", standing: &recovered, wantPhase: model.InflightRestoring},
+		{name: "a recovery the provider names none for", standing: &recovered, wantPhase: model.InflightRestoring},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -976,7 +978,7 @@ func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
 			stages := newMockStages(true)
 			stages.target.prepared.summary = provider.PreparedSummary{
 				Restored:    demoSummary().Restored,
-				Overwritten: []string{"demo_db"},
+				Overwritten: tt.overwritten,
 				Warnings:    tt.warnings,
 			}
 			recovering := tt.standing != nil
@@ -1011,12 +1013,7 @@ func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
 			require.NoError(t, err)
 			assert.Empty(t, res.SafetySnapshot)
 			assert.Equal(t, tt.wantLeftover, res.LeftoverVolumes)
-			if recovering {
-				assert.Empty(t, recorder.inResult)
-				assert.Contains(t, logs.String(), "the compose project is not running but this volume survives")
-			} else {
-				assert.Equal(t, []string{"volume demo_db was overwritten"}, recorder.inResult, "the provider's warnings")
-			}
+			assert.Equal(t, warningMessages(tt.warnings), recorder.inResult, "the provider's warnings")
 			inflight.AssertExpectations(t)
 			savepoints.AssertExpectations(t)
 			locker.AssertExpectations(t)
@@ -1263,4 +1260,13 @@ func TestService_Rollback_NoSafetySnapshotCleansUpPastAnInterrupt(t *testing.T) 
 	savepoints.AssertExpectations(t)
 	locker.AssertExpectations(t)
 	stages.AssertExpectations(t)
+}
+
+// warningMessages are the messages of warnings, nil for none.
+func warningMessages(warnings []model.Notice) []string {
+	var messages []string
+	for _, warning := range warnings {
+		messages = append(messages, warning.Message)
+	}
+	return messages
 }

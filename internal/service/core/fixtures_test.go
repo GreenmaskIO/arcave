@@ -69,7 +69,7 @@ const demoProviderName = "fake"
 // demoSavepointSummary is what the provider sums every committed fixture up as: demoVolume alone.
 func demoSavepointSummary() model.SavepointSummary {
 	return model.SavepointSummary{
-		Units: []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: demoVolumeSize}},
+		Units: []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: demoVolumeSize}},
 	}
 }
 
@@ -184,7 +184,7 @@ func emptySavepoints() *mockSavepoints {
 // demoSummary is what building demoRecord restores.
 func demoSummary() provider.PreparedSummary {
 	return provider.PreparedSummary{
-		Restored: model.RestoreSummary{Units: []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1}}},
+		Restored: model.RestoreSummary{Units: []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1}}},
 		Detail:   json.RawMessage(`{"volumes":[{"object_id":"volume-named-demo_db"}]}`),
 	}
 }

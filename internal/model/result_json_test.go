@@ -44,7 +44,7 @@ func TestResults_JSONKeys(t *testing.T) {
 		},
 		{
 			name:   "a savepoint as read carries its provider, summary and body",
-			result: Savepoint{Provider: "compose", Summary: SavepointSummary{Units: []UnitTally{{}}}, Detail: json.RawMessage(`{}`)},
+			result: Savepoint{Provider: "compose", Summary: SavepointSummary{Units: []UnitTotal{{}}}, Detail: json.RawMessage(`{}`)},
 			want:   []string{"id", "name", "description", "created_at", "provider", "summary", "detail"},
 		},
 		{

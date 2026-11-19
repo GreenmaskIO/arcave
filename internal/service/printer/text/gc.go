@@ -33,11 +33,11 @@ type garbageTally struct {
 // formatGarbageCollect is a gc's findings by data kind, what it deleted, and what held it back.
 func (s *Printer) formatGarbageCollect(result model.GarbageCollectResult) string {
 	var (
-		b       strings.Builder
+		b                  strings.Builder
 		dataKinds, tallies = newGarbageTallies(result.Reports)
-		rows    [][]string
-		header  = []string{"  DATA", "FOUND", "SIZE"}
-		title   = "Garbage collected"
+		rows               [][]string
+		header             = []string{"  DATA", "FOUND", "SIZE"}
+		title              = "Garbage collected"
 	)
 	if result.DryRun {
 		title = "Garbage found (dry run)"

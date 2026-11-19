@@ -102,33 +102,6 @@ const (
 	StatusUnreadableInflightMarker StatusUnreadableSource = "inflight-marker"
 )
 
-// The notices a status reports, one code per condition; a code is stable, its message is not.
-const (
-	NoticeCodeRollbackPending            NoticeCode = "rollback-pending"
-	NoticeCodeStoreUnreadable            NoticeCode = "store-unreadable"
-	NoticeCodeSessionUnresolved          NoticeCode = "session-unresolved"
-	NoticeCodeInflightMarkerUnreadable   NoticeCode = "inflight-marker-unreadable"
-	NoticeCodeDeploymentLabelsUnreadable NoticeCode = "deployment-labels-unreadable"
-	NoticeCodeDeployedSavepointGone      NoticeCode = "deployed-savepoint-gone"
-	NoticeCodeOtherArcaveProject         NoticeCode = "other-arcave-project"
-	NoticeCodeOtherSession               NoticeCode = "other-session"
-	NoticeCodeSafetySnapshotDeployed     NoticeCode = "safety-snapshot-deployed"
-	NoticeCodeVolumeNotRestored          NoticeCode = "volume-not-restored"
-	NoticeCodeLayerNotRestored           NoticeCode = "layer-not-restored"
-	NoticeCodeReplicaMissing             NoticeCode = "replica-missing"
-	NoticeCodeReplicaExited              NoticeCode = "replica-exited"
-	NoticeCodeReplicaDead                NoticeCode = "replica-dead"
-	NoticeCodeReplicaRemoving            NoticeCode = "replica-removing"
-	NoticeCodeReplicaRestarting          NoticeCode = "replica-restarting"
-	NoticeCodeReplicaCreated             NoticeCode = "replica-created"
-	NoticeCodeReplicaPaused              NoticeCode = "replica-paused"
-	NoticeCodeReplicaRestarted           NoticeCode = "replica-restarted"
-	NoticeCodeReplicaUnhealthy           NoticeCode = "replica-unhealthy"
-	NoticeCodeReplicaRecreated           NoticeCode = "replica-recreated"
-	NoticeCodeReplicaAdded               NoticeCode = "replica-added"
-	NoticeCodeComposeProjectStopped      NoticeCode = "compose-project-stopped"
-)
-
 // StatusRequest carries what Status needs.
 type StatusRequest struct {
 	// Session names the session the user works in, as given; empty is the current session.

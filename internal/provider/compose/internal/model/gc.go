@@ -34,7 +34,7 @@ type ContainerImage struct {
 	ImageID ImageDigestID
 }
 
-// The compose provider's data kinds, in the order its reports come.
+// The compose provider's data kinds.
 const (
 	// GarbageDataKindSavepointData is a savepoint's own directory no record commits: its
 	// record, its spec, its streamed volumes and its writable layers' archives and manifests.
@@ -95,7 +95,7 @@ const (
 	GarbageReasonListedByUnreferenced model.GarbageReason = "listed-by-unreferenced"
 )
 
-// GarbageDataKinds lists every data kind the compose provider finds garbage of, in report order.
+// GarbageDataKinds lists every data kind the compose provider finds garbage of.
 func GarbageDataKinds() []model.GarbageDataKind {
 	return []model.GarbageDataKind{
 		GarbageDataKindSavepointData, GarbageDataKindDeduplicatedVolumes, GarbageDataKindImageLayers,

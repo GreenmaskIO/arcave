@@ -99,10 +99,8 @@ type WritableLayer struct {
 	UpstreamImageID  ImageDigestID                  `json:"upstream_image_id,omitempty"`  // sha256 digest of the upstream's config
 	UpstreamImageRef string                         `json:"upstream_image_ref,omitempty"` // the upstream's name, e.g. postgres:16; never a digest
 	SizeBytes        int64                          `json:"size_bytes"`                   // the committed image's archive size
-	// StoredBytes is what this capture added to the store; below SizeBytes when
-	// deduplication found the bytes already there. A blob shared by replicas
-	// captured in parallel counts toward whichever wrote it first, so only the
-	// savepoint's total is stable.
+	// StoredBytes is what this capture added to the store, below SizeBytes when deduplicated. A
+	// blob shared by parallel replicas counts toward the first writer: only the total is stable.
 	StoredBytes int64 `json:"stored_bytes,omitempty"`
 }
 

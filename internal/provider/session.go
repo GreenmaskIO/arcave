@@ -40,7 +40,7 @@ type Session interface {
 	Workloads(ctx context.Context) ([]WorkloadName, error)
 	// Savepoints opens one workload's savepoints.
 	Savepoints(workload WorkloadName) (Savepoints, error)
-	// GarbageDataKinds lists the data kinds FindGarbage looks at, in the order its reports come.
+	// GarbageDataKinds lists the data kinds FindGarbage looks at.
 	GarbageDataKinds() []model.GarbageDataKind
 	// FindGarbage finds what no committed savepoint and nothing running holds among dataKinds, none
 	// named being every one, and changes nothing; a place it could not read is an aborted report.

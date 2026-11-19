@@ -118,7 +118,7 @@ func (s *GarbageCollector) validateDataKinds(dataKinds []model.GarbageDataKind) 
 	if len(dataKinds) == 0 {
 		return nil
 	}
-	known := append(s.providerSession.GarbageDataKinds(), model.GarbageDataKindSafetySnapshots)
+	known := slices.Concat(s.providerSession.GarbageDataKinds(), []model.GarbageDataKind{model.GarbageDataKindSafetySnapshots})
 	for _, dataKind := range dataKinds {
 		if !slices.Contains(known, dataKind) {
 			return fmt.Errorf("%w: unknown kind %q", model.ErrInvalidGarbageCollectRequest, string(dataKind))

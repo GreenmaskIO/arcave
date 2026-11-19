@@ -46,7 +46,7 @@ var (
 		Description: "the schema before 0042",
 		CreatedAt:   time.Date(2026, 11, 6, 19, 41, 0, 0, time.UTC),
 		Summary: model.SavepointSummary{
-			Units:    []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1}, {Kind: model.UnitKindLayers, Count: 1}},
+			Units:    []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1}, {Kind: model.UnitKindLayers, Count: 1}},
 			Replicas: []model.ReplicaHolding{{Service: demoService, Replica: 1, Held: []string{model.ReplicaHeldLayer}}},
 		},
 	}
@@ -398,7 +398,7 @@ func TestService_Status(t *testing.T) {
 	twoReplicas.ServiceReplicas[demoService] = []int{1, 2}
 	twoLayers := statusDeployed
 	twoLayers.Summary = model.SavepointSummary{
-		Units: []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1}, {Kind: model.UnitKindLayers, Count: 2}},
+		Units: []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1}, {Kind: model.UnitKindLayers, Count: 2}},
 		Replicas: []model.ReplicaHolding{
 			{Service: demoService, Replica: 1, Held: []string{model.ReplicaHeldLayer}},
 			{Service: demoService, Replica: 2, Held: []string{model.ReplicaHeldLayer}},

@@ -134,8 +134,8 @@ The JSON each command prints; [as text](#result-format), each is a summary, a ta
 | [`savepoint create`](cli/savepoint_create.md) | one savepoint record |
 | [`savepoint list`](cli/savepoint_list.md) | an array of savepoint records, newest first unless `--sort asc`; `[]` when there are none |
 | [`savepoint remove`](cli/savepoint_remove.md) | `{"dry_run": …, "removed": [ … ]}` |
-| [`rollback`](cli/rollback.md) | `{"rolled_back_to": …, "restored": [ … ], "writable_layers": [ … ], "safety_snapshot": "<id>", "leftover_volumes": [ … ]}` |
-| [`up`](cli/up.md) | `{"rolled_back_to": …, "restored": [ … ], "writable_layers": [ … ], "discarded": { … }}` — `discarded` only when `--force` dropped something |
+| [`rollback`](cli/rollback.md) | `{"rolled_back_to": …, "restored": {"units": [ … ], "notices": [ … ]}, "detail": { … }, "safety_snapshot": "<id>", "leftover_volumes": [ … ]}` |
+| [`up`](cli/up.md) | `{"rolled_back_to": …, "restored": {"units": [ … ], "notices": [ … ]}, "detail": { … }, "discarded": { … }}` — `discarded` only when `--force` dropped something |
 | [`down`](cli/down.md) | `{"compose_project": …, "session": …, "deployment": …, "forced": …, "cleared_inflight": …, "discarded": { … }, "removed_tags": [ … ], "notices": [ … ]}` |
 | [`session create`](cli/session.md#session-create), [`session set`](cli/session.md#session-set), [`session unset`](cli/session.md#session-unset) | one session record: `{"id": …, "name": …, "created_at": …, "from": {"session": …}}` |
 | [`session current`](cli/session.md#session-current) | the session record plus `current_source`: `{"source": "flag" \| "env" \| "pointer" \| "default", "overrides": {"id": …, "name": …}}` — `overrides`, the session the flag or the variable hides, only when it hides another |
@@ -159,11 +159,20 @@ The one shape four commands are built from: `savepoint create` prints it, `savep
   "description": "before the v2 schema",
   "labels": { "arcave-safety-snapshot": "true" },
   "created_at": "2026-06-01T19:41:12.123456789Z",
-  "stats": [ … ],
-  "writable_layers": [ … ],
-  "images": [ … ],
-  "spec": { "format": "compose-yaml" },
-  "not_covered": { … }
+  "provider": "compose",
+  "summary": {
+    "units": [ … ],
+    "notices": [ … ],
+    "gaps": [ … ],
+    "replicas": [ … ]
+  },
+  "detail": {
+    "stats": [ … ],
+    "writable_layers": [ … ],
+    "images": [ … ],
+    "spec": { "format": "compose-yaml" },
+    "not_covered": { … }
+  }
 }
 ```
 
@@ -175,15 +184,55 @@ The one shape four commands are built from: `savepoint create` prints it, `savep
 | `labels` | object | Omitted unless the record carries marks. `arcave-safety-snapshot: "true"` is the one arcave sets. |
 | `taken_before_rollback_to` | object | A safety snapshot's alone: `{id, name}` — the savepoint the rollback it was taken before went to, as it was named then; `name` is `""` for an unnamed one. It may since have been removed. Omitted on any other savepoint. |
 | `created_at` | string | RFC3339Nano. |
+| `provider` | string | The provider that took the savepoint and alone reads its `detail`: `compose`. |
+| `summary` | object | What the provider sums the savepoint up as — what arcave prints and judges by. Derived on every read; the record on disk carries none. |
+| `detail` | object | The provider's own body of the savepoint. arcave carries it as is and does not interpret it. |
+
+What a savepoint captures follows the `capture` defaults in the config and the `arcave.*` labels in the compose file — see [Capture labels](capture_labels.md).
+
+### `summary`
+
+```json
+{
+  "units": [
+    { "kind": "volumes", "count": 1, "size_bytes": 41172480, "stored_bytes": 3948691 },
+    { "kind": "layers", "count": 1, "size_bytes": 83887104, "stored_bytes": 214016 },
+    { "kind": "images", "count": 1, "size_bytes": 453246976, "stored_bytes": 453246976 }
+  ],
+  "notices": [
+    { "message": "worker has no volumes: only its writable layer is held" }
+  ],
+  "gaps": [
+    { "code": "volume-not-restored", "message": "volume myapp_scratch was not in the savepoint: it holds what it held before the rollback" }
+  ],
+  "replicas": [
+    { "service": "app", "replica": 1, "held": ["layer"] }
+  ]
+}
+```
+
+| Field | Entries | Meaning |
+|---|---|---|
+| `units` | `{kind, count, size_bytes, stored_bytes}` | What the savepoint holds by kind, the rows of the text summary. `volumes` is always there; `layers` and `images` only when the savepoint holds any. `size_bytes` is what the units hold, `stored_bytes` what this capture added to the store. |
+| `notices` | `{message, hint, severe}` | What the capture left out, and every image named but not stored, the severe first — the summary's `Warnings`. `hint` and `severe` are omitted when unset. |
+| `gaps` | `{code, message}` | What a rollback to the savepoint does not put back. `code` is `volume-not-restored` (a mount a label or the config excluded) or `layer-not-restored` (a writable layer left out). |
+| `replicas` | `{service, replica, held}` | What the savepoint holds of each replica beside the volumes: `held` is `["layer"]` for a replica whose writable layer it holds. |
+
+`notices`, `gaps` and `replicas` are each omitted when empty.
+
+### `detail`
+
+The compose provider's body: what the savepoint holds, in the provider's own terms.
+
+| Field | Type | Meaning |
+|---|---|---|
 | `stats` | array | One entry per captured volume. Omitted when there are none. |
 | `writable_layers` | array | One entry per container whose writable layer was captured. Omitted when there are none. |
 | `images` | array | One entry per distinct image a service's `image:` names, kept so a container whose layer was left out can be rebuilt. Omitted when there are none. |
 | `spec` | object | `{"format": "compose-yaml"}` — the compose spec a rollback rebuilds the project from. |
 | `not_covered` | object | What the savepoint does **not** hold. Omitted when it holds everything. |
 
-What a savepoint captures follows the `capture` defaults in the config and the `arcave.*` labels in the compose file — see [Capture labels](capture_labels.md).
-
-### `stats[]`
+### `detail.stats[]`
 
 ```json
 {
@@ -221,7 +270,7 @@ What a savepoint captures follows the `capture` defaults in the config and the `
 | `fullcopy` | `{"compression": …}` — `zstd` or `none`, the format the archive is stored in |
 | `cdc` | `{"restic_snapshot_id": …}` — the restic snapshot the capture made |
 
-### `writable_layers[]`
+### `detail.writable_layers[]`
 
 ```json
 {
@@ -240,7 +289,7 @@ What a savepoint captures follows the `capture` defaults in the config and the `
 
 `replica` is compose's own container number, counted from 1, and `container_name` the name a rollback gives the container back. `committed_image_id` is the image the commit made — the image plus the container's changes. `imagebackend` is `dedupcopy` (the default: split into blobs shared across savepoints) or `fullcopy` (one whole archive), as `writable_layers.backend` or a label chose. `upstream_image_id` and `upstream_image_ref` name the image the layer sits on; they are omitted when arcave could not name it. `size_bytes` is the committed image's archive size; `stored_bytes` is what this capture added to the store once the bytes already there were recognised, and omitted when it added nothing. The gap between the two is the deduplication, in your own output.
 
-### `images[]`
+### `detail.images[]`
 
 ```json
 {
@@ -255,9 +304,9 @@ What a savepoint captures follows the `capture` defaults in the config and the `
 
 One entry per distinct image the services run, stored once for every savepoint and replica naming it. `id` is the image's id; `refs` and `repo_digests` are its names, omitted when it has none. `stored_bytes` is what this savepoint added — omitted when the image was already in the store. `stored` is `false` when neither the store nor the daemon held the image, or the daemon failed to hand it over: only its identity is recorded, with a warning, and a rollback needs it pullable to rebuild a container on it.
 
-### `not_covered`
+### `detail.not_covered`
 
-Every field is omitted when empty, and `not_covered` itself when all are.
+Every field is omitted when empty, and `not_covered` itself when all are. Each entry is also spelled out in `summary.notices`; an excluded mount and a left-out layer are in `summary.gaps` too.
 
 | Field | Entries | Meaning |
 |---|---|---|
@@ -285,33 +334,47 @@ Every field is omitted when empty, and `not_covered` itself when all are.
 ```json
 {
   "rolled_back_to": { … the savepoint record … },
-  "restored": [ … the volumes, in the shape stats[].volume uses … ],
-  "writable_layers": [
-    {
-      "service": "app",
-      "replica": 1,
-      "container_name": "myapp-app-1",
-      "image_id": "sha256:aaaa…",
-      "tag": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000"
-    }
-  ],
+  "restored": {
+    "units": [
+      { "kind": "volumes", "count": 1, "size_bytes": 0, "stored_bytes": 0 },
+      { "kind": "layers", "count": 1, "size_bytes": 0, "stored_bytes": 0 }
+    ],
+    "notices": [
+      {
+        "message": "the containers run on the savepoint's writable layers",
+        "hint": "`docker compose up` of your compose file recreates them on its images and drops those layers"
+      }
+    ]
+  },
+  "detail": {
+    "volumes": [ … the volumes, in the shape detail.stats[].volume uses … ],
+    "writable_layers": [
+      {
+        "service": "app",
+        "replica": 1,
+        "container_name": "myapp-app-1",
+        "image_id": "sha256:aaaa…",
+        "tag": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000"
+      }
+    ]
+  },
   "safety_snapshot": "019e8491-04c8-7000-8000-000000000000"
 }
 ```
 
-`writable_layers` names each container layer put back, and is omitted when the savepoint held none. `tag` is the reference the restored layer answers to in your local Docker daemon: after a rollback the container runs on it, not on the image its compose file names.
+`restored` is what the provider sums the build up as: `units` counts the volumes put back, and the layers when there were any — `size_bytes` and `stored_bytes` are `0`, a restore stores nothing — and `notices` are the warnings of the text summary, the severe first. `detail` is the compose provider's own body: `volumes` lists the volumes written back, and `writable_layers` names each container layer put back, omitted when the savepoint held none. `tag` is the reference the restored layer answers to in your local Docker daemon: after a rollback the container runs on it, not on the image its compose file names.
 
 `safety_snapshot` is the id of the safety snapshot the rollback took: rolling back to it undoes the rollback. It is omitted when none was taken: the project had no containers, or `rollback.safety_snapshot` or `--safety-snapshot` turned it off. In that last case the stream has no `rollback.safety-snapshot` step, and a warning, marked `in_result`, says what running without one risks.
 
-`leftover_volumes` is only there for a project with no containers: the docker names of the named volumes that outlived its `docker compose down` and the rollback overwrote, under [`compose.leftover_volumes: overwrite`](configuration.md#compose). No safety snapshot holds what they held. Each is also a severe warning in the result, `in_result` on the progress stream. A rollback run again after an interrupted one names none: what those volumes hold is the interrupted rollback's partial writes.
+`leftover_volumes` is only there for a project with no containers: the docker names of the named volumes that outlived its `docker compose down` and the rollback overwrote, under [`compose.leftover_volumes: overwrite`](configuration.md#compose). No safety snapshot holds what they held. Each is also a severe notice in `restored.notices`, `in_result` on the progress stream. A rollback run again after an interrupted one names none: what those volumes hold is the interrupted rollback's partial writes.
 
 ## `up`
 
 ```json
 {
   "rolled_back_to": { … the savepoint record … },
-  "restored": [ … as in rollback … ],
-  "writable_layers": [ … as in rollback … ],
+  "restored": { … as in rollback … },
+  "detail": { … as in rollback … },
   "discarded": {
     "containers": ["myapp-app-1", "myapp-db-1"],
     "volumes": ["myapp_pgdata"],
@@ -405,15 +468,15 @@ arcave savepoint list | jq -r 'max_by(.created_at).id'
 ```
 
 ```shell title="What a savepoint covers"
-arcave savepoint list | jq -r '.[0].stats[].volume.object_id'
+arcave savepoint list | jq -r '.[0].detail.stats[].volume.object_id'
 ```
 
 ```shell title="Layer bytes stored against layer bytes captured"
-arcave savepoint list | jq '[.[] | (.writable_layers // [])[] | {size: .size_bytes, stored: (.stored_bytes // 0)}]'
+arcave savepoint list | jq '[.[] | .summary.units[] | select(.kind == "layers") | {size: .size_bytes, stored: .stored_bytes}]'
 ```
 
 ```shell title="What a savepoint left out"
-arcave savepoint list | jq '.[0].not_covered // "nothing"'
+arcave savepoint list | jq '.[0].summary.notices // "nothing"'
 ```
 
 ```shell title="Results only, in a noisy terminal"

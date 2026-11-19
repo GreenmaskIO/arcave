@@ -28,7 +28,7 @@ A service with [`arcave.capture.mode: pause`](../capture_modes.md) is frozen ins
 
 ## A slow shutdown can be captured mid-crash
 
-A container that doesn't shut down within [`compose.stop_timeout`](configuration.md#compose), or within its own `stop_grace_period` if that is longer, is killed. Its volume is then captured as it was at the moment it was killed, and a database will have to recover from that state on its next start. The savepoint still reports success. The killed container is named in a warning and in the savepoint's `not_covered.killed_containers`. Give slow services a long enough `stop_grace_period`.
+A container that doesn't shut down within [`compose.stop_timeout`](configuration.md#compose), or within its own `stop_grace_period` if that is longer, is killed. Its volume is then captured as it was at the moment it was killed, and a database will have to recover from that state on its next start. The savepoint still reports success. The killed container is named in a warning and in the savepoint's `detail.not_covered.killed_containers`. Give slow services a long enough `stop_grace_period`.
 
 ## A service without a health check counts as up
 
@@ -89,7 +89,7 @@ The inflight marker an interrupted rollback leaves, `.arcave/inflight.json`, is 
 
 ## A savepoint holds only what its labels and config let it
 
-[Capture labels](capture_labels.md) and the config's [`capture`](configuration.md#capture) section can leave volumes, container files and images out of a savepoint. A rollback can't put back what was left out: an excluded anonymous volume comes back empty, and an excluded named volume or bind keeps what it holds at the time. The savepoint lists what it left out in `not_covered`.
+[Capture labels](capture_labels.md) and the config's [`capture`](configuration.md#capture) section can leave volumes, container files and images out of a savepoint. A rollback can't put back what was left out: an excluded anonymous volume comes back empty, and an excluded named volume or bind keeps what it holds at the time. The savepoint lists what it left out in `detail.not_covered`, and what a rollback will not put back in `summary.gaps`.
 
 A rollback doesn't load the images a savepoint stored back into Docker. A service whose container files were left out is rebuilt from its `image:`, so that image must still be in Docker or in a registry. If it is in neither, the rollback is refused before anything stops.
 

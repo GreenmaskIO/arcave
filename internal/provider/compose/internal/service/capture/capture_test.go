@@ -51,8 +51,9 @@ func captureAndCommit(
 	return composemodel.ParseSavepoint(committed)
 }
 
-// Commit writes the record; a Commit whose write fails returns the zero savepoint.
-func TestCaptured_Commit(t *testing.T) {
+// Commit writes the record and hands core the savepoint as arcave reads it: the provider named,
+// the body summed up; a Commit whose write fails returns the zero savepoint.
+func TestCapturedSavepoint_Commit(t *testing.T) {
 	tests := []struct {
 		name      string
 		commitErr error
@@ -74,7 +75,12 @@ func TestCaptured_Commit(t *testing.T) {
 			backend := composetest.NewMockBackend(demoVolume())
 			snapshot := backend.On("Snapshot", mock.Anything, mock.MatchedBy(func(req composemodel.BackendSnapshotRequest) bool {
 				return req.SnapshotID == id
-			})).Return(composemodel.SnapshotStat{Volume: demoVolume(), Type: composeconfig.SnapshotBackendFullCopy}, nil).Once()
+			})).Return(composemodel.SnapshotStat{
+				Volume:      demoVolume(),
+				Type:        composeconfig.SnapshotBackendFullCopy,
+				SizeBytes:   10,
+				StoredBytes: 4,
+			}, nil).Once()
 			repo := &composetest.MockSavepointRepo{}
 			commit := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint composemodel.Savepoint) bool {
 				return savepoint.Header.ID == id && savepoint.Header.Name == "sp"
@@ -96,6 +102,12 @@ func TestCaptured_Commit(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, id, savepoint.ID)
+				assert.Equal(t, composemodel.ProviderName, savepoint.Provider)
+				assert.Equal(t, []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: 10, StoredBytes: 4}},
+					savepoint.Summary.Units)
+				parsed, parseErr := composemodel.ParseSavepoint(savepoint)
+				require.NoError(t, parseErr)
+				assert.Equal(t, int64(4), parsed.Detail.Stats[0].StoredBytes, "the body is the record's")
 			}
 			backend.AssertExpectations(t)
 			repo.AssertExpectations(t)
@@ -133,35 +145,6 @@ func TestCapturer_Capture_RecordsTheRequest(t *testing.T) {
 	assert.Equal(t, req.Labels, savepoint.Header.Labels)
 	assert.Equal(t, req.TakenBefore, savepoint.Header.TakenBeforeRollbackTo)
 	assert.Equal(t, &composemodel.SpecRef{Format: composemodel.SpecFormatComposeYAML}, savepoint.Detail.Spec)
-	repo.AssertExpectations(t)
-}
-
-// Commit hands core the savepoint as arcave reads it: the provider named, the body summed up.
-func TestCapturedSavepoint_Commit(t *testing.T) {
-	// Arrange
-	backend := composetest.NewMockBackend(demoVolume())
-	backend.On("Snapshot", mock.Anything, composetest.MatchValidSnapshotID()).
-		Return(composemodel.SnapshotStat{Volume: demoVolume(), SizeBytes: 10, StoredBytes: 4}, nil).Once()
-	repo := &composetest.MockSavepointRepo{}
-	spec := expectSpecCommit(repo)
-	commit := repo.On("SaveSavepoint", mock.Anything, mock.Anything).Return(nil).Once()
-	mock.InOrder(spec, commit)
-	svc := New(Deps{SavepointRepo: repo})
-	plan := composemodel.Plan{Volumes: []composemodel.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
-	captured, err := svc.Capture(composetest.NewTestContext(), plan, hold.Outcome{},
-		provider.CaptureRequest{ID: model.NewSavepointID(), Name: "sp"})
-	require.NoError(t, err)
-
-	// Act
-	savepoint, err := captured.Commit(composetest.NewTestContext())
-
-	// Assert
-	require.NoError(t, err)
-	assert.Equal(t, composemodel.ProviderName, savepoint.Provider)
-	assert.Equal(t, []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: 10, StoredBytes: 4}},
-		savepoint.Summary.Units)
-	assert.NotEmpty(t, savepoint.Detail)
-	backend.AssertExpectations(t)
 	repo.AssertExpectations(t)
 }
 

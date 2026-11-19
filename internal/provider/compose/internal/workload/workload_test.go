@@ -193,7 +193,7 @@ func TestProvider_Inspect_WalksALiveRollback(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, composemodel.RestoreDetail{Volumes: []composemodel.Volume{composetest.DemoVolume()}}, restoreDetailOf(t, prepared.Summary()))
-	assert.Equal(t, model.RestoreSummary{Units: []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1}}}, prepared.Summary().Restored)
+	assert.Equal(t, model.RestoreSummary{Units: []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1}}}, prepared.Summary().Restored)
 	repo.AssertExpectations(t)
 	runner.AssertExpectations(t)
 	registry.AssertExpectations(t)

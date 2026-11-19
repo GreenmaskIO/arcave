@@ -38,7 +38,7 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 	wantLatest := true
 	wantReq := model.RollbackRequest{Latest: &wantLatest}
 	savepoint := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000"}
-	restored := model.RestoreSummary{Units: []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1}}}
+	restored := model.RestoreSummary{Units: []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1}}}
 	svcErr := errors.New("savepoint not found")
 	printErr := errors.New("stdout closed")
 

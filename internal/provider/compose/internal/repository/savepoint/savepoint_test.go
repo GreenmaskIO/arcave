@@ -16,6 +16,7 @@ package savepoint
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -118,8 +119,16 @@ func TestRepository_Save(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, want, got[0], "the record must survive a save/list round trip")
 
-	// The record is the reserved key at the root of the savepoint's own namespace.
-	assert.FileExists(t, filepath.Join(root, "019e843e-1650-7000-8000-000000000000", "savepoint.json"))
+	// The record is the reserved key at the root of the savepoint's own namespace: the header, the
+	// provider and the body, and no summary.
+	data, err := os.ReadFile(filepath.Join(root, "019e843e-1650-7000-8000-000000000000", "savepoint.json"))
+	require.NoError(t, err)
+	var onDisk map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &onDisk))
+	assert.JSONEq(t, `"compose"`, string(onDisk["provider"]))
+	assert.Contains(t, onDisk, "detail")
+	assert.NotContains(t, onDisk, "summary")
+	assert.NotContains(t, onDisk, "stats", "the body is under detail")
 }
 
 // An id that is not a Unix timestamp must never become a storage key: Save and
@@ -162,6 +171,7 @@ func TestRepository_List(t *testing.T) {
 		plant   func(t *testing.T, root string)
 		wantIDs []string
 		wantMsg string // substring List's error must carry
+		wantErr error
 	}{
 		{
 			name:    "an empty store lists nothing",
@@ -207,6 +217,22 @@ func TestRepository_List(t *testing.T) {
 			},
 			wantMsg: "load savepoint 019e844b-7818-7000-8000-000000000000: parse record",
 		},
+		{
+			name: "another provider's record is an error",
+			plant: func(t *testing.T, root string) {
+				writeObject(t, root, "019e844b-7818-7000-8000-000000000000/savepoint.json",
+					`{"id":"019e844b-7818-7000-8000-000000000000","provider":"kubernetes","detail":{}}`)
+			},
+			wantErr: composemodel.ErrSavepointDetail,
+		},
+		{
+			name: "an earlier version's record, naming no provider, is not read back",
+			plant: func(t *testing.T, root string) {
+				writeObject(t, root, "019e844b-7818-7000-8000-000000000000/savepoint.json",
+					`{"id":"019e844b-7818-7000-8000-000000000000","stats":[]}`)
+			},
+			wantErr: composemodel.ErrSavepointDetail,
+		},
 	}
 
 	for _, tt := range tests {
@@ -228,6 +254,10 @@ func TestRepository_List(t *testing.T) {
 			// Assert
 			if tt.wantMsg != "" {
 				require.ErrorContains(t, err, tt.wantMsg)
+				return
+			}
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
 				return
 			}
 			require.NoError(t, err)

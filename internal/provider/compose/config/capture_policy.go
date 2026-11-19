@@ -56,9 +56,8 @@ func ParseCaptureMode(token string) (CaptureMode, bool) {
 	}
 }
 
-// SnapshotBackendKind names the mechanism that captures a volume. Assigned where
-// a savepoint's units are decided, never by introspection. Kind is not noise: it
-// is what keeps this apart from VolumeSnapshotBackend, the instance itself.
+// SnapshotBackendKind names the mechanism that captures a volume, assigned where a savepoint's
+// units are decided, never by introspection.
 type SnapshotBackendKind string
 
 // The tokens snapshot.backend accepts, and the kind of a token it does not.

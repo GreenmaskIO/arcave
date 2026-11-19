@@ -70,29 +70,44 @@ Savepoint clean · 019e83ff-30c0-7000-8000-000000000000 · 18:36:40 · stored 27
   "name": "clean",
   "description": "seeded baseline — do not delete",
   "created_at": "2026-06-01T18:36:40.002114Z",
-  "stats": [
-    { "volume": { "object_id": "volume-named-arcave-demo_miniodata",   "type": "named", "backend": "fullcopy" }, "type": "fullcopy" },
-    { "volume": { "object_id": "volume-named-arcave-demo_pgdata",      "type": "named", "backend": "fullcopy" }, "type": "fullcopy" },
-    { "volume": { "object_id": "volume-anon-redis-1-data",             "type": "anon",  "backend": "fullcopy" }, "type": "fullcopy" }
-  ],
-  "writable_layers": [
-    { "service": "minio",    "replica": 1, "container_name": "arcave-demo-minio-1",    "upstream_image_ref": "minio/minio:latest" },
-    { "service": "postgres", "replica": 1, "container_name": "arcave-demo-postgres-1", "upstream_image_ref": "postgres:16" },
-    { "service": "redis",    "replica": 1, "container_name": "arcave-demo-redis-1",    "upstream_image_ref": "redis:7" }
-  ],
-  "images": [
-    { "id": "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e", "refs": ["minio/minio:latest"], "stored": true },
-    { "id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54", "refs": ["postgres:16"],        "stored": true },
-    { "id": "sha256:b2b95679e3b46fb51864949ed25ea976fc3a6bcc00a40a1bc00d568cb2822e50", "refs": ["redis:7"],            "stored": true }
-  ],
-  "spec": { "format": "compose-yaml" }
+  "provider": "compose",
+  "summary": {
+    "units": [
+      { "kind": "volumes", "count": 3, "size_bytes": 49200000,   "stored_bytes": 4700000 },
+      { "kind": "layers",  "count": 3, "size_bytes": 260000000,  "stored_bytes": 40600 },
+      { "kind": "images",  "count": 3, "size_bytes": 1100000000, "stored_bytes": 268000000 }
+    ],
+    "replicas": [
+      { "service": "minio",    "replica": 1, "held": ["layer"] },
+      { "service": "postgres", "replica": 1, "held": ["layer"] },
+      { "service": "redis",    "replica": 1, "held": ["layer"] }
+    ]
+  },
+  "detail": {
+    "stats": [
+      { "volume": { "object_id": "volume-named-arcave-demo_miniodata",   "type": "named", "backend": "fullcopy" }, "type": "fullcopy" },
+      { "volume": { "object_id": "volume-named-arcave-demo_pgdata",      "type": "named", "backend": "fullcopy" }, "type": "fullcopy" },
+      { "volume": { "object_id": "volume-anon-redis-1-data",             "type": "anon",  "backend": "fullcopy" }, "type": "fullcopy" }
+    ],
+    "writable_layers": [
+      { "service": "minio",    "replica": 1, "container_name": "arcave-demo-minio-1",    "upstream_image_ref": "minio/minio:latest" },
+      { "service": "postgres", "replica": 1, "container_name": "arcave-demo-postgres-1", "upstream_image_ref": "postgres:16" },
+      { "service": "redis",    "replica": 1, "container_name": "arcave-demo-redis-1",    "upstream_image_ref": "redis:7" }
+    ],
+    "images": [
+      { "id": "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e", "refs": ["minio/minio:latest"], "stored": true },
+      { "id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54", "refs": ["postgres:16"],        "stored": true },
+      { "id": "sha256:b2b95679e3b46fb51864949ed25ea976fc3a6bcc00a40a1bc00d568cb2822e50", "refs": ["redis:7"],            "stored": true }
+    ],
+    "spec": { "format": "compose-yaml" }
+  }
 }
 ```
 
 </TabItem>
 </Tabs>
 
-Three volumes, three writable layers, three images, one savepoint. The JSON is trimmed to the fields that identify each entry; [Roll back a failed migration](migration_rollback.md#2-take-the-savepoint) shows one of each in full.
+Three volumes, three writable layers, three images, one savepoint. `summary` is what arcave reads; `detail` is the compose provider's own body, trimmed to the fields that identify each entry; [Roll back a failed migration](migration_rollback.md#2-take-the-savepoint) shows one of each in full.
 
 ## 3. Let a test suite make a mess
 

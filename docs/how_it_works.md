@@ -75,7 +75,7 @@ Data belongs in volumes. The layer capture is what keeps a compose project hones
 
 **The compose spec.** `project.yaml`, the spec of the project as it was running, which a rollback rebuilds the project from.
 
-With [`writable_layers.backend`](reference/configuration.md#writable_layers) at its default, `dedupcopy`, layers are deduplicated: the data every savepoint shares, such as the image a layer sits on, is stored once. In the record, `writable_layers[].size_bytes` is the committed image's size and `writable_layers[].stored_bytes` is what the capture actually added; `images[]` carries the same two numbers for each image. `fullcopy` stores each layer whole instead.
+With [`writable_layers.backend`](reference/configuration.md#writable_layers) at its default, `dedupcopy`, layers are deduplicated: the data every savepoint shares, such as the image a layer sits on, is stored once. In the savepoint's `detail`, `writable_layers[].size_bytes` is the committed image's size and `writable_layers[].stored_bytes` is what the capture actually added; `images[]` carries the same two numbers for each image, and `summary.units` sums them per kind. `fullcopy` stores each layer whole instead.
 
 ## What a savepoint covers
 
@@ -88,7 +88,7 @@ The unit of backup is the **volume**, not the mount:
 
 Mounts that are not persistent data are skipped, and each skip is reported with its reason: `tmpfs`, `npipe`, `image`, `cluster`, `unknown_type`, and `inherited_from_outside` for a mount a service takes through `volumes_from` from a container outside the project. A mount inherited from another service of the project is captured once, as its source's.
 
-The savepoint's `not_covered` lists everything it does not hold: `mounts` (each with its `reason`), `services_without_volumes`, `killed_containers` — the containers the stop had to kill — `replica_gaps`, `unresolved_images`, the `writable_layers` and `images` a label left out, and `failed_hooks` — the `pre-capture` hooks that failed and were let through. It is absent when the savepoint holds everything.
+The savepoint's `detail.not_covered` lists everything it does not hold: `mounts` (each with its `reason`), `services_without_volumes`, `killed_containers` — the containers the stop had to kill — `replica_gaps`, `unresolved_images`, the `writable_layers` and `images` a label left out, and `failed_hooks` — the `pre-capture` hooks that failed and were let through. It is absent when the savepoint holds everything. Each entry is also spelled out in `summary.notices`, and what a rollback will not put back in `summary.gaps`.
 
 A volume is addressed directly — a named volume by its Docker name, a bind mount by its host path — and read and written through a throwaway container of arcave's own. The project's containers need only *exist*; they do not need to be running.
 
@@ -104,7 +104,7 @@ Volume data is moved one of two ways, chosen by [`snapshot.backend`](reference/c
 
 ## What you choose to capture
 
-By default a savepoint takes all of the above. `arcave.*` labels in your compose file change that per service or per volume: leave a service, a mount, a writable layer or an image out, or pick the backend a volume is captured with. The [`capture`](reference/configuration.md#capture) keys in `.arcave/config.yaml` set the defaults per kind — writable layers, images, named, bind and anonymous volumes — so you can steer a running project without recreating it. The most specific setting wins: a named volume's own label, then the service's, then the config. A mount left out this way is reported in `not_covered.mounts` with the reason `excluded`.
+By default a savepoint takes all of the above. `arcave.*` labels in your compose file change that per service or per volume: leave a service, a mount, a writable layer or an image out, or pick the backend a volume is captured with. The [`capture`](reference/configuration.md#capture) keys in `.arcave/config.yaml` set the defaults per kind — writable layers, images, named, bind and anonymous volumes — so you can steer a running project without recreating it. The most specific setting wins: a named volume's own label, then the service's, then the config. A mount left out this way is reported in `detail.not_covered.mounts` with the reason `excluded`.
 
 A label arcave cannot read fails `savepoint create` before anything is stopped. A rollback restores what the savepoint holds, whatever the labels say now; an anonymous volume the savepoint left out comes back empty. [Capture labels](reference/capture_labels.md) has every label.
 

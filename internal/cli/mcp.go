@@ -836,9 +836,8 @@ func (h *MCPHandler) Server() *mcpsdk.Server {
 	return srv
 }
 
-// newOutputSchema infers T's schema with a session id as the string it marshals to, and a
-// provider's body as the object it is: inferred from their Go types, both would be arrays, and the
-// SDK would refuse every result.
+// newOutputSchema infers T's schema with a session id as a string and a provider's body as an
+// object; inferred from their Go types, both would be arrays the SDK refuses.
 func newOutputSchema[T any]() *jsonschema.Schema {
 	return utils.Must(jsonschema.For[T](&jsonschema.ForOptions{TypeSchemas: map[reflect.Type]*jsonschema.Schema{
 		reflect.TypeFor[model.SessionID](): {Type: "string", Format: "uuid"},

@@ -4,13 +4,14 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package model
 
 import (
@@ -28,9 +29,9 @@ type RestoreDetail struct {
 // NewRestoreSummary sums detail up: volumes always, layers when it restores any, and its notices,
 // the leftover volumes it overwrites first.
 func NewRestoreSummary(detail RestoreDetail, leftover []string) model.RestoreSummary {
-	units := []model.UnitTally{{Kind: model.UnitKindVolumes, Count: len(detail.Volumes)}}
+	units := []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: len(detail.Volumes)}}
 	if len(detail.WritableLayers) > 0 {
-		units = append(units, model.UnitTally{Kind: model.UnitKindLayers, Count: len(detail.WritableLayers)})
+		units = append(units, model.UnitTotal{Kind: model.UnitKindLayers, Count: len(detail.WritableLayers)})
 	}
 	notices := NewLeftoverVolumeNotices(leftover)
 	if len(detail.WritableLayers) > 0 {

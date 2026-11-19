@@ -126,7 +126,7 @@ A rollback does not fail on one: its safety snapshot logs a warning and follows 
 
 ## What was left out
 
-Everything a savepoint did not capture is listed in the record's `not_covered` — a left-out mount under `not_covered.mounts` with `reason: excluded` and the label that said so, a skipped layer under `not_covered.writable_layers`, a skipped image under `not_covered.images`. See [Output](output.md#the-savepoint-record).
+Everything a savepoint did not capture is listed in the record's `detail.not_covered` — a left-out mount under `mounts` with `reason: excluded` and the label that said so, a skipped layer under `writable_layers`, a skipped image under `images` — and spelled out in `summary.notices`; what a rollback will not put back is also in `summary.gaps`. See [Output](output.md#the-savepoint-record).
 
 A rollback puts back what the savepoint holds, whatever the labels say now:
 

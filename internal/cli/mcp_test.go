@@ -41,7 +41,7 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 		Name:     "before-migration",
 		Provider: "compose",
 		Summary: model.SavepointSummary{
-			Units:   []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: 10}},
+			Units:   []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: 10}},
 			Notices: []model.Notice{{Message: "web has no volumes: only its writable layer is held"}},
 		},
 		Detail: json.RawMessage(`{"stats":[{"volume":{"object_id":"volume-named-demo_db"}}]}`),
@@ -65,28 +65,52 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	svc.AssertExpectations(t)
 }
 
-// A savepoint's body is an object the schema takes as it comes: inferred, json.RawMessage would be
-// an array of bytes.
-func TestSavepointOutputSchema_AcceptsADetail(t *testing.T) {
-	// Arrange
-	resolved, err := newOutputSchema[model.Savepoint]().Resolve(nil)
-	require.NoError(t, err)
+// A provider's body is an object every schema carrying one takes as it comes: inferred,
+// json.RawMessage would be an array of bytes.
+func TestNewOutputSchema(t *testing.T) {
+	detail := json.RawMessage(`{"stats":[{"volume":{"object_id":"volume-named-demo_db"}}]}`)
 	savepoint := model.Savepoint{
 		ID:       "019e843e-1650-7000-8000-000000000000",
 		Provider: "compose",
-		Summary:  model.SavepointSummary{Units: []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1}}},
-		Detail:   json.RawMessage(`{"stats":[{"volume":{"object_id":"volume-named-demo_db"}}]}`),
+		Summary:  model.SavepointSummary{Units: []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1}}},
+		Detail:   detail,
 	}
-	data, err := json.Marshal(savepoint)
-	require.NoError(t, err)
-	var instance map[string]any
-	require.NoError(t, json.Unmarshal(data, &instance))
+	restored := model.RestoreSummary{Units: []model.UnitTotal{{Kind: model.UnitKindVolumes, Count: 1}}}
+	tests := []struct {
+		name   string
+		schema *jsonschema.Schema
+		result any
+	}{
+		{name: "a savepoint", schema: newOutputSchema[model.Savepoint](), result: savepoint},
+		{name: "a listing", schema: newOutputSchema[listOutput](), result: listOutput{Savepoints: []model.Savepoint{savepoint}}},
+		{
+			name:   "a rollback",
+			schema: newOutputSchema[model.RollbackResult](),
+			result: model.RollbackResult{RolledBackTo: savepoint, Restored: restored, Detail: detail},
+		},
+		{
+			name:   "an up",
+			schema: newOutputSchema[model.UpResult](),
+			result: model.UpResult{RolledBackTo: savepoint, Restored: restored, Detail: detail},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			resolved, err := tt.schema.Resolve(nil)
+			require.NoError(t, err)
+			data, err := json.Marshal(tt.result)
+			require.NoError(t, err)
+			var instance map[string]any
+			require.NoError(t, json.Unmarshal(data, &instance))
 
-	// Act
-	err = resolved.Validate(instance)
+			// Act
+			err = resolved.Validate(instance)
 
-	// Assert
-	require.NoError(t, err)
+			// Assert
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestMCPHandler_listSavepointsMCP(t *testing.T) {
@@ -698,7 +722,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 			Replicas: []model.ReplicaStatus{{Number: 1, State: model.ReplicaStateRunning}}}},
 		Unreadable: []model.StatusUnreadable{{Source: model.StatusUnreadableStore, Error: "unreachable"}},
 	}
-	restored := model.RestoreSummary{Units: []model.UnitTally{{Kind: model.UnitKindVolumes}, {Kind: model.UnitKindLayers, Count: 1}}}
+	restored := model.RestoreSummary{Units: []model.UnitTotal{{Kind: model.UnitKindVolumes}, {Kind: model.UnitKindLayers, Count: 1}}}
 	restoredDetail := json.RawMessage(`{"writable_layers":[{"replica":1,"service":"db","tag":"arcave/demo-db-1-postgres-16:sp-v1"}]}`)
 	current := model.CurrentSession{
 		Session:       record,

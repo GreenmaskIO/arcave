@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package test
 
 import (
@@ -22,8 +23,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// The part of the compose provider's body of a savepoint these tests read. The body is the
-// provider's own, so it is decoded here, into what the tests assert on.
+// The part of the compose provider's body of a savepoint these tests decode and assert on.
 type (
 	savepointDetail struct {
 		Stats      []detailStat      `json:"stats"`

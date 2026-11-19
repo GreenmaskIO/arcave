@@ -652,7 +652,7 @@ func (s *Reader) readNetworks(ctx context.Context) ([]composemodel.Network, erro
 	return networks, nil
 }
 
-// readImages inspects each distinct image the containers run on, then the base readImages those name
+// readImages inspects each distinct image the containers run on, then the base images those name
 // by composemodel.SystemLabelBaseImageID — the true base of a container a rollback rebuilt on an arcave tag.
 func (s *Reader) readImages(
 	ctx context.Context, services []composemodel.Service,

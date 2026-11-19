@@ -535,16 +535,6 @@ func (s *Service) rollbackColdStart(
 
 	summary := prepared.Summary()
 	leftover := summary.Overwritten
-	if recovery.recovering {
-		// What the project still owns is the interrupted rollback's partial writes, not volumes a
-		// `compose down` left: overwriting them is the recovery, and no leftover to name.
-		for _, name := range leftover {
-			log.Info().Str("volume", name).
-				Msg("the compose project is not running but this volume survives; the rollback overwrites it, " +
-					"and no safety snapshot is taken")
-		}
-		leftover = nil
-	}
 	for _, warning := range summary.Warnings {
 		progress.Current(ctx).WarnInResult(warning.Message)
 	}

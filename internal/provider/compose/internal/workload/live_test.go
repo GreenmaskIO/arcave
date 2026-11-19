@@ -15,6 +15,7 @@
 package workload
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -161,15 +162,32 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 // refusing policy, else named as overwritten; a recovery is never refused.
 func TestLive_PrepareSavepoint_LeftoverVolumes(t *testing.T) {
 	tests := []struct {
-		name       string
-		policy     composeconfig.LeftoverVolumesPolicy
-		recovering bool
-		wantErr    error
+		name            string
+		policy          composeconfig.LeftoverVolumesPolicy
+		recovering      bool
+		wantOverwritten []string
+		wantWarnings    []model.Notice
+		wantLogged      string
+		wantErr         error
 	}{
-		{name: "the default overwrites", wantErr: nil},
-		{name: "overwrite", policy: composeconfig.LeftoverVolumesOverwrite},
+		{
+			name:            "the default overwrites",
+			wantOverwritten: []string{"demo_db"},
+			wantWarnings:    composemodel.NewLeftoverVolumeNotices([]string{"demo_db"}),
+		},
+		{
+			name:            "overwrite",
+			policy:          composeconfig.LeftoverVolumesOverwrite,
+			wantOverwritten: []string{"demo_db"},
+			wantWarnings:    composemodel.NewLeftoverVolumeNotices([]string{"demo_db"}),
+		},
 		{name: "refuse", policy: composeconfig.LeftoverVolumesRefuse, wantErr: composemodel.ErrLeftoverVolumes},
-		{name: "refuse, but a recovery", policy: composeconfig.LeftoverVolumesRefuse, recovering: true},
+		{
+			name:       "refuse, but a recovery, which names none: they are its own writes",
+			policy:     composeconfig.LeftoverVolumesRefuse,
+			recovering: true,
+			wantLogged: "the compose project is not running but this volume survives",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -197,7 +215,8 @@ func TestLive_PrepareSavepoint_LeftoverVolumes(t *testing.T) {
 				Store:           store,
 			})
 			live := liveWorkload{service: svc, introspection: composetest.DemoAbsentIntrospection()}
-			ctx := zerolog.Nop().WithContext(context.Background())
+			var logs bytes.Buffer
+			ctx := zerolog.New(&logs).WithContext(context.Background())
 
 			// Act
 			prepared, err := live.PrepareSavepoint(ctx, record.Header.ID, provider.PrepareOptions{Recovering: tt.recovering})
@@ -209,15 +228,10 @@ func TestLive_PrepareSavepoint_LeftoverVolumes(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				summary := prepared.Summary()
-				assert.Equal(t, []string{"demo_db"}, summary.Overwritten)
-				if tt.recovering {
-					assert.Empty(t, summary.Warnings, "a recovery overwrites its own partial writes")
-					assert.Empty(t, summary.Restored.Notices)
-				} else {
-					want := composemodel.NewLeftoverVolumeNotices([]string{"demo_db"})
-					assert.Equal(t, want, summary.Warnings)
-					assert.Equal(t, want, summary.Restored.Notices)
-				}
+				assert.Equal(t, tt.wantOverwritten, summary.Overwritten)
+				assert.Equal(t, tt.wantWarnings, summary.Warnings)
+				assert.Equal(t, tt.wantWarnings, summary.Restored.Notices)
+				assert.Contains(t, logs.String(), tt.wantLogged)
 			}
 			repo.AssertExpectations(t)
 			registry.AssertExpectations(t)

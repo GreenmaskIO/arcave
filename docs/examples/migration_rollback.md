@@ -75,76 +75,91 @@ INF savepoint.create[pre-migration] elapsed=10.194s status=succeeded
   "name": "pre-migration",
   "description": "orders table, 1000 rows",
   "created_at": "2026-06-01T19:41:12.123456789Z",
-  "stats": [
-    {
-      "volume": {
-        "object_id": "volume-named-arcave-demo_pgdata",
-        "compose_project": "arcave-demo",
-        "type": "named",
-        "backend": "fullcopy",
-        "named": {
-          "volume_name": "arcave-demo_pgdata",
-          "used_by": [
-            { "service": "postgres", "target": "/var/lib/postgresql/data" }
-          ]
-        }
+  "provider": "compose",
+  "summary": {
+    "units": [
+      { "kind": "volumes", "count": 3, "size_bytes": 48900000,   "stored_bytes": 4700000 },
+      { "kind": "layers",  "count": 3, "size_bytes": 260000000,  "stored_bytes": 40600 },
+      { "kind": "images",  "count": 3, "size_bytes": 1100000000, "stored_bytes": 268000000 }
+    ],
+    "replicas": [
+      { "service": "minio",    "replica": 1, "held": ["layer"] },
+      { "service": "postgres", "replica": 1, "held": ["layer"] },
+      { "service": "redis",    "replica": 1, "held": ["layer"] }
+    ]
+  },
+  "detail": {
+    "stats": [
+      {
+        "volume": {
+          "object_id": "volume-named-arcave-demo_pgdata",
+          "compose_project": "arcave-demo",
+          "type": "named",
+          "backend": "fullcopy",
+          "named": {
+            "volume_name": "arcave-demo_pgdata",
+            "used_by": [
+              { "service": "postgres", "target": "/var/lib/postgresql/data" }
+            ]
+          }
+        },
+        "type": "fullcopy",
+        "size_bytes": 48843264,
+        "stored_bytes": 4684365,
+        "payload": { "compression": "zstd" }
       },
-      "type": "fullcopy",
-      "size_bytes": 48843264,
-      "stored_bytes": 4684365,
-      "payload": { "compression": "zstd" }
-    },
-    {
-      "volume": {
-        "object_id": "volume-anon-redis-1-data",
-        "compose_project": "arcave-demo",
-        "type": "anon",
-        "backend": "fullcopy",
-        "anon": { "service": "redis", "replica": 1, "target": "/data" }
+      {
+        "volume": {
+          "object_id": "volume-anon-redis-1-data",
+          "compose_project": "arcave-demo",
+          "type": "anon",
+          "backend": "fullcopy",
+          "anon": { "service": "redis", "replica": 1, "target": "/data" }
+        },
+        "type": "fullcopy",
+        "size_bytes": 6144,
+        "stored_bytes": 251,
+        "payload": { "compression": "zstd" }
       },
-      "type": "fullcopy",
-      "size_bytes": 6144,
-      "stored_bytes": 251,
-      "payload": { "compression": "zstd" }
-    },
-    …
-  ],
-  "writable_layers": [
-    {
-      "service": "postgres",
-      "replica": 1,
-      "container_id": "c433fe7e348f8a2a8d492417f911dd5264a6825e587e52f2af0ba177bbbc51e0",
-      "container_name": "arcave-demo-postgres-1",
-      "committed_image_id": "sha256:b8ac8e2ebd778aadb0316246331435eaa1bc01bdbe201d6216c57fb420fc23e0",
-      "imagebackend": "dedupcopy",
-      "upstream_image_id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
-      "upstream_image_ref": "postgres:16",
-      "size_bytes": 158913433,
-      "stored_bytes": 16834
-    },
-    …
-  ],
-  "images": [
-    {
-      "id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
-      "refs": ["postgres:16"],
-      "repo_digests": [
-        "postgres@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54"
-      ],
-      "size_bytes": 657586103,
-      "stored_bytes": 164698711,
-      "stored": true
-    },
-    …
-  ],
-  "spec": { "format": "compose-yaml" }
+      …
+    ],
+    "writable_layers": [
+      {
+        "service": "postgres",
+        "replica": 1,
+        "container_id": "c433fe7e348f8a2a8d492417f911dd5264a6825e587e52f2af0ba177bbbc51e0",
+        "container_name": "arcave-demo-postgres-1",
+        "committed_image_id": "sha256:b8ac8e2ebd778aadb0316246331435eaa1bc01bdbe201d6216c57fb420fc23e0",
+        "imagebackend": "dedupcopy",
+        "upstream_image_id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
+        "upstream_image_ref": "postgres:16",
+        "size_bytes": 158913433,
+        "stored_bytes": 16834
+      },
+      …
+    ],
+    "images": [
+      {
+        "id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
+        "refs": ["postgres:16"],
+        "repo_digests": [
+          "postgres@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54"
+        ],
+        "size_bytes": 657586103,
+        "stored_bytes": 164698711,
+        "stored": true
+      },
+      …
+    ],
+    "spec": { "format": "compose-yaml" }
+  }
 }
 ```
 
 </TabItem>
 </Tabs>
 
-The summary counts what the savepoint holds: three volumes, three writable layers and three images, one per service. The JSON is trimmed to the PostgreSQL and Redis volumes and one entry of each other kind: the real record holds the MinIO volume as well, and a layer and an image for every service. Every service was captured, including the anonymous volume behind Redis, which arcave had to ask the Docker daemon about through the `redis` container. A layer's `stored_bytes` is what it adds over its image, which is why it is so much smaller than its `size_bytes`.
+The summary counts what the savepoint holds: three volumes, three writable layers and three images, one per service. `summary.units` is the same table in the JSON. `detail`, the compose provider's own body, is trimmed to the PostgreSQL and Redis volumes and one entry of each other kind: the real record holds the MinIO volume as well, and a layer and an image for every service. Every service was captured, including the anonymous volume behind Redis, which arcave had to ask the Docker daemon about through the `redis` container. A layer's `stored_bytes` is what it adds over its image, which is why it is so much smaller than its `size_bytes`.
 
 The log in the JSON tab is what `--progress log` writes off a terminal, trimmed to one image and one writable layer, the timestamps left out. Each line names its step by its path in the tree, and a step that measures bytes ends with what it read, stored and found already stored. The three volumes are captured concurrently, so their lines interleave. Then each distinct image is kept once, and every container's writable layer is committed over it.
 
@@ -227,38 +242,52 @@ INF rollback[pre-migration] elapsed=12.126s status=succeeded
     "created_at": "2026-06-01T19:41:12.123456789Z",
     …
   },
-  "restored": [
-    {
-      "object_id": "volume-named-arcave-demo_pgdata",
-      "compose_project": "arcave-demo",
-      "type": "named",
-      "backend": "fullcopy",
-      "named": {
-        "volume_name": "arcave-demo_pgdata",
-        "used_by": [
-          { "service": "postgres", "target": "/var/lib/postgresql/data" }
-        ]
+  "restored": {
+    "units": [
+      { "kind": "volumes", "count": 3, "size_bytes": 0, "stored_bytes": 0 },
+      { "kind": "layers",  "count": 3, "size_bytes": 0, "stored_bytes": 0 }
+    ],
+    "notices": [
+      {
+        "message": "the containers run on the savepoint's writable layers",
+        "hint": "`docker compose up` of your compose file recreates them on its images and drops those layers"
       }
-    },
-    {
-      "object_id": "volume-anon-redis-1-data",
-      "compose_project": "arcave-demo",
-      "type": "anon",
-      "backend": "fullcopy",
-      "anon": { "service": "redis", "replica": 1, "target": "/data" }
-    },
-    …
-  ],
-  "writable_layers": [
-    {
-      "service": "postgres",
-      "replica": 1,
-      "container_name": "arcave-demo-postgres-1",
-      "image_id": "sha256:b8ac8e2ebd778aadb0316246331435eaa1bc01bdbe201d6216c57fb420fc23e0",
-      "tag": "arcave/arcave-demo-postgres-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000"
-    },
-    …
-  ],
+    ]
+  },
+  "detail": {
+    "volumes": [
+      {
+        "object_id": "volume-named-arcave-demo_pgdata",
+        "compose_project": "arcave-demo",
+        "type": "named",
+        "backend": "fullcopy",
+        "named": {
+          "volume_name": "arcave-demo_pgdata",
+          "used_by": [
+            { "service": "postgres", "target": "/var/lib/postgresql/data" }
+          ]
+        }
+      },
+      {
+        "object_id": "volume-anon-redis-1-data",
+        "compose_project": "arcave-demo",
+        "type": "anon",
+        "backend": "fullcopy",
+        "anon": { "service": "redis", "replica": 1, "target": "/data" }
+      },
+      …
+    ],
+    "writable_layers": [
+      {
+        "service": "postgres",
+        "replica": 1,
+        "container_name": "arcave-demo-postgres-1",
+        "image_id": "sha256:b8ac8e2ebd778aadb0316246331435eaa1bc01bdbe201d6216c57fb420fc23e0",
+        "tag": "arcave/arcave-demo-postgres-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000"
+      },
+      …
+    ]
+  },
   "safety_snapshot": "019e8491-04c8-7000-8000-000000000000"
 }
 ```
@@ -268,7 +297,7 @@ INF rollback[pre-migration] elapsed=12.126s status=succeeded
 
 arcave first reads what the savepoint says it holds, then loads the writable layers back into the daemon — `rollback.prepare`, all before anything is stopped, so a savepoint that cannot be rebuilt leaves the project running. Then arcave takes the safety snapshot of the live state, rebuilds the project from the savepoint's spec, and restores every volume into it. The log in the JSON tab is trimmed to the `postgres` lines.
 
-`rolled_back_to` is the whole savepoint record, trimmed here as in step 2; `restored` and `writable_layers` are trimmed as `stats` was: the real result holds all three volumes and all three containers, as the summary counts them. After the rollback each container runs on the `arcave/…` tag of its restored layer rather than on the image its compose file names.
+`rolled_back_to` is the whole savepoint record, trimmed here as in step 2; `restored` counts what was put back and carries the warning; `detail.volumes` and `detail.writable_layers` are trimmed as `detail.stats` was: the real result holds all three volumes and all three containers, as `restored.units` counts them. After the rollback each container runs on the `arcave/…` tag of its restored layer rather than on the image its compose file names.
 
 ## 5. Verify
 

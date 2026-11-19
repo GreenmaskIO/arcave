@@ -26,7 +26,7 @@ Captures a savepoint. The services are stopped for the capture and started again
 | `description` | no | What this savepoint is being taken before. |
 | `wait_timeout` | no | How long to wait for services to become healthy on restart, e.g. `2m` or `90s`. Omit for the project's own bound. |
 
-Returns the savepoint record — the shape [Output](output.md#the-savepoint-record) describes, `stats`, `writable_layers`, `images`, `spec` and `not_covered` included.
+Returns the savepoint record — the shape [Output](output.md#the-savepoint-record) describes, its `summary` and the compose provider's `detail` included.
 
 ```json title="structured content"
 {
@@ -34,15 +34,22 @@ Returns the savepoint record — the shape [Output](output.md#the-savepoint-reco
   "name": "before-migration",
   "description": "before the v2 schema",
   "created_at": "2026-06-01T19:41:12.123456789Z",
-  "stats": [ … ],
-  "writable_layers": [ … ],
-  "images": [ … ],
-  "spec": { "format": "compose-yaml" },
-  "not_covered": { "services_without_volumes": ["worker"] }
+  "provider": "compose",
+  "summary": {
+    "units": [ … ],
+    "notices": [ { "message": "worker has no volumes: only its writable layer is held" } ]
+  },
+  "detail": {
+    "stats": [ … ],
+    "writable_layers": [ … ],
+    "images": [ … ],
+    "spec": { "format": "compose-yaml" },
+    "not_covered": { "services_without_volumes": ["worker"] }
+  }
 }
 ```
 
-`not_covered` is what the savepoint does **not** hold — skipped mounts with a reason code, services without a captured volume, containers killed at the stop deadline, `pre-capture` hooks that failed and were let through, replica gaps, unresolvable images, and layers or images a [capture label](capture_labels.md) left out. The tool's description tells an agent to report it before relying on the savepoint.
+`summary.notices` spell out what the savepoint does **not** hold, as `detail.not_covered` lists it — skipped mounts with a reason code, services without a captured volume, containers killed at the stop deadline, `pre-capture` hooks that failed and were let through, replica gaps, unresolvable images, and layers or images a [capture label](capture_labels.md) left out. The tool's description tells an agent to report them before relying on the savepoint.
 
 A failure of the form `savepoint 019e843e-1650-7000-8000-000000000000 committed; bringing the project back: …` means the savepoint **exists and is safe to roll back to**; only the restart or a `post-capture` hook failed. The tool's own description tells an agent this, so it reports the id rather than taking another savepoint.
 
@@ -111,18 +118,27 @@ Returns what the CLI prints — see [Output](output.md#rollback):
 ```json title="structured content"
 {
   "rolled_back_to": { "id": "019e843e-1650-7000-8000-000000000000", … },
-  "restored": [
-    { "object_id": "volume-named-myapp_pgdata", "type": "named", … }
-  ],
-  "writable_layers": [
-    { "service": "app", "replica": 1, "container_name": "myapp-app-1", "image_id": "sha256:aaaa…",
-      "tag": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000" }
-  ],
+  "restored": {
+    "units": [
+      { "kind": "volumes", "count": 1, "size_bytes": 0, "stored_bytes": 0 },
+      { "kind": "layers", "count": 1, "size_bytes": 0, "stored_bytes": 0 }
+    ],
+    "notices": [ … ]
+  },
+  "detail": {
+    "volumes": [
+      { "object_id": "volume-named-myapp_pgdata", "type": "named", … }
+    ],
+    "writable_layers": [
+      { "service": "app", "replica": 1, "container_name": "myapp-app-1", "image_id": "sha256:aaaa…",
+        "tag": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000" }
+    ]
+  },
   "safety_snapshot": "019e8491-04c8-7000-8000-000000000000"
 }
 ```
 
-`writable_layers` is omitted when the savepoint held no layer. `leftover_volumes` appears only when a project with no containers was rebuilt over named volumes that outlived its `down`: it lists their docker names, each overwritten with no safety snapshot holding what it held. The tool's description tells an agent to report it.
+`restored` counts what was put back and carries the warnings; `detail` is the compose provider's own body, its `writable_layers` omitted when the savepoint held no layer. `leftover_volumes` appears only when a project with no containers was rebuilt over named volumes that outlived its `down`: it lists their docker names, each overwritten with no safety snapshot holding what it held. The tool's description tells an agent to report it.
 
 ## `up`
 
@@ -141,10 +157,13 @@ Returns what the CLI prints — see [`arcave up`](cli/up.md#output):
 ```json title="structured content"
 {
   "rolled_back_to": { "id": "019e843e-1650-7000-8000-000000000000", … },
-  "restored": [
-    { "object_id": "volume-named-myapp_pgdata", "type": "named", … }
-  ],
-  "writable_layers": [ … ],
+  "restored": { "units": [ … ], "notices": [ … ] },
+  "detail": {
+    "volumes": [
+      { "object_id": "volume-named-myapp_pgdata", "type": "named", … }
+    ],
+    "writable_layers": [ … ]
+  },
   "discarded": { "containers": ["myapp-app-1"], "volumes": ["myapp_pgdata"], "networks": ["myapp_default"] }
 }
 ```

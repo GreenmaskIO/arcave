@@ -4,13 +4,14 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package model
 
 import (
@@ -77,6 +78,10 @@ func ToSharedSavepoint(m Savepoint) (model.Savepoint, error) {
 // ParseSavepoint reads the compose provider's savepoint out of record; ErrSavepointDetail for
 // another provider's or a body that does not decode.
 func ParseSavepoint(record model.Savepoint) (Savepoint, error) {
+	if record.Provider == "" {
+		return Savepoint{}, fmt.Errorf("%w: savepoint %s was written by an earlier arcave version, which is not read back",
+			ErrSavepointDetail, record.ID)
+	}
 	if record.Provider != ProviderName {
 		return Savepoint{}, fmt.Errorf("%w: savepoint %s is the %q provider's", ErrSavepointDetail, record.ID, record.Provider)
 	}
@@ -122,28 +127,28 @@ func newSharedSavepoint(m Savepoint, summary model.SavepointSummary) (model.Save
 // does not put back, and the writable layers it holds by replica.
 func NewSavepointSummary(detail SavepointDetail) model.SavepointSummary {
 	return model.SavepointSummary{
-		Units:    newUnitTallies(detail),
+		Units:    newUnitTotals(detail),
 		Notices:  newSavepointNotices(detail),
 		Gaps:     newNotRestoredNotices(detail.NotCovered),
 		Replicas: newReplicaHoldings(detail.WritableLayers),
 	}
 }
 
-// newUnitTallies tallies volumes always, layers and images when the savepoint holds any.
-func newUnitTallies(detail SavepointDetail) []model.UnitTally {
+// newUnitTotals totals volumes always, layers and images when the savepoint holds any.
+func newUnitTotals(detail SavepointDetail) []model.UnitTotal {
 	var volumeSize, volumeStored int64
 	for _, stat := range detail.Stats {
 		volumeSize += stat.SizeBytes
 		volumeStored += stat.StoredBytes
 	}
-	units := []model.UnitTally{newUnitTally(model.UnitKindVolumes, len(detail.Stats), volumeSize, volumeStored)}
+	units := []model.UnitTotal{newUnitTotal(model.UnitKindVolumes, len(detail.Stats), volumeSize, volumeStored)}
 	if len(detail.WritableLayers) > 0 {
 		var layerSize, layerStored int64
 		for _, layer := range detail.WritableLayers {
 			layerSize += layer.SizeBytes
 			layerStored += layer.StoredBytes
 		}
-		units = append(units, newUnitTally(model.UnitKindLayers, len(detail.WritableLayers), layerSize, layerStored))
+		units = append(units, newUnitTotal(model.UnitKindLayers, len(detail.WritableLayers), layerSize, layerStored))
 	}
 	if len(detail.Images) > 0 {
 		var imageSize, imageStored int64
@@ -151,14 +156,14 @@ func newUnitTallies(detail SavepointDetail) []model.UnitTally {
 			imageSize += image.SizeBytes
 			imageStored += image.StoredBytes
 		}
-		units = append(units, newUnitTally(model.UnitKindImages, len(detail.Images), imageSize, imageStored))
+		units = append(units, newUnitTotal(model.UnitKindImages, len(detail.Images), imageSize, imageStored))
 	}
 	return units
 }
 
-// newUnitTally is one kind's tally.
-func newUnitTally(kind string, count int, size, stored int64) model.UnitTally {
-	return model.UnitTally{
+// newUnitTotal is one kind's total.
+func newUnitTotal(kind model.UnitKind, count int, size, stored int64) model.UnitTotal {
+	return model.UnitTotal{
 		Kind:        kind,
 		Count:       count,
 		SizeBytes:   size,

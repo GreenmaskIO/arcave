@@ -20,14 +20,20 @@ It has an id — a UUID (version 7) assigned by arcave — and optionally a name
   "name": "before-migration",
   "description": "Before applying migration 2026_001",
   "created_at": "2026-06-01T19:41:12.123456789Z",
-  "stats": [ … ],
-  "writable_layers": [ … ],
-  "images": [ … ],
-  "spec": { "format": "compose-yaml" }
+  "provider": "compose",
+  "summary": {
+    "units": [ … ]
+  },
+  "detail": {
+    "stats": [ … ],
+    "writable_layers": [ … ],
+    "images": [ … ],
+    "spec": { "format": "compose-yaml" }
+  }
 }
 ```
 
-`stats` is one entry per captured volume, `writable_layers` one per container, `images` one per distinct image, and `not_covered` — present only when something was left out — says what the savepoint does not hold and why. [Output](reference/output.md) has every field.
+`summary` is what arcave reads: `units` counts the volumes, layers and images the savepoint holds, with their size and what they added to the store; `notices` say what the capture left out and `gaps` what a rollback to it does not put back. `detail` is the compose provider's own body: `stats` is one entry per captured volume, `writable_layers` one per container, `images` one per distinct image, and `not_covered` — present only when something was left out — says what the savepoint does not hold and why. [Output](reference/output.md) has every field.
 
 A savepoint is **immutable**. Its record, spec and volume archives live under one directory named by its id, but not everything it names does: deduplicated layer and image data is shared by every savepoint of the compose project, and `cdc` keeps one repository per volume beside them. Copying `<id>/` alone does not move a savepoint — see [Storage layout](reference/storage_layout.md#moving-a-savepoint).
 
@@ -100,7 +106,7 @@ Writable layers have a backend of their own, [`writable_layers.backend`](referen
 
 ## Capture policy
 
-What a savepoint captures is the compose file's to say. By default it is everything above. `arcave.*` labels on a service or a volume leave a service, a mount, a writable layer or an image out, or pick a backend for it; the [`capture`](reference/configuration.md#capture) keys in the config set the defaults per kind. The most specific setting wins: a volume's own label, then the service's, then the config. What a savepoint left out is listed in its `not_covered`. See [Capture labels](reference/capture_labels.md).
+What a savepoint captures is the compose file's to say. By default it is everything above. `arcave.*` labels on a service or a volume leave a service, a mount, a writable layer or an image out, or pick a backend for it; the [`capture`](reference/configuration.md#capture) keys in the config set the defaults per kind. The most specific setting wins: a volume's own label, then the service's, then the config. What a savepoint left out is listed in its `detail.not_covered` and spelled out in `summary.notices`. See [Capture labels](reference/capture_labels.md).
 
 ## Inflight marker
 
