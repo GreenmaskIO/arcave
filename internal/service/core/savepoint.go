@@ -16,9 +16,7 @@ package core
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -28,9 +26,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
-
-// errSavepointNotFound is returned when no savepoint matches the requested id or name.
-var errSavepointNotFound = errors.New("savepoint not found")
 
 // CreateSavepoint stops the services, captures every volume under one id, commits
 // the record, and starts the services again. The project lock is held throughout.
@@ -68,7 +63,7 @@ func (s *Service) createSavepoint(
 		return model.Savepoint{}, err
 	}
 
-	plan, err := s.prepare(ctx)
+	plan, err := s.planCapture(ctx)
 	if err != nil {
 		workflow.LogInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
 		return model.Savepoint{}, preferInterrupt(ctx, err)
@@ -81,6 +76,29 @@ func (s *Service) createSavepoint(
 		Labels:      req.Labels,
 		InResult:    true,
 	}, req.WaitTimeout)
+}
+
+// requireUniqueName refuses a name another of the visible savepoints carries. Safety
+// snapshots do not count: a name selector never sees them.
+func requireUniqueName(visible []model.Savepoint, name string) error {
+	if name == "" {
+		return nil
+	}
+	for _, savepoint := range visible {
+		if savepoint.Name == name {
+			return fmt.Errorf("%w: %q names savepoint %s", model.ErrSavepointNameTaken, name, savepoint.ID)
+		}
+	}
+	return nil
+}
+
+// planCapture inspects the workload and plans a savepoint's capture of it, before anything is touched.
+func (s *Service) planCapture(ctx context.Context) (provider.CapturePlan, error) {
+	live, err := s.workload.Inspect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return live.PlanCapture(ctx, provider.CaptureOptions{})
 }
 
 // captureHeld holds the project, captures it and releases it on every path, a heartbeat in the
@@ -158,99 +176,4 @@ func captureAndCommit(
 		return model.Savepoint{}, beat.fail(ctx, beatCtx, fmt.Errorf("commit savepoint %s: %w", req.ID, err))
 	}
 	return savepoint, nil
-}
-
-// requireUniqueName refuses a name another of the visible savepoints carries. Safety
-// snapshots do not count: a name selector never sees them.
-func requireUniqueName(visible []model.Savepoint, name string) error {
-	if name == "" {
-		return nil
-	}
-	for _, savepoint := range visible {
-		if savepoint.Name == name {
-			return fmt.Errorf("%w: %q names savepoint %s", model.ErrSavepointNameTaken, name, savepoint.ID)
-		}
-	}
-	return nil
-}
-
-// findSavepoint resolves a request's selector to one record. Ids win, being
-// unique; a name matching several is an error, never a silent guess.
-//
-// It takes every record so it can apply the visibility rule: an id resolves
-// against all of them — rolling back to a rollback's undo is spelled by id — while
-// Name and Latest see only what `savepoint list` shows.
-//
-// The caller has run req.Validate, so the branches read nil-ness alone.
-func findSavepoint(savepoints []model.Savepoint, req model.RollbackRequest) (model.Savepoint, error) {
-	if req.ID != nil {
-		for _, savepoint := range savepoints {
-			if savepoint.ID == *req.ID {
-				return savepoint, nil
-			}
-		}
-		return model.Savepoint{}, fmt.Errorf("%w: %s", errSavepointNotFound, *req.ID)
-	}
-
-	savepoints = visibleSavepoints(savepoints)
-	if len(savepoints) == 0 {
-		return model.Savepoint{}, model.ErrNoSavepoints
-	}
-
-	if req.Name == nil {
-		if req.Latest == nil || !*req.Latest {
-			return model.Savepoint{}, model.ErrRollbackNoSelector
-		}
-		latest := savepoints[0]
-		for _, savepoint := range savepoints[1:] {
-			if savepoint.CreatedAt.After(latest.CreatedAt) {
-				latest = savepoint
-			}
-		}
-		return latest, nil
-	}
-
-	byName := findSavepointsByName(savepoints, *req.Name)
-	switch len(byName) {
-	case 0:
-		return model.Savepoint{}, fmt.Errorf("%w: %s", errSavepointNotFound, *req.Name)
-	case 1:
-		return byName[0], nil
-	default:
-		return model.Savepoint{}, newAmbiguousSavepointNameError(*req.Name, byName)
-	}
-}
-
-// findSavepointsByID returns the record carrying id, if any.
-func findSavepointsByID(savepoints []model.Savepoint, id model.SavepointID) []model.Savepoint {
-	for _, savepoint := range savepoints {
-		if savepoint.ID == id {
-			return []model.Savepoint{savepoint}
-		}
-	}
-	return nil
-}
-
-// findSavepointsByName returns every record carrying name.
-func findSavepointsByName(savepoints []model.Savepoint, name string) []model.Savepoint {
-	var byName []model.Savepoint
-	for _, savepoint := range savepoints {
-		if savepoint.Name == name {
-			byName = append(byName, savepoint)
-		}
-	}
-	return byName
-}
-
-// newAmbiguousSavepointNameError names the savepoints carrying name, ids sorted.
-func newAmbiguousSavepointNameError(name string, savepoints []model.Savepoint) error {
-	ids := make([]model.SavepointID, len(savepoints))
-	for i, savepoint := range savepoints {
-		ids[i] = savepoint.ID
-	}
-	slices.Sort(ids)
-	return &model.AmbiguousSavepointNameError{
-		Name: name,
-		IDs:  ids,
-	}
 }

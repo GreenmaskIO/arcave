@@ -17,26 +17,12 @@ package core
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 )
-
-// putInflightMarker writes the marker for the rollback restoring targetID; safety is the safety
-// snapshot it names, empty for none. A phase change rewrites it whole.
-func (s *Service) putInflightMarker(ctx context.Context, phase model.InflightPhase, targetID, safety model.SavepointID) error {
-	return s.inflightMarker.Put(ctx, model.InflightMarker{
-		Phase:          phase,
-		Session:        s.session,
-		ComposeProject: s.composeProject,
-		Target:         targetID,
-		Safety:         safety,
-		At:             time.Now(),
-	})
-}
 
 // rollbackRecovery is what a rollback takes over from the interrupted one it recovers from; zero
 // when it recovers from none.
@@ -45,6 +31,25 @@ type rollbackRecovery struct {
 	// safety is the safety snapshot the standing marker names: the recovery's marker keeps naming
 	// it, as the last copy of the state before them both.
 	safety model.SavepointID
+}
+
+// locked runs a workflow with the project lock and the session's lock held, once its session is
+// known to still exist: one deleted since the command resolved it must not be written into again.
+// fn gets the session lock, its context and the session as its record names it.
+func locked[T any](
+	ctx context.Context, s *SavepointStoreService, operation model.SessionLockOperation,
+	fn func(ctx context.Context, grantedLock model.GrantedSessionLock, session model.SessionRef) (T, error),
+) (T, error) {
+	return workflow.WithWriteUnlock(ctx, s.projectLocker, s.writeAdmission, func() (T, error) {
+		return workflow.WithSessionLock(ctx, s.sessionLocker, operation, func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error) {
+			session, err := workflow.ReadSessionRef(ctx, s.sessions, s.session)
+			if err != nil {
+				var zero T
+				return zero, err
+			}
+			return fn(ctx, grantedLock, session)
+		})
+	})
 }
 
 // requireNoInflight refuses while an inflight marker stands, except for the rollback to restoring

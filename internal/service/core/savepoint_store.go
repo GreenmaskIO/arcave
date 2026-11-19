@@ -121,25 +121,6 @@ func (s *SavepointStoreService) RemoveSavepoints(ctx context.Context, req model.
 		})
 }
 
-// locked runs a workflow with the project lock and the session's lock held, once its session is
-// known to still exist: one deleted since the command resolved it must not be written into again.
-// fn gets the session lock, its context and the session as its record names it.
-func locked[T any](
-	ctx context.Context, s *SavepointStoreService, operation model.SessionLockOperation,
-	fn func(ctx context.Context, grantedLock model.GrantedSessionLock, session model.SessionRef) (T, error),
-) (T, error) {
-	return workflow.WithWriteUnlock(ctx, s.projectLocker, s.writeAdmission, func() (T, error) {
-		return workflow.WithSessionLock(ctx, s.sessionLocker, operation, func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error) {
-			session, err := workflow.ReadSessionRef(ctx, s.sessions, s.session)
-			if err != nil {
-				var zero T
-				return zero, err
-			}
-			return fn(ctx, grantedLock, session)
-		})
-	})
-}
-
 // listSavepoints, oldest first, is core's only read of the savepoints, so the rule that hides a
 // safety snapshot has one place to be forgotten. Which selector may see one is
 // findSavepoint's and selectSavepointsToRemove's call.
@@ -152,18 +133,6 @@ func (s *SavepointStoreService) listSavepoints(ctx context.Context, includeSafet
 		return savepoints, nil
 	}
 	return visibleSavepoints(savepoints), nil
-}
-
-// visibleSavepoints drops the safety snapshots. Non-nil, so an empty listing
-// marshals as [] rather than null.
-func visibleSavepoints(savepoints []model.Savepoint) []model.Savepoint {
-	visible := make([]model.Savepoint, 0, len(savepoints))
-	for _, savepoint := range savepoints {
-		if !savepoint.IsSafetySnapshot() {
-			visible = append(visible, savepoint)
-		}
-	}
-	return visible
 }
 
 // validateRemoveRequest rejects contradictory or incomplete requests — refs and
@@ -247,32 +216,6 @@ func (s *SavepointStoreService) selectSavepointsToRemove(
 	return kept, removed, nil
 }
 
-// parseRetentionCutoffs parses the time-based retention flags into cutoff instants;
-// each marks savepoints created before it as deletable.
-func (s *SavepointStoreService) parseRetentionCutoffs(req model.RemoveRequest) ([]time.Time, error) {
-	var cutoffs []time.Time
-	if req.RetainFor != "" {
-		retainFor, err := str2duration.ParseDuration(req.RetainFor)
-		if err != nil {
-			return nil, fmt.Errorf("invalid --retain-for %q: %w", req.RetainFor, err)
-		}
-		// Known only once parsed, so checked here rather than in validateRemoveRequest:
-		// a negative age would put the cutoff in the future and sweep everything.
-		if retainFor < 0 {
-			return nil, fmt.Errorf("%w: %q", model.ErrRetainForNegative, req.RetainFor)
-		}
-		cutoffs = append(cutoffs, time.Now().UTC().Add(-retainFor))
-	}
-	if req.BeforeDate != "" {
-		before, err := time.Parse(time.RFC3339Nano, req.BeforeDate)
-		if err != nil {
-			return nil, fmt.Errorf("invalid --before-date %q: %w", req.BeforeDate, err)
-		}
-		cutoffs = append(cutoffs, before)
-	}
-	return cutoffs, nil
-}
-
 // partitionByRefs splits records into the ones a ref names (removed) and the rest
 // (kept). A canonical UUID is an id and reaches every record, safety snapshots
 // included; anything else is a name and sees only what `savepoint list` shows. A ref
@@ -313,6 +256,42 @@ func partitionByRefs(
 		}
 	}
 	return kept, removed, nil
+}
+
+// findSavepointsByID returns the record carrying id, if any.
+func findSavepointsByID(savepoints []model.Savepoint, id model.SavepointID) []model.Savepoint {
+	for _, savepoint := range savepoints {
+		if savepoint.ID == id {
+			return []model.Savepoint{savepoint}
+		}
+	}
+	return nil
+}
+
+// parseRetentionCutoffs parses the time-based retention flags into cutoff instants;
+// each marks savepoints created before it as deletable.
+func (s *SavepointStoreService) parseRetentionCutoffs(req model.RemoveRequest) ([]time.Time, error) {
+	var cutoffs []time.Time
+	if req.RetainFor != "" {
+		retainFor, err := str2duration.ParseDuration(req.RetainFor)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --retain-for %q: %w", req.RetainFor, err)
+		}
+		// Known only once parsed, so checked here rather than in validateRemoveRequest:
+		// a negative age would put the cutoff in the future and sweep everything.
+		if retainFor < 0 {
+			return nil, fmt.Errorf("%w: %q", model.ErrRetainForNegative, req.RetainFor)
+		}
+		cutoffs = append(cutoffs, time.Now().UTC().Add(-retainFor))
+	}
+	if req.BeforeDate != "" {
+		before, err := time.Parse(time.RFC3339Nano, req.BeforeDate)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --before-date %q: %w", req.BeforeDate, err)
+		}
+		cutoffs = append(cutoffs, before)
+	}
+	return cutoffs, nil
 }
 
 // partitionSavepoints removes a record only when every active rule marks it
