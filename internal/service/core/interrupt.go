@@ -24,14 +24,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider"
 )
 
-// prepare inspects the workload and plans a savepoint's capture of it, before anything is touched.
-func (s *Service) prepare(ctx context.Context) (provider.CapturePlan, error) {
-	live, err := s.workload.Inspect(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return live.PlanCapture(ctx, provider.CaptureOptions{})
-}
+// revertBudget bounds a revert that runs past its command's own context: a torn
+// revert leaves the environment torn, so it gets a deadline instead of the caller's.
+const revertBudget = 10 * time.Minute
 
 // revertContext strips ctx of its cancellation and bounds it by revertBudget instead, for a
 // step that puts the environment back and so must outlive a Ctrl-C.
