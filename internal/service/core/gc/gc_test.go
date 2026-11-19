@@ -61,7 +61,7 @@ func mustParseSessionID(s string) model.SessionID {
 
 // newDeps is a gc over session; the provider's session is the test's.
 func newDeps(
-	session model.SessionID, sessions *mockSessions, garbage *mockSession, locker *mockLocker, inflight *mockInflight,
+	session model.SessionID, sessions *mockSessions, garbage *mockSession, locker *mockLocker,
 ) Deps {
 	garbage.id = session
 	return Deps{
@@ -70,7 +70,7 @@ func newDeps(
 		Locker:          locker,
 		WriteAdmission:  fakeWriteAdmission{},
 		SessionLocker:   fakeSessionLocker{},
-		Inflight:        inflight,
+		Inflight:        fakeInflight{},
 		RetainRecent:    1,
 	}
 }
@@ -82,14 +82,6 @@ func newHeldLocker(t *testing.T) *mockLocker {
 	locker.On("Release").Return(nil).Once().NotBefore(acquire)
 	t.Cleanup(func() { locker.AssertExpectations(t) })
 	return locker
-}
-
-// newNoMarker is an inflight marker read once and not found, asserted when the test ends.
-func newNoMarker(t *testing.T) *mockInflight {
-	inflight := &mockInflight{}
-	inflight.On("Get", mock.Anything).Return(model.InflightMarker{}, false, nil).Once()
-	t.Cleanup(func() { inflight.AssertExpectations(t) })
-	return inflight
 }
 
 // newGrantingSessionLocker is a session locker granting grantedLock once, asserted when the test
@@ -151,7 +143,7 @@ func TestGarbageCollector_GarbageCollect_RefusedWhileLocked(t *testing.T) {
 	locker := &mockLocker{}
 	locker.On("Acquire", mock.Anything).Return(model.ErrProjectLocked).Once()
 	session := &mockSession{}
-	svc := New(newDeps(model.DefaultSession, &mockSessions{}, session, locker, &mockInflight{}))
+	svc := New(newDeps(model.DefaultSession, &mockSessions{}, session, locker))
 
 	// Act
 	_, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{DryRun: true})
@@ -182,7 +174,7 @@ func TestGarbageCollector_GarbageCollect_HoldsTheSessionLock(t *testing.T) {
 		grantedLock.On("Unlock", mock.Anything).Return(nil).Once(),
 		locker.On("Release").Return(nil).Once(),
 	)
-	deps := newDeps(gcSession, sessions, session, locker, newNoMarker(t))
+	deps := newDeps(gcSession, sessions, session, locker)
 	deps.WriteAdmission = admission
 	deps.SessionLocker = sessionLocker
 	svc := New(deps)
@@ -219,7 +211,7 @@ func TestGarbageCollector_GarbageCollect_LockLostMidway(t *testing.T) {
 			session.On("FindGarbage", mock.Anything, []model.GarbageDataKind(nil)).
 				Run(func(mock.Arguments) { loseLock(model.ErrSessionLockLost) }).
 				Return([]provider.Garbage{trees}).Once()
-			deps := newDeps(gcSession, sessions, session, newHeldLocker(t), newNoMarker(t))
+			deps := newDeps(gcSession, sessions, session, newHeldLocker(t))
 			deps.SessionLocker = sessionLocker
 			svc := New(deps)
 
@@ -249,7 +241,7 @@ func TestGarbageCollector_GarbageCollect_AWriteRefused(t *testing.T) {
 		locker.On("Release").Return(nil).Once(),
 	)
 	sessionLocker := &mockSessionLocker{}
-	deps := newDeps(gcSession, &mockSessions{}, &mockSession{}, locker, &mockInflight{})
+	deps := newDeps(gcSession, &mockSessions{}, &mockSession{}, locker)
 	deps.WriteAdmission = admission
 	deps.SessionLocker = sessionLocker
 	svc := New(deps)
@@ -272,7 +264,7 @@ func TestGarbageCollector_GarbageCollect_RefusedWhileSessionLocked(t *testing.T)
 	locker := newHeldLocker(t)
 	sessions := &mockSessions{}
 	session := &mockSession{}
-	deps := newDeps(gcSession, sessions, session, locker, &mockInflight{})
+	deps := newDeps(gcSession, sessions, session, locker)
 	deps.SessionLocker = sessionLocker
 	svc := New(deps)
 
@@ -292,7 +284,7 @@ func TestGarbageCollector_GarbageCollect_SessionRemovedBeforeTheLock(t *testing.
 	sessions := &mockSessions{}
 	sessions.On("LoadSession", mock.Anything, gcSession).Return(model.Session{}, false, nil).Once()
 	session := &mockSession{}
-	svc := New(newDeps(gcSession, sessions, session, newHeldLocker(t), &mockInflight{}))
+	svc := New(newDeps(gcSession, sessions, session, newHeldLocker(t)))
 
 	// Act
 	_, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{DryRun: true})
@@ -307,7 +299,7 @@ func TestGarbageCollector_GarbageCollect_SessionRemovedBeforeTheLock(t *testing.
 func TestGarbageCollector_GarbageCollect_InvalidRequest(t *testing.T) {
 	// Arrange
 	locker := &mockLocker{}
-	svc := New(newDeps(model.DefaultSession, &mockSessions{}, &mockSession{}, locker, &mockInflight{}))
+	svc := New(newDeps(model.DefaultSession, &mockSessions{}, &mockSession{}, locker))
 	req := model.GarbageCollectRequest{DryRun: true, DataKinds: []model.GarbageDataKind{"restic"}}
 
 	// Act
@@ -316,26 +308,6 @@ func TestGarbageCollector_GarbageCollect_InvalidRequest(t *testing.T) {
 	// Assert
 	require.ErrorIs(t, err, model.ErrInvalidGarbageCollectRequest)
 	locker.AssertExpectations(t)
-}
-
-func TestGarbageCollector_GarbageCollect_WarnsOfAStandingMarker(t *testing.T) {
-	// Arrange
-	inflight := &mockInflight{}
-	inflight.On("Get", mock.Anything).Return(model.InflightMarker{
-		Session: model.DefaultSession, ComposeProject: "demo", Target: "019e843e-1650-7000-8000-000000000001",
-	}, true, nil).Once()
-	session := newFindingSession(blobKinds)
-	svc := New(newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t), inflight))
-
-	// Act
-	result, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{DryRun: true, DataKinds: blobKinds})
-
-	// Assert
-	require.NoError(t, err)
-	require.Len(t, result.Warnings, 1)
-	assert.Contains(t, result.Warnings[0], "interrupted rollback")
-	inflight.AssertExpectations(t)
-	session.AssertExpectations(t)
 }
 
 // The provider's reports come first, the retention's after them, each compose project's safety
@@ -362,8 +334,7 @@ func TestGarbageCollector_GarbageCollect(t *testing.T) {
 	session.On("Savepoints", provider.WorkloadName("demo")).Return(demoSavepoints, nil).Once()
 	sessions := &mockSessions{}
 	sessions.On("LoadSession", mock.Anything, gcSession).Return(model.Session{ID: gcSession}, true, nil).Once()
-	inflight := newNoMarker(t)
-	svc := New(newDeps(gcSession, sessions, session, newHeldLocker(t), inflight))
+	svc := New(newDeps(gcSession, sessions, session, newHeldLocker(t)))
 
 	// Act
 	result, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{DryRun: true})
@@ -393,11 +364,9 @@ func TestGarbageCollector_GarbageCollect(t *testing.T) {
 	assert.Equal(t, []model.DeadSavepoint{
 		{ComposeProject: "demo", Savepoint: gcDeadSavepoint, Found: 2, Bytes: utils.New(int64(13))},
 	}, result.Savepoints, "the per-savepoint section gathers its tree and the blobs only it lists")
-	assert.Empty(t, result.Warnings)
 	session.AssertExpectations(t)
 	sessions.AssertExpectations(t)
 	demoSavepoints.AssertExpectations(t)
-	inflight.AssertExpectations(t)
 }
 
 // What the provider could not judge, or failed at, stays in its report and makes the run partial.
@@ -433,7 +402,7 @@ func TestGarbageCollector_GarbageCollect_Partial(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			session := newFindingSession(blobKinds, newMockGarbage(tt.report))
-			svc := New(newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t), newNoMarker(t)))
+			svc := New(newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t)))
 
 			// Act
 			result, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{DryRun: true, DataKinds: blobKinds})
@@ -441,7 +410,6 @@ func TestGarbageCollector_GarbageCollect_Partial(t *testing.T) {
 			// Assert
 			require.ErrorIs(t, err, model.ErrGarbageCollectPartial)
 			assert.Equal(t, tt.wantTotal, result.Total)
-			assert.Empty(t, result.Warnings)
 			session.AssertExpectations(t)
 		})
 	}
@@ -540,7 +508,7 @@ func TestGarbageCollector_GarbageCollect_Retention(t *testing.T) {
 			if tt.listsSavepoints {
 				demoSavepoints.On("List", mock.Anything).Return([]model.Savepoint{}, tt.listErr).Once()
 			}
-			svc := New(newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t), newNoMarker(t)))
+			svc := New(newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t)))
 
 			// Act
 			result, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{
@@ -576,7 +544,7 @@ func TestGarbageCollector_GarbageCollect_DryRunDeletesNothing(t *testing.T) {
 	session.On("Savepoints", provider.WorkloadName("demo")).Return(demoSavepoints, nil).Once()
 	grantedLock := &mockGrantedSessionLock{}
 	grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
-	deps := newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t), newNoMarker(t))
+	deps := newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t))
 	deps.SessionLocker = newGrantingSessionLocker(t, grantedLock)
 	svc := New(deps)
 
@@ -625,8 +593,8 @@ func TestGarbageCollector_GarbageCollect_Deletes(t *testing.T) {
 		demoSavepoints.On("Remove", mock.Anything, oldest).Return(nil).Once(),
 		grantedLock.On("Unlock", mock.Anything).Return(nil).Once(),
 	)
-	locker, inflight := newHeldLocker(t), newNoMarker(t)
-	deps := newDeps(model.DefaultSession, &mockSessions{}, session, locker, inflight)
+	locker := newHeldLocker(t)
+	deps := newDeps(model.DefaultSession, &mockSessions{}, session, locker)
 	deps.SessionLocker = newGrantingSessionLocker(t, grantedLock)
 	svc := New(deps)
 
@@ -643,14 +611,12 @@ func TestGarbageCollector_GarbageCollect_Deletes(t *testing.T) {
 	}, deletionsOf(result))
 	assert.Equal(t, model.GarbageTotal{Found: 4, Bytes: 13, Deleted: 4}, result.Total,
 		"what the safety snapshots freed is not known")
-	assert.Empty(t, result.Warnings)
 	grantedLock.AssertExpectations(t)
 	session.AssertExpectations(t)
 	demoSavepoints.AssertExpectations(t)
 	trees.AssertExpectations(t)
 	blobs.AssertExpectations(t)
 	locker.AssertExpectations(t)
-	inflight.AssertExpectations(t)
 }
 
 // A Verify that refuses stops its deletion and every one after it: their ops are not run, and the
@@ -668,7 +634,7 @@ func TestGarbageCollector_GarbageCollect_VerifyRefuses(t *testing.T) {
 		grantedLock.On("Verify", mock.Anything).Return(model.ErrSessionLockNotHeld).Once(),
 		grantedLock.On("Unlock", mock.Anything).Return(nil).Once(),
 	)
-	deps := newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t), newNoMarker(t))
+	deps := newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t))
 	deps.SessionLocker = newGrantingSessionLocker(t, grantedLock)
 	svc := New(deps)
 
@@ -781,7 +747,7 @@ func TestGarbageCollector_GarbageCollect_DeletesAReport(t *testing.T) {
 			chain = append(chain, grantedLock.On("Unlock", mock.Anything).Return(nil).Once())
 			mock.InOrder(chain...)
 			session := newFindingSession(blobKinds, blobs)
-			deps := newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t), newNoMarker(t))
+			deps := newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t))
 			deps.SessionLocker = newGrantingSessionLocker(t, grantedLock)
 			svc := New(deps)
 
@@ -797,56 +763,9 @@ func TestGarbageCollector_GarbageCollect_DeletesAReport(t *testing.T) {
 			require.Len(t, result.Reports, 1)
 			assert.Equal(t, tt.wantDeletion, result.Reports[0].Deletion)
 			assert.Equal(t, tt.wantTotal, result.Total)
-			assert.Empty(t, result.Warnings)
 			grantedLock.AssertExpectations(t)
 			blobs.AssertExpectations(t)
 			session.AssertExpectations(t)
-		})
-	}
-}
-
-// A standing marker, or one that cannot be read, refuses a run that deletes before anything is
-// looked at.
-func TestGarbageCollector_GarbageCollect_InterruptedRollbackRefusesToDelete(t *testing.T) {
-	marker := model.InflightMarker{
-		Session: model.DefaultSession, ComposeProject: "demo", Target: "019e843e-1650-7000-8000-000000000001",
-	}
-	readErr := errors.New("permission denied")
-
-	tests := []struct {
-		name       string
-		marker     model.InflightMarker
-		found      bool
-		readErr    error
-		wantMarker bool
-	}{
-		{name: "a standing marker", marker: marker, found: true, wantMarker: true},
-		{name: "a marker that cannot be read", readErr: readErr},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange: the session expects no finding, so one would fail the mock.
-			inflight := &mockInflight{}
-			inflight.On("Get", mock.Anything).Return(tt.marker, tt.found, tt.readErr).Once()
-			session := &mockSession{}
-			locker := newHeldLocker(t)
-			svc := New(newDeps(model.DefaultSession, &mockSessions{}, session, locker, inflight))
-
-			// Act
-			result, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{})
-
-			// Assert
-			if tt.wantMarker {
-				var interrupted *model.InterruptedRollbackError
-				require.ErrorAs(t, err, &interrupted)
-				assert.Equal(t, marker, interrupted.Marker)
-			} else {
-				require.ErrorIs(t, err, readErr)
-			}
-			assert.Zero(t, result)
-			session.AssertExpectations(t)
-			inflight.AssertExpectations(t)
-			locker.AssertExpectations(t)
 		})
 	}
 }
@@ -866,7 +785,7 @@ func TestGarbageCollector_GarbageCollect_LockLostAfterTheLastDeletion(t *testing
 		grantedLock.On("Unlock", mock.Anything).Return(nil).Once(),
 	)
 	session := newFindingSession(blobKinds, trees)
-	deps := newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t), newNoMarker(t))
+	deps := newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t))
 	deps.SessionLocker = newGrantingSessionLocker(t, grantedLock)
 	svc := New(deps)
 
@@ -899,7 +818,7 @@ func TestGarbageCollector_GarbageCollect_LockLostWhileDeleting(t *testing.T) {
 		grantedLock.On("Unlock", mock.Anything).Return(nil).Once(),
 	)
 	session := newFindingSession(blobKinds, trees, blobs)
-	deps := newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t), newNoMarker(t))
+	deps := newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t))
 	deps.SessionLocker = newGrantingSessionLocker(t, grantedLock)
 	svc := New(deps)
 
@@ -953,7 +872,7 @@ func TestGarbageCollector_GarbageCollect_LockLostFailingTheLastDeletion(t *testi
 				grantedLock.On("Unlock", mock.Anything).Return(nil).Once(),
 			)
 			session := newFindingSession(blobKinds, trees)
-			deps := newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t), newNoMarker(t))
+			deps := newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t))
 			deps.SessionLocker = newGrantingSessionLocker(t, grantedLock)
 			svc := New(deps)
 
@@ -1093,4 +1012,52 @@ func TestLogGarbageFound(t *testing.T) {
 	assert.NotContains(t, lines[0], `"bytes":`)
 	assert.Contains(t, lines[1], `"found":1,"bytes_complete":true,"bytes":10`)
 	assert.Contains(t, lines[2], `"found":3,"bytes":10,"bytes_complete":false,"message":"garbage found in the scope"`)
+}
+
+// A marker of the session refuses a run that deletes before anything is looked at; one of another
+// session, or one that cannot be read, does not.
+func TestGarbageCollector_GarbageCollect_InterruptedRollback(t *testing.T) {
+	marker := model.InflightMarker{
+		Session:        model.DefaultSession,
+		ComposeProject: "demo",
+		Target:         "019e843e-1650-7000-8000-000000000001",
+	}
+	otherSession := marker
+	otherSession.Session = mustParseSessionID("019e843e-1650-7000-8000-0000000000ff")
+
+	tests := []struct {
+		name        string
+		inflight    fakeInflight
+		wantRefused bool
+	}{
+		{name: "a marker of the session", inflight: fakeInflight{marker: marker, found: true}, wantRefused: true},
+		{name: "a marker of another session", inflight: fakeInflight{marker: otherSession, found: true}},
+		{name: "a marker that cannot be read", inflight: fakeInflight{err: errors.New("daemon unreachable")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: a refused run finds nothing, so a finding would fail the mock.
+			session := &mockSession{}
+			if !tt.wantRefused {
+				session = newFindingSession(blobKinds)
+			}
+			deps := newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t))
+			deps.Inflight = tt.inflight
+			svc := New(deps)
+
+			// Act
+			result, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{DataKinds: blobKinds})
+
+			// Assert
+			if tt.wantRefused {
+				var interrupted *model.InterruptedRollbackError
+				require.ErrorAs(t, err, &interrupted)
+				assert.Equal(t, marker, interrupted.Marker)
+				assert.Zero(t, result)
+			} else {
+				require.NoError(t, err)
+			}
+			session.AssertExpectations(t)
+		})
+	}
 }

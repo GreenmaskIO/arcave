@@ -109,13 +109,14 @@ Everything about one savepoint is under its own directory, except the blobs and 
 
 ## On the host
 
-Three files under the project's `.arcave/` belong to the machine, not to the store, and are never copied with it:
+Two files under the project's `.arcave/` belong to the machine, not to the store, and are never copied with it:
 
 | File | What it is |
 |---|---|
 | `.arcave/lock` | The lock every command that changes something takes. |
-| `.arcave/inflight.json` | The marker an interrupted rollback leaves; see [Troubleshooting](troubleshooting.md). |
 | `.arcave/current_session` | The current session, set by `session set`, cleared by `session unset`. |
+
+The marker an interrupted rollback leaves is neither here nor in the store: it is a volume on the daemon, `arcave-inflight-<compose project>-<uuid>` — see [the inflight marker](../concepts.md#inflight-marker).
 
 ## Next step
 

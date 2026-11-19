@@ -148,7 +148,8 @@ func TestStorageE2E_CoreWorkflow(t *testing.T) {
 // so its sessions are its own, on a store it shares with the other rows.
 func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend, encrypted bool) {
 	// Arrange
-	arcaveProject := storageE2EArcaveProject + "-" + backend.name
+	// Suffixed: the inflight marker is the arcave project's on the daemon every target shares.
+	arcaveProject := storageE2EArcaveProject + "-" + backend.name + "-" + daemontest.RandomSuffix(t)
 	env := target.env
 	if encrypted {
 		arcaveProject += "-encrypted"

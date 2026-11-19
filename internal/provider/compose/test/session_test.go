@@ -39,7 +39,6 @@ import (
 	composeclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
-	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/core/session"
@@ -48,19 +47,26 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
-// sessionArcaveProject is the arcave project every session test stores under.
+// sessionArcaveProject opens the name of the arcave project a session test stores under; each env
+// suffixes it, as its inflight marker is the arcave project's on the shared daemon.
 const sessionArcaveProject = "arcave-session-tenant"
+
+// sessionMarkerComposeProject is the compose project of the marker a session test writes itself.
+const sessionMarkerComposeProject = "arcave-session-it"
 
 // sessionEnv is one arcave project directory, its sessions managed the way cmd/arcave
 // wires the session commands: the real store, lock and inflight marker.
 type sessionEnv struct {
-	ctx         context.Context
-	projectRoot string
-	storage     config.Storage
-	sessions    *session.Service
-	inflight    *inflightrepo.Repository
-	daemon      *client.Client
-	project     string
+	ctx           context.Context
+	projectRoot   string
+	arcaveProject string
+	storage       config.Storage
+	sessions      *session.Service
+	// inflight is the marker the test writes itself, opened by markers on first use: a session test
+	// without one needs no daemon.
+	inflight *compose.InflightMarkers
+	daemon   *client.Client
+	project  string
 }
 
 func newSessionEnv(t *testing.T) *sessionEnv {
@@ -74,25 +80,24 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 	root, err := storefactory.Root(t.Context(), storage, projectRoot)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = root.Close() })
-	arcaveProjectStore, err := storefactory.ArcaveProject(root, sessionArcaveProject)
+	arcaveProject := sessionArcaveProject + "-" + daemontest.RandomSuffix(t)
+	arcaveProjectStore, err := storefactory.ArcaveProject(root, model.ArcaveProjectName(arcaveProject))
 	require.NoError(t, err)
 
-	inflight := inflightrepo.New(projectRoot)
 	return &sessionEnv{
-		ctx:         zerolog.New(io.Discard).WithContext(context.Background()),
-		projectRoot: projectRoot,
-		storage:     storage,
+		ctx:           zerolog.New(io.Discard).WithContext(context.Background()),
+		projectRoot:   projectRoot,
+		arcaveProject: arcaveProject,
+		storage:       storage,
 		sessions: session.New(session.Deps{
 			Sessions:         sessionrepo.New(arcaveProjectStore),
 			Locker:           lock.New(projectRoot),
-			Inflight:         inflight,
 			Current:          currentsession.New(projectRoot),
 			Store:            arcaveProjectStore,
 			NewSession:       newProviderSession(arcaveProjectStore),
 			NewSessionLocker: newSessionLockerFactory(arcaveProjectStore),
 			WriteAdmission:   newPlainAdmission(arcaveProjectStore),
 		}),
-		inflight: inflight,
 	}
 }
 
@@ -103,7 +108,7 @@ func (e *sessionEnv) storeDir() string {
 
 // sessionDir is where a session's tree lives on disk.
 func (e *sessionEnv) sessionDir(id model.SessionID) string {
-	return filepath.Join(e.storeDir(), "projects", sessionArcaveProject, "sessions", id.String())
+	return filepath.Join(e.storeDir(), "projects", e.arcaveProject, "sessions", id.String())
 }
 
 // create makes a session named name and fails the test if it cannot.
@@ -128,14 +133,25 @@ func (e *sessionEnv) names(t *testing.T) []string {
 	return names
 }
 
+// markers is the inflight marker of sessionMarkerComposeProject, opened on first use.
+func (e *sessionEnv) markers(t *testing.T) compose.InflightMarkers {
+	t.Helper()
+
+	if e.inflight == nil {
+		markers := openInflightMarkers(t, e.arcaveProject, sessionMarkerComposeProject)
+		e.inflight = &markers
+	}
+	return *e.inflight
+}
+
 // marker writes the inflight marker an interrupted rollback in session would leave.
 func (e *sessionEnv) marker(t *testing.T, session model.SessionID) {
 	t.Helper()
 
-	require.NoError(t, e.inflight.Put(e.ctx, model.InflightMarker{
+	require.NoError(t, e.markers(t).Put(e.ctx, model.InflightMarker{
 		Phase:          model.InflightRestoring,
 		Session:        session,
-		ComposeProject: "arcave-session-it",
+		ComposeProject: sessionMarkerComposeProject,
 		Target:         model.NewSavepointID(),
 		Safety:         model.NewSavepointID(),
 		At:             time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC),
@@ -245,25 +261,21 @@ func TestSession_Remove_Refused(t *testing.T) {
 
 	// Act
 	_, defaultErr := env.sessions.RemoveSession(env.ctx, model.RemoveSessionRequest{Session: model.DefaultSessionName})
-	env.marker(t, feat.ID)
-	_, markedErr := env.sessions.RemoveSession(env.ctx, model.RemoveSessionRequest{Session: "feat"})
 
 	// Assert
 	assert.ErrorIs(t, defaultErr, model.ErrDefaultSessionDelete)
-	var interrupted *model.InterruptedRollbackError
-	require.ErrorAs(t, markedErr, &interrupted)
-	assert.Equal(t, feat.ID, interrupted.Marker.Session)
 	assert.DirExists(t, env.sessionDir(feat.ID), "a refused delete removes nothing")
 	assert.Equal(t, []string{model.DefaultSessionName, "feat"}, env.names(t))
 }
 
-func TestSession_Remove_PassesAMarkerOfAnotherSession(t *testing.T) {
+// Session remove reads no marker: the session an interrupted rollback names goes too.
+func TestSession_Remove_PassesAStandingMarker(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
 	env := newSessionEnv(t)
 	feat := env.create(t, "feat")
-	env.marker(t, model.DefaultSession)
+	env.marker(t, feat.ID)
 
 	// Act
 	deleted, err := env.sessions.RemoveSession(env.ctx, model.RemoveSessionRequest{Session: "feat"})
@@ -271,9 +283,9 @@ func TestSession_Remove_PassesAMarkerOfAnotherSession(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, feat.ID, deleted.Session)
-	_, found, err := env.inflight.Get(env.ctx)
+	_, found, err := env.markers(t).Get(env.ctx)
 	require.NoError(t, err)
-	assert.True(t, found, "the other session's marker stays")
+	assert.True(t, found, "the marker stays")
 }
 
 func TestSession_RefusedWhileLocked(t *testing.T) {
@@ -345,24 +357,24 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 
 	root, err := storefactory.Root(t.Context(), e.storage, e.projectRoot)
 	require.NoError(t, err)
-	arcaveProjectStore, err := storefactory.ArcaveProject(root, sessionArcaveProject)
+	arcaveProjectStore, err := storefactory.ArcaveProject(root, model.ArcaveProjectName(e.arcaveProject))
 	require.NoError(t, err)
-	store, err := storefactory.New(t.Context(), e.storage, e.projectRoot, sessionArcaveProject, session,
+	store, err := storefactory.New(t.Context(), e.storage, e.projectRoot, model.ArcaveProjectName(e.arcaveProject), session,
 		model.DockerComposeProjectName(e.project))
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
 		Savepoints:     compose.NewStoreSavepoints(store),
 		Store:          store,
-		ArcaveProject:  sessionArcaveProject,
+		ArcaveProject:  model.ArcaveProjectName(e.arcaveProject),
 		SessionLocker:  newSessionLocker(t, arcaveProjectStore, session),
 		WriteAdmission: newPlainAdmission(arcaveProjectStore),
 		ProjectLocker:  lock.New(e.projectRoot),
-		Inflight:       e.inflight,
+		Inflight:       openInflightMarkers(t, e.arcaveProject, e.project),
 		Session:        session,
 		ComposeProject: model.DockerComposeProjectName(e.project),
 		Sessions:       sessionrepo.New(arcaveProjectStore),
-		Workload:       openComposeWorkload(t, store, sessionArcaveProject, e.project),
+		Workload:       openComposeWorkload(t, store, e.arcaveProject, e.project),
 	})
 	return &imageRollbackEnv{
 		ctx:       e.ctx,
@@ -487,7 +499,8 @@ func TestSession_RemoveDropsItsDataAndLeavesTheProjectRunning(t *testing.T) {
 	assert.Equal(t, "original", baseline.read(t, baseline.replicas(t)[0], daemontest.VolumeMarker))
 }
 
-// The marker is host-local: an interrupted rollback in one session holds every session.
+// The marker is the arcave project's: an interrupted rollback in one session holds every session's
+// capture, but not the store commands.
 func TestSession_InterruptedRollbackMarkerSpansSessions(t *testing.T) {
 	t.Parallel()
 
@@ -501,16 +514,14 @@ func TestSession_InterruptedRollbackMarkerSpansSessions(t *testing.T) {
 	// Act
 	_, createErr := baseline.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "sp"})
 	_, deleteErr := env.sessions.RemoveSession(env.ctx, model.RemoveSessionRequest{Session: "feat"})
-	require.NoError(t, env.inflight.Clear(env.ctx))
+	require.NoError(t, env.markers(t).Clear(env.ctx))
 	_, createAfterErr := baseline.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "sp"})
-	_, deleteAfterErr := env.sessions.RemoveSession(env.ctx, model.RemoveSessionRequest{Session: "feat"})
 
 	// Assert
 	var interrupted *model.InterruptedRollbackError
 	assert.ErrorAs(t, createErr, &interrupted)
-	assert.ErrorAs(t, deleteErr, &interrupted)
+	assert.NoError(t, deleteErr)
 	assert.NoError(t, createAfterErr)
-	assert.NoError(t, deleteAfterErr)
 }
 
 // The size a listing reports is the session's tree on disk, everything a capture writes lands

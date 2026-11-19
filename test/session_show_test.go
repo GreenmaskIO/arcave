@@ -49,7 +49,7 @@ func newSessionShowEnv(t *testing.T) *sessionShowEnv {
 	t.Helper()
 
 	env := &sessionShowEnv{projectRoot: t.TempDir()}
-	runArcave(t, env.projectRoot, nil, "init", "--name", "arcave-session-show-it")
+	runArcave(t, env.projectRoot, nil, "init", "--name", "arcave-session-show-it-"+daemontest.RandomSuffix(t))
 	writeStorageConfigWith(t, env.projectRoot, startDirectoryStorage(t).file,
 		storageE2EBackend{name: composeconfig.SnapshotBackendFullCopy, backend: composeconfig.SnapshotBackendFullCopy}, false)
 	return env

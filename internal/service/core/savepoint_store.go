@@ -45,7 +45,6 @@ type SavepointStoreDeps struct {
 	WriteAdmission writeAdmission
 	// SessionLocker holds Session's lock in the store for the whole of a workflow.
 	SessionLocker model.SessionLocker
-	Inflight      inflightMarkers
 	// Session is the session Savepoints belong to; zero means model.DefaultSession.
 	Session model.SessionID
 	// ComposeProject is the compose project Savepoints belong to.
@@ -61,7 +60,6 @@ type SavepointStoreService struct {
 	projectLocker  projectLocker
 	writeAdmission writeAdmission
 	sessionLocker  model.SessionLocker
-	inflightMarker inflightMarkers
 	session        model.SessionID
 	composeProject model.DockerComposeProjectName
 	sessions       sessionLookup
@@ -76,7 +74,6 @@ func NewSavepointStoreService(deps SavepointStoreDeps) *SavepointStoreService {
 		projectLocker:  deps.ProjectLocker,
 		writeAdmission: deps.WriteAdmission,
 		sessionLocker:  deps.SessionLocker,
-		inflightMarker: deps.Inflight,
 		session:        deps.Session,
 		composeProject: deps.ComposeProject,
 		sessions:       deps.Sessions,
@@ -120,11 +117,6 @@ func (s *SavepointStoreService) RemoveSavepoints(ctx context.Context, req model.
 
 	return locked(ctx, s, model.SessionLockOperationSavepointRemove,
 		func(ctx context.Context, grantedLock model.GrantedSessionLock, _ model.SessionRef) (model.RemoveResult, error) {
-			// The gate guards the safety snapshot too: while an interrupted rollback is unresolved,
-			// that snapshot is the way back, and no selector may delete it.
-			if _, err := s.requireNoInflight(ctx, ""); err != nil {
-				return model.RemoveResult{}, err
-			}
 			return s.removeSavepoints(ctx, grantedLock, req)
 		})
 }

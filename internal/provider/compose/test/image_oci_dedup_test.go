@@ -41,7 +41,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/introspect"
-	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -85,11 +84,13 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second, Prompter: prompter,
 	})
 
+	// Unique per test: the inflight marker is the arcave project's on the shared daemon.
+	arcaveProject := "arcave-oci-tenant-" + daemontest.RandomSuffix(t)
 	projectRoot := t.TempDir()
 	composeProjectStore, err := storefactory.New(t.Context(), config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
-	}, projectRoot, "arcave-oci-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
+	}, projectRoot, model.ArcaveProjectName(arcaveProject), model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
 	blobStore, err := composeProjectStore.SubStorage(sharedBlobPrefix, true)
@@ -98,12 +99,13 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	svc := core.New(core.Deps{
 		Savepoints:     compose.NewStoreSavepoints(composeProjectStore),
 		Store:          composeProjectStore,
-		ArcaveProject:  "arcave-oci-tenant",
+		ArcaveProject:  model.ArcaveProjectName(arcaveProject),
+		ComposeProject: model.DockerComposeProjectName(project),
 		SessionLocker:  newStoreLocker(composeProjectStore, model.DefaultSession),
 		WriteAdmission: newPlainAdmission(composeProjectStore),
 		ProjectLocker:  lock.New(projectRoot),
-		Inflight:       inflightrepo.New(projectRoot),
-		Workload:       openComposeWorkload(t, composeProjectStore, "arcave-oci-tenant", project),
+		Inflight:       openInflightMarkers(t, arcaveProject, project),
+		Workload:       openComposeWorkload(t, composeProjectStore, arcaveProject, project),
 	})
 
 	env := &ociDedupEnv{

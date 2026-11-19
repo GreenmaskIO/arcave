@@ -17,7 +17,6 @@ package session
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -31,19 +30,6 @@ import (
 // tests match ctx with mock.Anything unless they assert on it.
 
 var demoSession = model.SessionID(uuid.MustParse("0f9c2f4a-6d3e-4b6f-9a2c-1d5e8b7a4c31"))
-
-// demoMarker is the marker an interrupted rollback of compose project demo in the default session
-// leaves.
-func demoMarker(phase model.InflightPhase) model.InflightMarker {
-	return model.InflightMarker{
-		Phase:          phase,
-		Session:        model.DefaultSession,
-		ComposeProject: "demo",
-		Target:         "019e843e-1650-7000-8000-000000000000",
-		Safety:         "019e844b-7818-7000-8000-000000000000",
-		At:             time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC),
-	}
-}
 
 // mockLocker doubles projectLocker. Release is a closure Acquire returns rather
 // than a method of the seam, so it reports itself as one — MethodCalled puts it
@@ -124,36 +110,6 @@ func (m *mockGrantedSessionLock) Verify(ctx context.Context) error {
 
 func (m *mockGrantedSessionLock) Unlock(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
-}
-
-// fakeInflight is a stateful stand-in for the marker file, so tests that are not
-// about the gate carry no expectations. Lifecycle tests use mockInflight instead.
-type fakeInflight struct {
-	mu     sync.Mutex
-	marker *model.InflightMarker
-}
-
-func (f *fakeInflight) Get(_ context.Context) (model.InflightMarker, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.marker == nil {
-		return model.InflightMarker{}, false, nil
-	}
-	return *f.marker, true, nil
-}
-
-func (f *fakeInflight) Put(_ context.Context, marker model.InflightMarker) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.marker = &marker
-	return nil
-}
-
-func (f *fakeInflight) Clear(_ context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.marker = nil
-	return nil
 }
 
 // fakePointer is a stateful stand-in for .arcave/current_session; the zero value holds none.

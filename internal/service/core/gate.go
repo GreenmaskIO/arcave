@@ -52,10 +52,9 @@ func locked[T any](
 	})
 }
 
-// requireNoInflight refuses to run while .arcave/inflight.json stands, except for the rollback
-// that recovers from it. restoring is the savepoint the caller rolls back to, "" for any other
-// workflow. It reports what the caller, if it is that recovery, takes over.
-func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring model.SavepointID) (rollbackRecovery, error) {
+// requireNoInflight refuses while an inflight marker stands, except for the rollback to restoring
+// ("" for any other workflow) that recovers from it, and reports what that recovery takes over.
+func (s *Service) requireNoInflight(ctx context.Context, restoring model.SavepointID) (rollbackRecovery, error) {
 	marker, found, err := s.inflightMarker.Get(ctx)
 	if err != nil {
 		return rollbackRecovery{}, fmt.Errorf("reading the inflight marker: %w", err)
@@ -83,9 +82,8 @@ func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring
 }
 
 // isRecoveryRollback reports whether a rollback to id, in this session and compose project,
-// recovers from the interrupted rollback the marker records: one to its safety snapshot or, when
-// the marker accepts any, one to any savepoint.
-func (s *SavepointStoreService) isRecoveryRollback(marker model.InflightMarker, id model.SavepointID) bool {
+// recovers from marker: one to its safety snapshot, or to any savepoint if the marker accepts any.
+func (s *Service) isRecoveryRollback(marker model.InflightMarker, id model.SavepointID) bool {
 	if id == "" || marker.Session != s.session || marker.ComposeProject != s.composeProject {
 		return false
 	}

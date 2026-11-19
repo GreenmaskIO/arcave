@@ -16,27 +16,37 @@ package test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"path/filepath"
 	"testing"
+	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
-	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
-// sessionArcaveProject is the arcave project every session test stores under.
+// inflightLabelPrefix opens every label of an inflight marker's volume.
+const inflightLabelPrefix = "io.arcave.inflight."
+
+// sessionArcaveProject opens the name of the arcave project a session test stores under; each env
+// suffixes it, as the inflight marker is the arcave project's on the shared daemon.
 const sessionArcaveProject = "arcave-session-tenant"
 
 // sessionEnv is one arcave project directory the built binary works in, and the compose project
 // withComposeProject brings up beside it.
 type sessionEnv struct {
-	ctx         context.Context
-	projectRoot string
-	storage     config.Storage
-	inflight    *inflightrepo.Repository
+	ctx           context.Context
+	projectRoot   string
+	arcaveProject string
+	storage       config.Storage
+	inflight      daemonMarkers
 	// composeProject is the compose project, project its name; nil and empty until
 	// withComposeProject.
 	composeProject *composeProject
@@ -46,16 +56,115 @@ type sessionEnv struct {
 func newSessionEnv(t *testing.T) *sessionEnv {
 	t.Helper()
 
-	projectRoot := t.TempDir()
+	arcaveProject := sessionArcaveProject + "-" + daemontest.RandomSuffix(t)
 	return &sessionEnv{
-		ctx:         zerolog.New(io.Discard).WithContext(context.Background()),
-		projectRoot: projectRoot,
+		ctx:           zerolog.New(io.Discard).WithContext(context.Background()),
+		projectRoot:   t.TempDir(),
+		arcaveProject: arcaveProject,
 		storage: config.Storage{
 			Type:      config.StorageTypeDirectory,
 			Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 		},
-		inflight: inflightrepo.New(projectRoot),
+		inflight: openInflightMarkers(t, arcaveProject),
 	}
+}
+
+// openInflightMarkers is arcaveProject's inflight marker on the test daemon; whatever marker the
+// test leaves is cleared when it ends.
+func openInflightMarkers(t *testing.T, arcaveProject string) daemonMarkers {
+	t.Helper()
+
+	markers := daemonMarkers{
+		daemon:        daemontest.NewClient(t),
+		arcaveProject: arcaveProject,
+	}
+	t.Cleanup(func() {
+		if err := markers.Clear(context.Background()); err != nil {
+			t.Logf("clearing the inflight marker of %s: %v", arcaveProject, err)
+		}
+	})
+	return markers
+}
+
+// daemonMarkers reads and writes an arcave project's inflight marker the way the binary keeps it,
+// spelled out apart from it: a volume per write on the daemon, the marker in its labels.
+type daemonMarkers struct {
+	daemon        *client.Client
+	arcaveProject string
+}
+
+// Get reads the newest marker; found is false when none stands.
+func (m daemonMarkers) Get(ctx context.Context) (marker model.InflightMarker, found bool, err error) {
+	volumes, err := m.list(ctx)
+	if err != nil {
+		return model.InflightMarker{}, false, err
+	}
+	for _, v := range volumes {
+		label := func(key string) string { return v.Labels[inflightLabelPrefix+key] }
+		session, err := model.ParseSessionID(label("session"))
+		if err != nil {
+			return model.InflightMarker{}, false, fmt.Errorf("volume %s: %w", v.Name, err)
+		}
+		at, err := time.Parse(time.RFC3339Nano, label("at"))
+		if err != nil {
+			return model.InflightMarker{}, false, fmt.Errorf("volume %s: %w", v.Name, err)
+		}
+		if found && !at.After(marker.At) {
+			continue
+		}
+		marker = model.InflightMarker{
+			Phase:          model.InflightPhase(label("phase")),
+			Session:        session,
+			ComposeProject: model.DockerComposeProjectName(label("compose-project")),
+			Target:         model.SavepointID(label("target")),
+			Safety:         model.SavepointID(label("safety")),
+			At:             at,
+		}
+		found = true
+	}
+	return marker, found, nil
+}
+
+// Put writes marker as the binary does, in a volume of its own beside any earlier one.
+func (m daemonMarkers) Put(ctx context.Context, marker model.InflightMarker) error {
+	_, err := m.daemon.VolumeCreate(ctx, client.VolumeCreateOptions{
+		Name: "arcave-inflight-" + marker.ComposeProject.String() + "-" + model.NewSavepointID().String(),
+		Labels: map[string]string{
+			inflightLabelPrefix + "arcave-project":  m.arcaveProject,
+			inflightLabelPrefix + "compose-project": marker.ComposeProject.String(),
+			inflightLabelPrefix + "session":         marker.Session.String(),
+			inflightLabelPrefix + "target":          marker.Target.String(),
+			inflightLabelPrefix + "safety":          marker.Safety.String(),
+			inflightLabelPrefix + "phase":           string(marker.Phase),
+			inflightLabelPrefix + "at":              marker.At.UTC().Format(time.RFC3339Nano),
+		},
+	})
+	return err
+}
+
+// Clear removes every marker volume of the arcave project.
+func (m daemonMarkers) Clear(ctx context.Context) error {
+	volumes, err := m.list(ctx)
+	if err != nil {
+		return err
+	}
+	for _, v := range volumes {
+		if _, err := m.daemon.VolumeRemove(ctx, v.Name, client.VolumeRemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// list lists the arcave project's marker volumes.
+func (m daemonMarkers) list(ctx context.Context) ([]volume.Volume, error) {
+	listed, err := m.daemon.VolumeList(ctx, client.VolumeListOptions{
+		Filters: make(client.Filters).Add("label", inflightLabelPrefix+"arcave-project="+m.arcaveProject),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return listed.Items, nil
 }
 
 // storeDir is the store root on disk, every arcave project beneath it.
@@ -65,7 +174,7 @@ func (e *sessionEnv) storeDir() string {
 
 // sessionDir is where a session's tree lives on disk.
 func (e *sessionEnv) sessionDir(id model.SessionID) string {
-	return filepath.Join(e.storeDir(), "projects", sessionArcaveProject, "sessions", id.String())
+	return filepath.Join(e.storeDir(), "projects", e.arcaveProject, "sessions", id.String())
 }
 
 // create makes a session named name through the binary and fails the test if it cannot.

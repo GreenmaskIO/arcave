@@ -307,31 +307,6 @@ func TestService_CreateSavepoint_RefusedWhileInflight(t *testing.T) {
 	stages.AssertExpectations(t)
 }
 
-func TestService_RemoveSavepoints_RefusedWhileInflight(t *testing.T) {
-	// Arrange
-	locker := &mockLocker{}
-	expectLock(locker)
-	savepoints := &mockSavepoints{}
-	svc := New(Deps{
-		ArcaveProject:  demoArcaveProject,
-		SessionLocker:  fakeSessionLocker{},
-		WriteAdmission: fakeWriteAdmission{},
-		Savepoints:     savepoints,
-		ProjectLocker:  locker,
-		Inflight:       standingMarker(t, model.InflightInconsistent),
-	})
-	ctx := zerolog.Nop().WithContext(context.Background())
-
-	// Act: an id selector, which could otherwise reach the safety snapshot itself.
-	_, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{Refs: []string{demoSafetySnapshot().ID.String()}})
-
-	// Assert: refused before the listing — the safety snapshot to recover from stays whole.
-	var interrupted *model.InterruptedRollbackError
-	require.ErrorAs(t, err, &interrupted)
-	locker.AssertExpectations(t)
-	savepoints.AssertExpectations(t)
-}
-
 // A rollback to anything but the marker's own safety snapshot is refused, and the
 // resolve's listing is the one call made before the refusal.
 func TestService_Rollback_RefusedWhileInflight(t *testing.T) {

@@ -53,8 +53,9 @@ func interruptedState(marker model.InflightMarker) string {
 	case marker.Safety == "":
 		return "a rollback that took no safety snapshot was interrupted; volumes may be half-restored"
 	case marker.Phase == model.InflightRestoreDone:
-		return "every volume was restored and only the services were not started " +
-			"(starting the compose project and removing .arcave/inflight.json keeps the rollback instead)"
+		return "every volume was restored and only the services were not started (starting the compose " +
+			"project and removing the marker volume labelled io.arcave.inflight.compose-project=" +
+			marker.ComposeProject.String() + " keeps the rollback instead)"
 	case marker.Phase == model.InflightInconsistent:
 		return "the rollback failed and so did its revert"
 	default:
