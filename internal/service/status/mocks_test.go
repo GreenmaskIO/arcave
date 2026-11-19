@@ -16,6 +16,7 @@ package status
 
 import (
 	"context"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 
@@ -51,7 +52,57 @@ type mockObserver struct{ mock.Mock }
 
 func (m *mockObserver) Observe(ctx context.Context) (provider.ObservedWorkload, error) {
 	args := m.Called(ctx)
-	return args.Get(0).(provider.ObservedWorkload), args.Error(1)
+	observed, _ := args.Get(0).(provider.ObservedWorkload)
+	return observed, args.Error(1)
+}
+
+type mockObservedWorkload struct{ mock.Mock }
+
+func (m *mockObservedWorkload) Deployment() *model.SavepointDeployment {
+	args := m.Called()
+	deployment, _ := args.Get(0).(*model.SavepointDeployment)
+	return deployment
+}
+
+func (m *mockObservedWorkload) Report(checkedAt time.Time, deployed *model.Savepoint) model.WorkloadReport {
+	args := m.Called(checkedAt, deployed)
+	return args.Get(0).(model.WorkloadReport)
+}
+
+// fakeDetail is a provider's body of a status, its JSON body.
+type fakeDetail struct {
+	body string
+}
+
+func (f fakeDetail) MarshalJSON() ([]byte, error) { return []byte(f.body), nil }
+
+func (f fakeDetail) Table() model.Table { return model.Table{} }
+
+type mockSavepoints struct{ mock.Mock }
+
+func (m *mockSavepoints) List(ctx context.Context) ([]model.Savepoint, error) {
+	args := m.Called(ctx)
+	savepoints, _ := args.Get(0).([]model.Savepoint)
+	return savepoints, args.Error(1)
+}
+
+func (m *mockSavepoints) Load(ctx context.Context, id model.SavepointID) (model.Savepoint, bool, error) {
+	args := m.Called(ctx, id)
+	return args.Get(0).(model.Savepoint), args.Bool(1), args.Error(2)
+}
+
+func (m *mockSavepoints) Remove(ctx context.Context, id model.SavepointID) error {
+	return m.Called(ctx, id).Error(0)
+}
+
+// sessionOf is a provider session whose every workload's savepoints are savepoints.
+type sessionOf struct {
+	fakeSession
+	savepoints provider.Savepoints
+}
+
+func (s sessionOf) Savepoints(provider.WorkloadName) (provider.Savepoints, error) {
+	return s.savepoints, nil
 }
 
 // failingReader is a SessionReader whose every read fails with err.

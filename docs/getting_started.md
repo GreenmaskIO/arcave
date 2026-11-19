@@ -149,9 +149,6 @@ Savepoint before-migration · 019e843e-1650-7000-8000-000000000000 · 19:41:12 �
       { "kind": "volumes", "count": 1, "size_bytes": 40805376, "stored_bytes": 3913483 },
       { "kind": "layers", "count": 1, "size_bytes": 158913306, "stored_bytes": 16707 },
       { "kind": "images", "count": 1, "size_bytes": 657586103, "stored_bytes": 164698711 }
-    ],
-    "replicas": [
-      { "service": "db", "replica": 1, "held": ["layer"] }
     ]
   },
   "detail": {
@@ -350,7 +347,7 @@ arcave status
 myapp · running · savepoint before-migration (019e843e-1650-7000-8000-000000000000)
   session    baseline
   deployed   2026-06-01 19:52 (12s ago)
-  savepoint  taken 2026-06-01 19:41 (11m ago) · restored 1 volume, 1 layer
+  savepoint  taken 2026-06-01 19:41 (11m ago)
 
 SERVICE  REPLICAS  STATE    UP   PORTS
 db       1/1       healthy  10s  127.0.0.1:5432→5432/tcp

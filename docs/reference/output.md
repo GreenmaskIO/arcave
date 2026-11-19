@@ -162,9 +162,7 @@ The one shape four commands are built from: `savepoint create` prints it, `savep
   "provider": "compose",
   "summary": {
     "units": [ … ],
-    "notices": [ … ],
-    "gaps": [ … ],
-    "replicas": [ … ]
+    "notices": [ … ]
   },
   "detail": {
     "stats": [ … ],
@@ -201,12 +199,6 @@ What a savepoint captures follows the `capture` defaults in the config and the `
   ],
   "notices": [
     { "message": "worker has no volumes: only its writable layer is held" }
-  ],
-  "gaps": [
-    { "code": "volume-not-restored", "message": "volume myapp_scratch was not in the savepoint: it holds what it held before the rollback" }
-  ],
-  "replicas": [
-    { "service": "app", "replica": 1, "held": ["layer"] }
   ]
 }
 ```
@@ -215,10 +207,8 @@ What a savepoint captures follows the `capture` defaults in the config and the `
 |---|---|---|
 | `units` | `{kind, count, size_bytes, stored_bytes}` | What the savepoint holds by kind, the rows of the text summary. `volumes` is always there; `layers` and `images` only when the savepoint holds any. `size_bytes` is what the units hold, `stored_bytes` what this capture added to the store. |
 | `notices` | `{message, hint, severe}` | What the capture left out, and every image named but not stored, the severe first — the summary's `Warnings`. `hint` and `severe` are omitted when unset. |
-| `gaps` | `{code, message}` | What a rollback to the savepoint does not put back. `code` is `volume-not-restored` (a mount a label or the config excluded) or `layer-not-restored` (a writable layer left out). |
-| `replicas` | `{service, replica, held}` | What the savepoint holds of each replica beside the volumes: `held` is `["layer"]` for a replica whose writable layer it holds. |
 
-`notices`, `gaps` and `replicas` are each omitted when empty.
+`notices` is omitted when empty. What a rollback to the savepoint does not put back, and which replicas' writable layers it holds, are in `detail.not_covered` and `detail.writable_layers`; a [status](#status) of its deployment says it as notices.
 
 ### `detail`
 
@@ -306,7 +296,7 @@ One entry per distinct image the services run, stored once for every savepoint a
 
 ### `detail.not_covered`
 
-Every field is omitted when empty, and `not_covered` itself when all are. Each entry is also spelled out in `summary.notices`; an excluded mount and a left-out layer are in `summary.gaps` too.
+Every field is omitted when empty, and `not_covered` itself when all are. Each entry is also spelled out in `summary.notices`.
 
 | Field | Entries | Meaning |
 |---|---|---|
@@ -396,8 +386,7 @@ The fields `rollback` prints, without `safety_snapshot`: an `up` takes none. `di
     "arcave_project": "myapp",
     "session": { "id": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "name": "feat/add-new-table" },
     "savepoint": { "id": "019e843e-1650-7000-8000-000000000000", "name": "before-migration",
-                   "created_at": "2026-06-01T19:41:12.123456789Z", "safety_snapshot": false },
-    "service_replicas": { "app": [1], "db": [1] }
+                   "created_at": "2026-06-01T19:41:12.123456789Z", "safety_snapshot": false }
   },
   "forced": false,
   "discarded": { "containers": [ … ], "volumes": [ … ], "networks": [ … ] },
@@ -416,46 +405,51 @@ The fields `rollback` prints, without `safety_snapshot`: an `up` takes none. `di
   "state": "degraded",
   "session": {"id": "00000000-0000-0000-0000-000000000001", "name": "baseline"},
   "deployment": {
-    "source": "mixed",
     "deployed_at": "2026-11-07T14:02:11Z",
     "arcave_project": "myapp",
     "session": {"id": "00000000-0000-0000-0000-000000000001", "name": "baseline"},
     "savepoint": {
       "id": "019e843e-…", "name": "before-migration", "created_at": "2026-11-06T19:41:00Z",
       "safety_snapshot": false,
-      "description": "the schema before 0042",
-      "restored": {"volumes": 3, "writable_layers": 2}
+      "description": "the schema before 0042"
     },
-    "replaced": 1,
     "record": "found"
   },
-  "services": [
-    {
-      "name": "web", "state": "running", "replicas_expected": 2, "replicas_up": 2,
-      "replicas": [
-        {
-          "number": 2, "container": "myapp-web-2", "container_id": "…", "state": "running",
-          "exit_code": 0, "oom_killed": false, "restart_count": 0,
-          "created_at": "…", "started_at": "…",
-          "replaces": "myapp-web-2", "in_deployment": false, "in_savepoint": true,
-          "ports": [{"container_port": 80, "protocol": "tcp", "host_ip": "0.0.0.0", "host_port": 8080}]
-        }
-      ]
-    }
-  ],
   "rollback_in_flight": null,
   "unreadable": [],
-  "notices": [{"code": "replica-recreated", "message": "web-2 was recreated outside arcave …"}]
+  "notices": [{"code": "replica-recreated", "message": "web-2 was recreated outside arcave …"}],
+  "detail": {
+    "source": "mixed",
+    "replaced": 1,
+    "services": [
+      {
+        "name": "web", "state": "running", "replicas_expected": 2, "replicas_up": 2,
+        "replicas": [
+          {
+            "number": 2, "container": "myapp-web-2", "container_id": "…", "state": "running",
+            "exit_code": 0, "oom_killed": false, "restart_count": 0,
+            "created_at": "…", "started_at": "…",
+            "replaces": "myapp-web-2", "in_deployment": false, "in_savepoint": true,
+            "ports": [{"container_port": 80, "protocol": "tcp", "host_ip": "0.0.0.0", "host_port": 8080}]
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
-`state` is one of `rollback-pending`, `absent`, `stopped`, `degraded`, `starting`, `running` — see [the command](cli/status.md#the-state). `deployment` is `null` with no container, and `{"source": "compose"}` alone when no container carries a rollback's labels; `source` is `savepoint` when every container does, `mixed` otherwise. `deployed_at`, `arcave_project`, `session` and the savepoint's `id`, `name`, `created_at` and `safety_snapshot` are read off the labels, so they are there when the store is not; `name` is absent for a savepoint without one, a safety snapshot always. `record` says whether the deployed savepoint's session still holds it — `found`, `missing` (the savepoint or its session removed since), or `unreadable` — and is absent when `arcave_project` is not the one the config names, whose store is not read; the savepoint's `description` and `restored` come from that record, and are absent unless it is `found`. `replaced` counts the replicas the savepoint recorded that were recreated outside arcave since — those with `in_deployment` `false` and `in_savepoint` `true` — and is absent at `0`.
-
-A replica's `state` is `running`, `completed`, `exited`, `restarting`, `created`, `paused`, `removing`, `dead`, or `missing` for one the deployed savepoint recorded and the daemon does not hold; `health` is `healthy`, `unhealthy` or `starting`, and absent with no healthcheck or once the container stopped. `in_deployment` marks a container the deployment built and `in_savepoint` a replica the savepoint recorded: `false`/`true` was recreated outside arcave, `false`/`false` was added since. `replaces` is the container compose recreated this one over. `replicas_expected` is absent with nothing deployed.
+`state` is `rollback-pending` while an inflight marker names the compose project, else the provider's word: the compose provider's are `absent`, `stopped`, `degraded`, `starting` and `running` — see [the command](cli/status.md#the-state). `deployment` is `null` when no container carries a rollback's labels. `deployed_at`, `arcave_project`, `session` and the savepoint's `id`, `name`, `created_at` and `safety_snapshot` are read off the labels, so they are there when the store is not; `name` is absent for a savepoint without one, a safety snapshot always. `record` says whether the deployed savepoint's session still holds it — `found`, `missing` (the savepoint or its session removed since), or `unreadable` — and is absent when `arcave_project` is not the one the config names, whose store is not read; the savepoint's `description` comes from that record, and is absent unless it is `found`.
 
 `session` is the session your commands work in, `null` when it could not be resolved. `rollback_in_flight` is the inflight marker: `{"phase", "session", "target", "safety", "at", "recover"}`, `recover` being the savepoint to roll back to. `unreadable` lists what could not be read — `{"source": "store" | "session" | "inflight-marker", "error"}` — and is not empty exactly when the command exits `1` with a result.
 
-`notices` are `{"code", "message", "severe"}`, the severe first. `code` names the condition and is stable — act on it, never on `message`, whose wording may change; [the command](cli/status.md#what-the-warnings-say) lists every code and what to do about it. A status notice carries no `hint`: what to do is the documentation's. Every id in a status is whole.
+`notices` are `{"code", "message", "severe"}`, arcave's and the provider's, the severe first. `code` names the condition and is stable — act on it, never on `message`, whose wording may change; [the command](cli/status.md#what-the-warnings-say) lists every code and what to do about it. A status notice carries no `hint`: what to do is the documentation's. Every id in a status is whole.
+
+`detail` is the provider's body of the status; arcave prints it as the provider encodes it. The compose provider's:
+
+- `source` says what built the containers: `savepoint` when every one carries the deployment's labels, `mixed` when some do, `compose` when none does; absent with no container.
+- `replaced` counts the replicas the savepoint recorded that were recreated outside arcave since — those with `in_deployment` `false` and `in_savepoint` `true` — and is absent at `0`.
+- `services` is every service the daemon runs or the deployed savepoint recorded, by name; `[]` with none. A replica's `state` is `running`, `completed`, `exited`, `restarting`, `created`, `paused`, `removing`, `dead`, or `missing` for one the deployed savepoint recorded and the daemon does not hold; `health` is `healthy`, `unhealthy` or `starting`, and absent with no healthcheck or once the container stopped. `in_deployment` marks a container the deployment built and `in_savepoint` a replica the savepoint recorded: `false`/`true` was recreated outside arcave, `false`/`false` was added since. `replaces` is the container compose recreated this one over. `replicas_expected` is absent with nothing deployed.
 
 ## Reading it
 

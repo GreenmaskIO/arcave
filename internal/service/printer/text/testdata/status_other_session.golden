@@ -2,7 +2,7 @@ myapp · running · savepoint before-migration (01a188c4-1650-7000-8000-00000000
   session    feat
   deployed   2026-11-07 14:02 (3h 12m ago)
   from       session baseline
-  savepoint  taken 2026-10-29 19:45 (8d 21h ago) · restored 3 volumes, 2 layers
+  savepoint  taken 2026-10-29 19:45 (8d 21h ago)
              the schema before 0042
 
 SERVICE  REPLICAS  STATE      UP      PORTS

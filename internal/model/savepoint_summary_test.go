@@ -26,7 +26,6 @@ func demoSummary() SavepointSummary {
 			{Kind: UnitKindVolumes, Count: 2, SizeBytes: 10, StoredBytes: 4},
 			{Kind: UnitKindLayers, Count: 1, SizeBytes: 7, StoredBytes: 3},
 		},
-		Replicas: []ReplicaHolding{{Service: "db", Replica: 1, Held: []string{ReplicaHeldLayer}}},
 	}
 }
 
@@ -56,26 +55,4 @@ func TestSavepointSummary_StoredBytes(t *testing.T) {
 
 	// Assert
 	assert.Equal(t, int64(7), got, "every kind together")
-}
-
-func TestSavepointSummary_Holds(t *testing.T) {
-	tests := []struct {
-		name    string
-		service string
-		replica int
-		want    bool
-	}{
-		{name: "the replica's layer", service: "db", replica: 1, want: true},
-		{name: "another replica", service: "db", replica: 2},
-		{name: "another service", service: "web", replica: 1},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got := demoSummary().Holds(tt.service, tt.replica, ReplicaHeldLayer)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-		})
-	}
 }

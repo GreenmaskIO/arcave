@@ -43,12 +43,14 @@ var (
 const demoNetwork = composetest.DemoProject + "_default"
 
 // deploymentOf is a build of demoRecord from session of arcaveProject.
-func deploymentOf(arcaveProject model.ArcaveProjectName, session model.SessionRef, at time.Time) model.SavepointDeployment {
-	return model.SavepointDeployment{
-		DeployedAt:      at,
-		ArcaveProject:   arcaveProject,
-		Session:         session,
-		Savepoint:       model.DeployedSavepoint{ID: composetest.DemoRecord().Header.ID, Name: composetest.DemoRecord().Header.Name, CreatedAt: composetest.DemoRecord().Header.CreatedAt},
+func deploymentOf(arcaveProject model.ArcaveProjectName, session model.SessionRef, at time.Time) composemodel.Deployment {
+	return composemodel.Deployment{
+		SavepointDeployment: model.SavepointDeployment{
+			DeployedAt:    at,
+			ArcaveProject: arcaveProject,
+			Session:       session,
+			Savepoint:     model.DeployedSavepoint{ID: composetest.DemoRecord().Header.ID, Name: composetest.DemoRecord().Header.Name, CreatedAt: composetest.DemoRecord().Header.CreatedAt},
+		},
 		ServiceReplicas: map[string][]int{composetest.DemoService: {1}},
 	}
 }
@@ -145,22 +147,22 @@ func TestSurveyed_Owner(t *testing.T) {
 		want      *model.SavepointDeployment
 		wantErr   error
 	}{
-		{name: "every replica is the session's", resources: resourcesOf(composemodel.NewDeploymentLabels(own), composemodel.NewDeploymentLabels(newer)), want: &newer},
-		{name: "another session's", resources: resourcesOf(composemodel.NewDeploymentLabels(foreignSession)), want: &foreignSession, wantErr: &model.DeployedElsewhereError{
-			ArcaveProject: composetest.DemoArcaveProject, Deployment: foreignSession,
+		{name: "every replica is the session's", resources: resourcesOf(composemodel.NewDeploymentLabels(own), composemodel.NewDeploymentLabels(newer)), want: &newer.SavepointDeployment},
+		{name: "another session's", resources: resourcesOf(composemodel.NewDeploymentLabels(foreignSession)), want: &foreignSession.SavepointDeployment, wantErr: &model.DeployedElsewhereError{
+			ArcaveProject: composetest.DemoArcaveProject, Deployment: foreignSession.SavepointDeployment,
 		}},
-		{name: "another arcave project's", resources: resourcesOf(composemodel.NewDeploymentLabels(foreignProject)), want: &foreignProject, wantErr: &model.DeployedElsewhereError{
-			ArcaveProject: composetest.DemoArcaveProject, Deployment: foreignProject,
+		{name: "another arcave project's", resources: resourcesOf(composemodel.NewDeploymentLabels(foreignProject)), want: &foreignProject.SavepointDeployment, wantErr: &model.DeployedElsewhereError{
+			ArcaveProject: composetest.DemoArcaveProject, Deployment: foreignProject.SavepointDeployment,
 		}},
 		{
-			name: "one replica without labels", resources: resourcesOf(composemodel.NewDeploymentLabels(own), map[string]string{}), want: &own,
+			name: "one replica without labels", resources: resourcesOf(composemodel.NewDeploymentLabels(own), map[string]string{}), want: &own.SavepointDeployment,
 			wantErr: &composemodel.NotDeployedByArcaveError{Replicas: []string{composetest.DemoService + "-2"}},
 		},
 		{
 			name: "unreadable labels", resources: resourcesOf(broken), wantErr: &composemodel.NotDeployedByArcaveError{Replicas: []string{composetest.DemoService + "-1"}},
 		},
 		{
-			name: "no labels beats another session", resources: resourcesOf(composemodel.NewDeploymentLabels(foreignSession), map[string]string{}), want: &foreignSession,
+			name: "no labels beats another session", resources: resourcesOf(composemodel.NewDeploymentLabels(foreignSession), map[string]string{}), want: &foreignSession.SavepointDeployment,
 			wantErr: &composemodel.NotDeployedByArcaveError{Replicas: []string{composetest.DemoService + "-2"}},
 		},
 		{

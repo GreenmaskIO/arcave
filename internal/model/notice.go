@@ -31,31 +31,17 @@ type Notice struct {
 // NoticeCode names the condition a notice reports.
 type NoticeCode string
 
-// The notices a status reports, one code per condition; a code is stable, its message is not.
+// The notices a status reports of what arcave reads itself, one code per condition; a code is
+// stable, its message is not. A provider defines the codes of what it reports.
 const (
-	NoticeCodeRollbackPending            NoticeCode = "rollback-pending"
-	NoticeCodeStoreUnreadable            NoticeCode = "store-unreadable"
-	NoticeCodeSessionUnresolved          NoticeCode = "session-unresolved"
-	NoticeCodeInflightMarkerUnreadable   NoticeCode = "inflight-marker-unreadable"
-	NoticeCodeDeploymentLabelsUnreadable NoticeCode = "deployment-labels-unreadable"
-	NoticeCodeDeployedSavepointGone      NoticeCode = "deployed-savepoint-gone"
-	NoticeCodeOtherArcaveProject         NoticeCode = "other-arcave-project"
-	NoticeCodeOtherSession               NoticeCode = "other-session"
-	NoticeCodeSafetySnapshotDeployed     NoticeCode = "safety-snapshot-deployed"
-	NoticeCodeVolumeNotRestored          NoticeCode = "volume-not-restored"
-	NoticeCodeLayerNotRestored           NoticeCode = "layer-not-restored"
-	NoticeCodeReplicaMissing             NoticeCode = "replica-missing"
-	NoticeCodeReplicaExited              NoticeCode = "replica-exited"
-	NoticeCodeReplicaDead                NoticeCode = "replica-dead"
-	NoticeCodeReplicaRemoving            NoticeCode = "replica-removing"
-	NoticeCodeReplicaRestarting          NoticeCode = "replica-restarting"
-	NoticeCodeReplicaCreated             NoticeCode = "replica-created"
-	NoticeCodeReplicaPaused              NoticeCode = "replica-paused"
-	NoticeCodeReplicaRestarted           NoticeCode = "replica-restarted"
-	NoticeCodeReplicaUnhealthy           NoticeCode = "replica-unhealthy"
-	NoticeCodeReplicaRecreated           NoticeCode = "replica-recreated"
-	NoticeCodeReplicaAdded               NoticeCode = "replica-added"
-	NoticeCodeComposeProjectStopped      NoticeCode = "compose-project-stopped"
+	NoticeCodeRollbackPending          NoticeCode = "rollback-pending"
+	NoticeCodeStoreUnreadable          NoticeCode = "store-unreadable"
+	NoticeCodeSessionUnresolved        NoticeCode = "session-unresolved"
+	NoticeCodeInflightMarkerUnreadable NoticeCode = "inflight-marker-unreadable"
+	NoticeCodeDeployedSavepointGone    NoticeCode = "deployed-savepoint-gone"
+	NoticeCodeOtherArcaveProject       NoticeCode = "other-arcave-project"
+	NoticeCodeOtherSession             NoticeCode = "other-session"
+	NoticeCodeSafetySnapshotDeployed   NoticeCode = "safety-snapshot-deployed"
 )
 
 // SortSevereFirst orders notices severe first, keeping their order otherwise.

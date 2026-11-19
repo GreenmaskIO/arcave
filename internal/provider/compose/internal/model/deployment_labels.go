@@ -29,8 +29,16 @@ import (
 // errLabelBlank refuses a blank label a deployment cannot do without.
 var errLabelBlank = errors.New("must not be blank")
 
+// Deployment is one build of a compose project from a savepoint as its labels spell it: arcave's
+// part, and the replicas each service was built with.
+type Deployment struct {
+	model.SavepointDeployment
+	// ServiceReplicas are the replica numbers each service was built with, a gap included.
+	ServiceReplicas map[string][]int
+}
+
 // NewDeploymentLabels spells the deployment out as labels, every key present.
-func NewDeploymentLabels(m model.SavepointDeployment) map[string]string {
+func NewDeploymentLabels(m Deployment) map[string]string {
 	return map[string]string{
 		string(SystemLabelDeploymentDeployedAt):                formatLabelTime(m.DeployedAt),
 		string(SystemLabelDeploymentArcaveProject):             m.ArcaveProject.String(),
@@ -56,10 +64,10 @@ func NewBlankDeploymentLabels() map[string]string {
 
 // ParseDeploymentLabels reads the deployment the labels name; ok is false when they name no
 // savepoint. Blank names and replicas are allowed, any other blank label is an error.
-func ParseDeploymentLabels(labels map[string]string) (model.SavepointDeployment, bool, error) {
+func ParseDeploymentLabels(labels map[string]string) (Deployment, bool, error) {
 	get := func(key SystemLabel) string { return labels[string(key)] }
 	if get(SystemLabelDeploymentSavepointID) == "" {
-		return model.SavepointDeployment{}, false, nil
+		return Deployment{}, false, nil
 	}
 	var (
 		savepointID      = model.SavepointID(get(SystemLabelDeploymentSavepointID))
@@ -72,38 +80,40 @@ func ParseDeploymentLabels(labels map[string]string) (model.SavepointDeployment,
 		err              error
 	)
 	if err = savepointID.Validate(); err != nil {
-		return model.SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentSavepointID, err)
+		return Deployment{}, false, newLabelError(SystemLabelDeploymentSavepointID, err)
 	}
 	if deployedAt, err = parseLabelTime(get(SystemLabelDeploymentDeployedAt)); err != nil {
-		return model.SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentDeployedAt, err)
+		return Deployment{}, false, newLabelError(SystemLabelDeploymentDeployedAt, err)
 	}
 	if err = arcaveProject.Validate(); err != nil {
-		return model.SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentArcaveProject, err)
+		return Deployment{}, false, newLabelError(SystemLabelDeploymentArcaveProject, err)
 	}
 	if session, err = model.ParseSessionID(get(SystemLabelDeploymentSessionID)); err != nil {
-		return model.SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentSessionID, err)
+		return Deployment{}, false, newLabelError(SystemLabelDeploymentSessionID, err)
 	}
 	if createdAt, err = parseLabelTime(get(SystemLabelDeploymentSavepointCreatedAt)); err != nil {
-		return model.SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentSavepointCreatedAt, err)
+		return Deployment{}, false, newLabelError(SystemLabelDeploymentSavepointCreatedAt, err)
 	}
 	if isSafetySnapshot, err = strconv.ParseBool(get(SystemLabelDeploymentSavepointIsSafetySnapshot)); err != nil {
-		return model.SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentSavepointIsSafetySnapshot, err)
+		return Deployment{}, false, newLabelError(SystemLabelDeploymentSavepointIsSafetySnapshot, err)
 	}
 	if replicas, err = parseServiceReplicas(get(SystemLabelDeploymentServiceReplicas)); err != nil {
-		return model.SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentServiceReplicas, err)
+		return Deployment{}, false, newLabelError(SystemLabelDeploymentServiceReplicas, err)
 	}
-	return model.SavepointDeployment{
-		DeployedAt:    deployedAt,
-		ArcaveProject: arcaveProject,
-		Session: model.SessionRef{
-			ID:   session,
-			Name: get(SystemLabelDeploymentSessionName),
-		},
-		Savepoint: model.DeployedSavepoint{
-			ID:               savepointID,
-			Name:             get(SystemLabelDeploymentSavepointName),
-			CreatedAt:        createdAt,
-			IsSafetySnapshot: isSafetySnapshot,
+	return Deployment{
+		SavepointDeployment: model.SavepointDeployment{
+			DeployedAt:    deployedAt,
+			ArcaveProject: arcaveProject,
+			Session: model.SessionRef{
+				ID:   session,
+				Name: get(SystemLabelDeploymentSessionName),
+			},
+			Savepoint: model.DeployedSavepoint{
+				ID:               savepointID,
+				Name:             get(SystemLabelDeploymentSavepointName),
+				CreatedAt:        createdAt,
+				IsSafetySnapshot: isSafetySnapshot,
+			},
 		},
 		ServiceReplicas: replicas,
 	}, true, nil

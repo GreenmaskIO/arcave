@@ -81,11 +81,6 @@ INF savepoint.create[pre-migration] elapsed=10.194s status=succeeded
       { "kind": "volumes", "count": 3, "size_bytes": 48900000,   "stored_bytes": 4700000 },
       { "kind": "layers",  "count": 3, "size_bytes": 260000000,  "stored_bytes": 40600 },
       { "kind": "images",  "count": 3, "size_bytes": 1100000000, "stored_bytes": 268000000 }
-    ],
-    "replicas": [
-      { "service": "minio",    "replica": 1, "held": ["layer"] },
-      { "service": "postgres", "replica": 1, "held": ["layer"] },
-      { "service": "redis",    "replica": 1, "held": ["layer"] }
     ]
   },
   "detail": {

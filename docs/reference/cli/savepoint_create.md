@@ -85,10 +85,6 @@ Warnings (1)
     ],
     "notices": [
       { "message": "app has no volumes: only its writable layer is held" }
-    ],
-    "replicas": [
-      { "service": "app", "replica": 1, "held": ["layer"] },
-      { "service": "db", "replica": 1, "held": ["layer"] }
     ]
   },
   "detail": {
@@ -179,8 +175,6 @@ Warnings (1)
 | `provider` | The provider that took the savepoint: `compose`. |
 | `summary.units` | What the savepoint holds by kind — `volumes`, then `layers` and `images` when it holds any — with `count`, `size_bytes` and `stored_bytes`: the summary's table. |
 | `summary.notices` | The summary's `Warnings`: what the capture left out and any image not stored, the severe first. **Read them before relying on the savepoint.** |
-| `summary.gaps` | What a rollback to the savepoint does not put back: `volume-not-restored`, `layer-not-restored`. |
-| `summary.replicas` | The replicas whose writable layer the savepoint holds. |
 | `detail` | The compose provider's own body, which arcave does not interpret; its fields follow. |
 | `detail.stats` | One entry per captured volume, keyed by `volume.object_id` — see [Storage layout](../storage_layout.md#object-ids). `volume.type` is `named`, `bind` or `anon`; `volume.backend` and `type` are `fullcopy` or `cdc`. `size_bytes` is the volume's size, `stored_bytes` what this capture added to the store; `payload` is the backend's own bookkeeping. |
 | `detail.writable_layers` | One entry per container whose writable layer was committed. `imagebackend` is `dedupcopy` or `fullcopy`; `size_bytes` is the committed image's size, `stored_bytes` what it added to the store after deduplication. |

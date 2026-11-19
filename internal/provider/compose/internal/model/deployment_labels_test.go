@@ -25,18 +25,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func demoDeployment() model.SavepointDeployment {
-	return model.SavepointDeployment{
-		DeployedAt:    time.Date(2026, 11, 7, 14, 2, 11, 0, time.UTC),
-		ArcaveProject: "demo",
-		Session: model.SessionRef{
-			ID:   model.DefaultSession,
-			Name: model.DefaultSessionName,
-		},
-		Savepoint: model.DeployedSavepoint{
-			ID:        "019e843e-1650-7000-8000-000000000000",
-			Name:      "before-migration",
-			CreatedAt: time.Date(2026, 11, 6, 19, 41, 0, 0, time.UTC),
+func demoDeployment() Deployment {
+	return Deployment{
+		SavepointDeployment: model.SavepointDeployment{
+			DeployedAt:    time.Date(2026, 11, 7, 14, 2, 11, 0, time.UTC),
+			ArcaveProject: "demo",
+			Session: model.SessionRef{
+				ID:   model.DefaultSession,
+				Name: model.DefaultSessionName,
+			},
+			Savepoint: model.DeployedSavepoint{
+				ID:        "019e843e-1650-7000-8000-000000000000",
+				Name:      "before-migration",
+				CreatedAt: time.Date(2026, 11, 6, 19, 41, 0, 0, time.UTC),
+			},
 		},
 		ServiceReplicas: map[string][]int{
 			"db":      {1, 3},
@@ -51,7 +53,7 @@ func TestNewDeploymentLabels(t *testing.T) {
 	safetySnapshot.Savepoint.IsSafetySnapshot = true
 	tests := []struct {
 		name       string
-		deployment model.SavepointDeployment
+		deployment Deployment
 		want       map[string]string
 	}{
 		{
@@ -86,7 +88,7 @@ func TestNewDeploymentLabels(t *testing.T) {
 		},
 		{
 			name: "no names and no replicas",
-			deployment: model.SavepointDeployment{
+			deployment: Deployment{SavepointDeployment: model.SavepointDeployment{
 				DeployedAt:    time.Date(2026, 11, 7, 14, 2, 11, 0, time.UTC),
 				ArcaveProject: "demo",
 				Session:       model.SessionRef{ID: model.DefaultSession},
@@ -94,7 +96,7 @@ func TestNewDeploymentLabels(t *testing.T) {
 					ID:        "019e843e-1650-7000-8000-000000000000",
 					CreatedAt: time.Date(2026, 11, 6, 19, 41, 0, 0, time.UTC),
 				},
-			},
+			}},
 			want: map[string]string{
 				"io.arcave.deployment.deployed-at":                  "2026-11-07T14:02:11Z",
 				"io.arcave.deployment.arcave-project":               "demo",

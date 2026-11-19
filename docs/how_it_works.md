@@ -88,7 +88,7 @@ The unit of backup is the **volume**, not the mount:
 
 Mounts that are not persistent data are skipped, and each skip is reported with its reason: `tmpfs`, `npipe`, `image`, `cluster`, `unknown_type`, and `inherited_from_outside` for a mount a service takes through `volumes_from` from a container outside the project. A mount inherited from another service of the project is captured once, as its source's.
 
-The savepoint's `detail.not_covered` lists everything it does not hold: `mounts` (each with its `reason`), `services_without_volumes`, `killed_containers` — the containers the stop had to kill — `replica_gaps`, `unresolved_images`, the `writable_layers` and `images` a label left out, and `failed_hooks` — the `pre-capture` hooks that failed and were let through. It is absent when the savepoint holds everything. Each entry is also spelled out in `summary.notices`, and what a rollback will not put back in `summary.gaps`.
+The savepoint's `detail.not_covered` lists everything it does not hold: `mounts` (each with its `reason`), `services_without_volumes`, `killed_containers` — the containers the stop had to kill — `replica_gaps`, `unresolved_images`, the `writable_layers` and `images` a label left out, and `failed_hooks` — the `pre-capture` hooks that failed and were let through. It is absent when the savepoint holds everything. Each entry is also spelled out in `summary.notices`; once a rollback deployed the savepoint, [`arcave status`](reference/cli/status.md) says what it did not put back.
 
 A volume is addressed directly — a named volume by its Docker name, a bind mount by its host path — and read and written through a throwaway container of arcave's own. The project's containers need only *exist*; they do not need to be running.
 

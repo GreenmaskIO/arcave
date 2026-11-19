@@ -89,7 +89,7 @@ The inflight marker an interrupted rollback leaves, `.arcave/inflight.json`, is 
 
 ## A savepoint holds only what its labels and config let it
 
-[Capture labels](capture_labels.md) and the config's [`capture`](configuration.md#capture) section can leave volumes, container files and images out of a savepoint. A rollback can't put back what was left out: an excluded anonymous volume comes back empty, and an excluded named volume or bind keeps what it holds at the time. The savepoint lists what it left out in `detail.not_covered`, and what a rollback will not put back in `summary.gaps`.
+[Capture labels](capture_labels.md) and the config's [`capture`](configuration.md#capture) section can leave volumes, container files and images out of a savepoint. A rollback can't put back what was left out: an excluded anonymous volume comes back empty, and an excluded named volume or bind keeps what it holds at the time. The savepoint lists what it left out in `detail.not_covered`, and [`arcave status`](cli/status.md) of its deployment says what the rollback did not put back.
 
 A rollback doesn't load the images a savepoint stored back into Docker. A service whose container files were left out is rebuilt from its `image:`, so that image must still be in Docker or in a registry. If it is in neither, the rollback is refused before anything stops.
 

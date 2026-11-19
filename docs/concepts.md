@@ -33,7 +33,7 @@ It has an id — a UUID (version 7) assigned by arcave — and optionally a name
 }
 ```
 
-`summary` is what arcave reads: `units` counts the volumes, layers and images the savepoint holds, with their size and what they added to the store; `notices` say what the capture left out and `gaps` what a rollback to it does not put back. `detail` is the compose provider's own body: `stats` is one entry per captured volume, `writable_layers` one per container, `images` one per distinct image, and `not_covered` — present only when something was left out — says what the savepoint does not hold and why. [Output](reference/output.md) has every field.
+`summary` is what arcave reads: `units` counts the volumes, layers and images the savepoint holds, with their size and what they added to the store; `notices` say what the capture left out. `detail` is the compose provider's own body: `stats` is one entry per captured volume, `writable_layers` one per container, `images` one per distinct image, and `not_covered` — present only when something was left out — says what the savepoint does not hold and why. [Output](reference/output.md) has every field.
 
 A savepoint is **immutable**. Its record, spec and volume archives live under one directory named by its id, but not everything it names does: deduplicated layer and image data is shared by every savepoint of the compose project, and `cdc` keeps one repository per volume beside them. Copying `<id>/` alone does not move a savepoint — see [Storage layout](reference/storage_layout.md#moving-a-savepoint).
 

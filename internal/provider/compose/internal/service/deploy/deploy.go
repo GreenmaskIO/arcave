@@ -157,7 +157,7 @@ func New(deps Deps) *Deployer {
 func (s *Deployer) Build(ctx context.Context, target composemodel.Target) (*types.Project, error) {
 	var (
 		recorded   = newRecordedReplicas(target.Savepoint, target.Project, target.Restored)
-		deployment = newSavepointDeployment(target.Deployment, target.Project, recorded)
+		deployment = newDeployment(target.Deployment, target.Project, recorded)
 		project    = withDeploymentLabels(target.Project, composemodel.NewDeploymentLabels(deployment))
 	)
 	if err := s.composeCreate(ctx, project, newRestoredVolumeNames(target.Savepoint)); err != nil {

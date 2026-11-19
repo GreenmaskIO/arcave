@@ -12,45 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package status
+package statusreport
 
 import (
 	"cmp"
 	"maps"
 	"slices"
 
-	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // replicaStateRank orders the replica states from the best to the worst: a service is as bad as
 // its worst replica, and completed only when every one is.
-var replicaStateRank = map[model.ReplicaState]int{
-	model.ReplicaStateCompleted:  0,
-	model.ReplicaStateRunning:    1,
-	model.ReplicaStateExited:     2,
-	model.ReplicaStateRestarting: 3,
-	model.ReplicaStateCreated:    4,
-	model.ReplicaStatePaused:     5,
-	model.ReplicaStateRemoving:   6,
-	model.ReplicaStateDead:       7,
-	model.ReplicaStateMissing:    8,
+var replicaStateRank = map[composemodel.ReplicaState]int{
+	composemodel.ReplicaStateCompleted:  0,
+	composemodel.ReplicaStateRunning:    1,
+	composemodel.ReplicaStateExited:     2,
+	composemodel.ReplicaStateRestarting: 3,
+	composemodel.ReplicaStateCreated:    4,
+	composemodel.ReplicaStatePaused:     5,
+	composemodel.ReplicaStateRemoving:   6,
+	composemodel.ReplicaStateDead:       7,
+	composemodel.ReplicaStateMissing:    8,
 }
 
 // replicaHealthRank orders the healthchecks from none to the worst.
-var replicaHealthRank = map[model.ReplicaHealth]int{
-	"":                           0,
-	model.ReplicaHealthHealthy:   1,
-	model.ReplicaHealthStarting:  2,
-	model.ReplicaHealthUnhealthy: 3,
+var replicaHealthRank = map[composemodel.ReplicaHealth]int{
+	"":                                  0,
+	composemodel.ReplicaHealthHealthy:   1,
+	composemodel.ReplicaHealthStarting:  2,
+	composemodel.ReplicaHealthUnhealthy: 3,
 }
 
 // containerDeployments is what the containers' labels say built them.
 type containerDeployments struct {
 	// source is empty for a compose project with no container.
-	source model.DeploymentSource
+	source composemodel.DeploymentSource
 	// latest is the latest deployment the containers carry; nil for none.
-	latest *model.SavepointDeployment
+	latest *composemodel.Deployment
 	// builtByLatest holds the id of every container that deployment built.
 	builtByLatest map[string]bool
 	// unreadable are the replicas whose deployment labels do not parse.
@@ -66,11 +65,11 @@ type unreadableLabels struct {
 
 // findDeployments takes every container's deployment, the latest build being the deployment; a
 // container carrying another, none or unreadable labels counts as built by none.
-func findDeployments(containers provider.ObservedWorkload) containerDeployments {
+func findDeployments(containers composemodel.ObservedComposeProject) containerDeployments {
 	var (
-		latest *model.SavepointDeployment
+		latest *composemodel.Deployment
 		// deploymentByContainer is the deployment each container's labels name, by container id.
-		deploymentByContainer = map[string]model.SavepointDeployment{}
+		deploymentByContainer = map[string]composemodel.Deployment{}
 		builtByLatest         = map[string]bool{}
 		unreadable            []unreadableLabels
 		total                 int
@@ -116,7 +115,7 @@ func (d containerDeployments) isUnreadable(service string, number int) bool {
 
 // isSameDeployment reports whether a and b are one build: the same savepoint, session and arcave
 // project deployed at the same instant.
-func isSameDeployment(a, b model.SavepointDeployment) bool {
+func isSameDeployment(a, b composemodel.Deployment) bool {
 	return a.DeployedAt.Equal(b.DeployedAt) &&
 		a.ArcaveProject == b.ArcaveProject &&
 		a.Session.ID == b.Session.ID &&
@@ -124,23 +123,23 @@ func isSameDeployment(a, b model.SavepointDeployment) bool {
 }
 
 // newDeploymentSource says what built the total containers, labelled of them by a rollback.
-func newDeploymentSource(total, labelled int) model.DeploymentSource {
+func newDeploymentSource(total, labelled int) composemodel.DeploymentSource {
 	switch {
 	case total == 0:
 		return ""
 	case labelled == 0:
-		return model.DeploymentSourceCompose
+		return composemodel.DeploymentSourceCompose
 	case labelled == total:
-		return model.DeploymentSourceSavepoint
+		return composemodel.DeploymentSourceSavepoint
 	default:
-		return model.DeploymentSourceMixed
+		return composemodel.DeploymentSourceMixed
 	}
 }
 
 // newServiceStatuses is every service the daemon runs or the deployment recorded, by name.
-func newServiceStatuses(containers provider.ObservedWorkload, deployments containerDeployments) []model.ServiceStatus {
+func newServiceStatuses(containers composemodel.ObservedComposeProject, deployments containerDeployments) []composemodel.ServiceStatus {
 	var (
-		live     = map[string][]provider.ObservedReplica{}
+		live     = map[string][]composemodel.ObservedReplica{}
 		jobs     = map[string]bool{}
 		recorded map[string][]int
 	)
@@ -158,7 +157,7 @@ func newServiceStatuses(containers provider.ObservedWorkload, deployments contai
 	for name := range recorded {
 		names[name] = true
 	}
-	services := make([]model.ServiceStatus, 0, len(names))
+	services := make([]composemodel.ServiceStatus, 0, len(names))
 	for _, name := range slices.Sorted(maps.Keys(names)) {
 		services = append(services, newServiceStatus(name, live[name], recorded[name], jobs[name], deployments.builtByLatest))
 	}
@@ -168,9 +167,9 @@ func newServiceStatuses(containers provider.ObservedWorkload, deployments contai
 // newServiceStatus is one service: its live replicas, and every replica the deployment recorded
 // that the daemon does not hold; job marks one whose exit 0 is its success.
 func newServiceStatus(
-	name string, containers []provider.ObservedReplica, recorded []int, job bool, builtByLatest map[string]bool,
-) model.ServiceStatus {
-	replicas := make([]model.ReplicaStatus, 0, max(len(containers), len(recorded)))
+	name string, containers []composemodel.ObservedReplica, recorded []int, job bool, builtByLatest map[string]bool,
+) composemodel.ServiceStatus {
+	replicas := make([]composemodel.ReplicaStatus, 0, max(len(containers), len(recorded)))
 	held := map[int]bool{}
 	for _, replica := range containers {
 		held[replica.Number] = true
@@ -179,21 +178,21 @@ func newServiceStatus(
 	}
 	for _, number := range recorded {
 		if !held[number] {
-			replicas = append(replicas, model.ReplicaStatus{
+			replicas = append(replicas, composemodel.ReplicaStatus{
 				Number:      number,
-				State:       model.ReplicaStateMissing,
+				State:       composemodel.ReplicaStateMissing,
 				InSavepoint: true,
 			})
 		}
 	}
-	slices.SortStableFunc(replicas, func(a, b model.ReplicaStatus) int { return a.Number - b.Number })
+	slices.SortStableFunc(replicas, func(a, b composemodel.ReplicaStatus) int { return a.Number - b.Number })
 	up := 0
 	for _, replica := range replicas {
-		if replica.State == model.ReplicaStateRunning || replica.State == model.ReplicaStateCompleted {
+		if replica.State == composemodel.ReplicaStateRunning || replica.State == composemodel.ReplicaStateCompleted {
 			up++
 		}
 	}
-	return model.ServiceStatus{
+	return composemodel.ServiceStatus{
 		Name:             name,
 		State:            newServiceState(replicas),
 		Health:           newServiceHealth(replicas),
@@ -205,8 +204,8 @@ func newServiceStatus(
 
 // newReplicaStatus is one container as the daemon reports it. job marks a replica whose exit 0 is
 // its success.
-func newReplicaStatus(replica provider.ObservedReplica, job, inDeployment, inSavepoint bool) model.ReplicaStatus {
-	return model.ReplicaStatus{
+func newReplicaStatus(replica composemodel.ObservedReplica, job, inDeployment, inSavepoint bool) composemodel.ReplicaStatus {
+	return composemodel.ReplicaStatus{
 		Number:        replica.Number,
 		Container:     replica.Container,
 		ContainerID:   replica.ContainerID,
@@ -228,26 +227,26 @@ func newReplicaStatus(replica provider.ObservedReplica, job, inDeployment, inSav
 
 // newReplicaState is the daemon's state, but a replica that exited 0 completed when it is a job: a
 // server stopped by hand exits 0 too.
-func newReplicaState(replica provider.ObservedReplica, job bool) model.ReplicaState {
-	if replica.State == model.ReplicaStateExited && replica.ExitCode == 0 && job {
-		return model.ReplicaStateCompleted
+func newReplicaState(replica composemodel.ObservedReplica, job bool) composemodel.ReplicaState {
+	if replica.State == composemodel.ReplicaStateExited && replica.ExitCode == 0 && job {
+		return composemodel.ReplicaStateCompleted
 	}
 	return replica.State
 }
 
 // newServiceState is the worst of the replicas' states; completed only when every one is.
-func newServiceState(replicas []model.ReplicaStatus) model.ReplicaState {
+func newServiceState(replicas []composemodel.ReplicaStatus) composemodel.ReplicaState {
 	if len(replicas) == 0 {
-		return model.ReplicaStateRunning
+		return composemodel.ReplicaStateRunning
 	}
-	return slices.MaxFunc(replicas, func(a, b model.ReplicaStatus) int {
+	return slices.MaxFunc(replicas, func(a, b composemodel.ReplicaStatus) int {
 		return cmp.Compare(replicaStateRank[a.State], replicaStateRank[b.State])
 	}).State
 }
 
 // newServiceHealth is the worst of the replicas' healthchecks.
-func newServiceHealth(replicas []model.ReplicaStatus) model.ReplicaHealth {
-	var worst model.ReplicaHealth
+func newServiceHealth(replicas []composemodel.ReplicaStatus) composemodel.ReplicaHealth {
+	var worst composemodel.ReplicaHealth
 	for _, replica := range replicas {
 		if replicaHealthRank[replica.Health] > replicaHealthRank[worst] {
 			worst = replica.Health
@@ -256,9 +255,9 @@ func newServiceHealth(replicas []model.ReplicaStatus) model.ReplicaHealth {
 	return worst
 }
 
-// newComposeProjectState sums the compose project up: the first state of model.ComposeProjectState
-// that applies.
-func newComposeProjectState(rollbackPending bool, services []model.ServiceStatus) model.ComposeProjectState {
+// newComposeProjectState sums the compose project up: the first state of
+// composemodel.ComposeProjectState that applies.
+func newComposeProjectState(services []composemodel.ServiceStatus) composemodel.ComposeProjectState {
 	var (
 		live, running, stopped     int
 		broken, degraded, starting bool
@@ -266,17 +265,17 @@ func newComposeProjectState(rollbackPending bool, services []model.ServiceStatus
 	for _, service := range services {
 		for _, replica := range service.Replicas {
 			switch replica.State {
-			case model.ReplicaStateMissing:
+			case composemodel.ReplicaStateMissing:
 				broken = true
 				continue
-			case model.ReplicaStateRunning:
+			case composemodel.ReplicaStateRunning:
 				running++
-			case model.ReplicaStateCompleted:
-			case model.ReplicaStateExited:
+			case composemodel.ReplicaStateCompleted:
+			case composemodel.ReplicaStateExited:
 				// An exit 0 is a finished job or a server stopped by hand alike: it degrades nothing.
 				stopped++
 				degraded = degraded || replica.ExitCode != 0
-			case model.ReplicaStateCreated:
+			case composemodel.ReplicaStateCreated:
 				stopped++
 				degraded = true
 			default:
@@ -284,22 +283,20 @@ func newComposeProjectState(rollbackPending bool, services []model.ServiceStatus
 				broken = true
 			}
 			live++
-			degraded = degraded || replica.Health == model.ReplicaHealthUnhealthy
-			starting = starting || replica.Health == model.ReplicaHealthStarting
+			degraded = degraded || replica.Health == composemodel.ReplicaHealthUnhealthy
+			starting = starting || replica.Health == composemodel.ReplicaHealthStarting
 		}
 	}
 	switch {
-	case rollbackPending:
-		return model.ComposeProjectStateRollbackPending
 	case live == 0:
-		return model.ComposeProjectStateAbsent
+		return composemodel.ComposeProjectStateAbsent
 	case running == 0 && stopped > 0 && !broken:
-		return model.ComposeProjectStateStopped
+		return composemodel.ComposeProjectStateStopped
 	case broken, degraded:
-		return model.ComposeProjectStateDegraded
+		return composemodel.ComposeProjectStateDegraded
 	case starting:
-		return model.ComposeProjectStateStarting
+		return composemodel.ComposeProjectStateStarting
 	default:
-		return model.ComposeProjectStateRunning
+		return composemodel.ComposeProjectStateRunning
 	}
 }

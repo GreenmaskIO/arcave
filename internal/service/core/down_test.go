@@ -40,11 +40,10 @@ var featSession = model.SessionRef{
 // demoOwnDeployment is a build of demoRecord in the default session of demoArcaveProject.
 func demoOwnDeployment() model.SavepointDeployment {
 	return model.SavepointDeployment{
-		DeployedAt:      time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC),
-		ArcaveProject:   demoArcaveProject,
-		Session:         defaultSessionRef,
-		Savepoint:       model.DeployedSavepoint{ID: demoRecord().ID, Name: demoRecord().Name, CreatedAt: demoRecord().CreatedAt},
-		ServiceReplicas: map[string][]int{"db": {1}},
+		DeployedAt:    time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC),
+		ArcaveProject: demoArcaveProject,
+		Session:       defaultSessionRef,
+		Savepoint:     model.DeployedSavepoint{ID: demoRecord().ID, Name: demoRecord().Name, CreatedAt: demoRecord().CreatedAt},
 	}
 }
 

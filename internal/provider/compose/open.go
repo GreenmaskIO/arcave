@@ -105,7 +105,7 @@ func OpenObserver(cfg Config, composeProject model.DockerComposeProjectName) (Ob
 		return Observer{}, err
 	}
 	return Observer{
-		Observer: introspect.NewReader(daemon.api, composeProject),
+		Observer: workload.NewObserver(introspect.NewReader(daemon.api, composeProject)),
 		opened:   opened,
 	}, nil
 }

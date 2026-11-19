@@ -29,41 +29,39 @@ import (
 	"github.com/docker/compose/v5/pkg/api"
 	"github.com/moby/moby/api/types/container"
 
-	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // Observe reads the compose project's replicas as the daemon runs them, the deployment each
 // carries and the services another waits on to complete; it refuses no daemon. None means never
 // started or taken down.
-func (s *Reader) Observe(ctx context.Context) (provider.ObservedWorkload, error) {
+func (s *Reader) Observe(ctx context.Context) (composemodel.ObservedComposeProject, error) {
 	listed, err := s.listContainers(ctx)
 	if err != nil {
-		return provider.ObservedWorkload{}, fmt.Errorf("read containers of compose project %q: %w", s.composeProject, err)
+		return composemodel.ObservedComposeProject{}, fmt.Errorf("read containers of compose project %q: %w", s.composeProject, err)
 	}
 	var (
 		byService = groupByService(keepProjectContainers(listed))
 		jobs      = newJobServices(byService)
-		services  = make([]provider.ObservedService, 0, len(byService))
+		services  = make([]composemodel.ObservedService, 0, len(byService))
 	)
 	for _, name := range slices.Sorted(maps.Keys(byService)) {
 		containers, err := s.readPresentContainers(ctx, byService[name])
 		if err != nil {
-			return provider.ObservedWorkload{}, fmt.Errorf("read service %q of compose project %q: %w",
+			return composemodel.ObservedComposeProject{}, fmt.Errorf("read service %q of compose project %q: %w",
 				name, s.composeProject, err)
 		}
 		if len(containers) == 0 {
 			// Every container of the service went between the listing and its inspect.
 			continue
 		}
-		services = append(services, provider.ObservedService{
+		services = append(services, composemodel.ObservedService{
 			Name:     name,
 			Job:      jobs[name],
 			Replicas: newObservedReplicas(containers),
 		})
 	}
-	return provider.ObservedWorkload{Services: services}, nil
+	return composemodel.ObservedComposeProject{Services: services}, nil
 }
 
 // newJobServices are the services another waits on to complete successfully, as compose recorded
@@ -93,8 +91,8 @@ func parseAwaitsCompletion(label string) []string {
 }
 
 // newObservedReplicas is each container as the daemon reports it.
-func newObservedReplicas(containers []composemodel.Container) []provider.ObservedReplica {
-	replicas := make([]provider.ObservedReplica, 0, len(containers))
+func newObservedReplicas(containers []composemodel.Container) []composemodel.ObservedReplica {
+	replicas := make([]composemodel.ObservedReplica, 0, len(containers))
 	for _, c := range containers {
 		replicas = append(replicas, newObservedReplica(c))
 	}
@@ -102,12 +100,12 @@ func newObservedReplicas(containers []composemodel.Container) []provider.Observe
 }
 
 // newObservedReplica is one container as the daemon reports it, its deployment labels parsed.
-func newObservedReplica(c composemodel.Container) provider.ObservedReplica {
+func newObservedReplica(c composemodel.Container) composemodel.ObservedReplica {
 	var (
 		inspect       = c.Inspect
 		state         = cmp.Or(inspect.State, &container.State{})
 		failing       int
-		deployment    *model.SavepointDeployment
+		deployment    *composemodel.Deployment
 		deploymentErr error
 	)
 	if state.Health != nil {
@@ -118,7 +116,7 @@ func newObservedReplica(c composemodel.Container) provider.ObservedReplica {
 	} else if ok {
 		deployment = &parsed
 	}
-	return provider.ObservedReplica{
+	return composemodel.ObservedReplica{
 		Number:        c.Number,
 		Container:     c.Name,
 		ContainerID:   c.ID,
@@ -139,47 +137,47 @@ func newObservedReplica(c composemodel.Container) provider.ObservedReplica {
 }
 
 // newReplicaState is the daemon's state in one word; an exit is exited, whatever its code.
-func newReplicaState(state container.State) model.ReplicaState {
+func newReplicaState(state container.State) composemodel.ReplicaState {
 	switch {
 	case state.Restarting:
-		return model.ReplicaStateRestarting
+		return composemodel.ReplicaStateRestarting
 	case state.Paused:
-		return model.ReplicaStatePaused
+		return composemodel.ReplicaStatePaused
 	case state.Running:
-		return model.ReplicaStateRunning
+		return composemodel.ReplicaStateRunning
 	case state.Status == container.StateCreated:
-		return model.ReplicaStateCreated
+		return composemodel.ReplicaStateCreated
 	case state.Status == container.StateRemoving:
-		return model.ReplicaStateRemoving
+		return composemodel.ReplicaStateRemoving
 	case state.Dead || state.Status == container.StateDead:
-		return model.ReplicaStateDead
+		return composemodel.ReplicaStateDead
 	default:
-		return model.ReplicaStateExited
+		return composemodel.ReplicaStateExited
 	}
 }
 
 // newReplicaHealth is the healthcheck's status; empty for a container that runs none, or is not
 // running: the daemon keeps a stopped container's last status.
-func newReplicaHealth(state container.State) model.ReplicaHealth {
+func newReplicaHealth(state container.State) composemodel.ReplicaHealth {
 	if !state.Running || state.Health == nil || state.Health.Status == container.NoHealthcheck {
 		return ""
 	}
-	return model.ReplicaHealth(state.Health.Status)
+	return composemodel.ReplicaHealth(state.Health.Status)
 }
 
 // newPublishedPorts are the ports the container publishes on the host, sorted.
-func newPublishedPorts(settings *container.NetworkSettings) []model.PublishedPort {
+func newPublishedPorts(settings *container.NetworkSettings) []composemodel.PublishedPort {
 	if settings == nil {
 		return nil
 	}
-	var ports []model.PublishedPort
+	var ports []composemodel.PublishedPort
 	for port, bindings := range settings.Ports {
 		for _, binding := range bindings {
 			hostPort, err := strconv.Atoi(binding.HostPort)
 			if err != nil {
 				continue
 			}
-			ports = append(ports, model.PublishedPort{
+			ports = append(ports, composemodel.PublishedPort{
 				ContainerPort: int(port.Num()),
 				Protocol:      string(port.Proto()),
 				HostIP:        formatHostIP(binding.HostIP),
@@ -187,7 +185,7 @@ func newPublishedPorts(settings *container.NetworkSettings) []model.PublishedPor
 			})
 		}
 	}
-	slices.SortFunc(ports, func(a, b model.PublishedPort) int {
+	slices.SortFunc(ports, func(a, b composemodel.PublishedPort) int {
 		return cmp.Or(cmp.Compare(a.ContainerPort, b.ContainerPort), strings.Compare(a.Protocol, b.Protocol),
 			cmp.Compare(a.HostPort, b.HostPort), strings.Compare(a.HostIP, b.HostIP))
 	})

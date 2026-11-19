@@ -703,14 +703,15 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 		DataKind: dataKindImageLayers, ComposeProject: "demo",
 		Summary: model.GarbageSummary{Aborted: "1 manifests of committed savepoints cannot be read"},
 	}}, Total: model.GarbageTotal{Aborted: 1}}
-	// A partial status is still a report; its session ids marshal as the strings the schema says.
+	// A partial status is still a report; its session ids marshal as the strings the schema says, and
+	// the provider's detail as it encodes it, which the schema takes unchecked.
 	deployedAt := time.Date(2026, 11, 7, 14, 2, 0, 0, time.UTC)
 	status := model.ComposeProjectStatus{
-		ComposeProject: "demo", CheckedAt: deployedAt.Add(time.Hour), State: model.ComposeProjectStateRunning,
+		ComposeProject: "demo", CheckedAt: deployedAt.Add(time.Hour), State: "running",
 		Session: &model.SessionRef{ID: handlerSession, Name: "feat"},
 		Deployment: &model.DeploymentStatus{
-			Source: model.DeploymentSourceSavepoint, DeployedAt: deployedAt,
-			Session: model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+			DeployedAt: deployedAt,
+			Session:    model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
 			Savepoint: &model.DeployedSavepointStatus{DeployedSavepoint: model.DeployedSavepoint{
 				ID:        savepoint.ID,
 				Name:      savepoint.Name,
@@ -718,9 +719,8 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 			}},
 			Record: model.DeploymentRecordUnreadable,
 		},
-		Services: []model.ServiceStatus{{Name: "db", State: model.ReplicaStateRunning, ReplicasUp: 1,
-			Replicas: []model.ReplicaStatus{{Number: 1, State: model.ReplicaStateRunning}}}},
 		Unreadable: []model.StatusUnreadable{{Source: model.StatusUnreadableStore, Error: "unreachable"}},
+		Detail:     rawDetail(`{"services":[{"name":"db","state":"running","replicas_up":1}]}`),
 	}
 	restored := model.RestoreSummary{Units: []model.UnitTotal{{Kind: model.UnitKindVolumes}, {Kind: model.UnitKindLayers, Count: 1}}}
 	restoredDetail := json.RawMessage(`{"writable_layers":[{"replica":1,"service":"db","tag":"arcave/demo-db-1-postgres-16:sp-v1"}]}`)
@@ -839,7 +839,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 		{tool: "status", args: map[string]any{"compose_project": "demo", "session": "feat"},
 			setup: func(svc *mockService) {
 				svc.On("Status", mock.Anything, model.StatusRequest{Session: "feat"}).Return(status, model.ErrStatusPartial).Once()
-			}, want: status},
+			}, want: toJSONObject(t, status)},
 	}
 
 	// Arrange: one server for every case, over the SDK's own transport, so its schema checks run.
@@ -980,7 +980,7 @@ func TestMCPHandler_garbageCollectMCP(t *testing.T) {
 
 func TestMCPHandler_statusMCP(t *testing.T) {
 	pinned := model.NewSessionID()
-	status := model.ComposeProjectStatus{ComposeProject: "demo", State: model.ComposeProjectStateRunning}
+	status := model.ComposeProjectStatus{ComposeProject: "demo", State: "running"}
 	daemonErr := errors.New("daemon unreachable")
 	tests := []struct {
 		name        string
@@ -1138,4 +1138,22 @@ func TestMCPHandler_Server_RollbackInterrupted(t *testing.T) {
 			svc.AssertExpectations(t)
 		})
 	}
+}
+
+// rawDetail is a provider's body of a status, encoded as it is.
+type rawDetail string
+
+func (d rawDetail) MarshalJSON() ([]byte, error) { return []byte(d), nil }
+
+func (d rawDetail) Table() model.Table { return model.Table{} }
+
+// toJSONObject is v as a client decodes it with no type of its own: a status's detail is the
+// provider's, which no arcave type decodes.
+func toJSONObject(t *testing.T, v any) map[string]any {
+	t.Helper()
+	encoded, err := json.Marshal(v)
+	require.NoError(t, err)
+	var object map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &object))
+	return object
 }

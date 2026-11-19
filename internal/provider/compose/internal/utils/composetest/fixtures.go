@@ -252,7 +252,7 @@ var DefaultSessionRef = model.SessionRef{
 
 // DeployedAs matches what deployed does, every service's labels read back into a deployment want
 // accepts.
-func DeployedAs(spec *types.Project, want func(model.SavepointDeployment) bool) any {
+func DeployedAs(spec *types.Project, want func(composemodel.Deployment) bool) any {
 	return mock.MatchedBy(func(project *types.Project) bool {
 		for _, service := range project.Services {
 			deployment, ok, err := composemodel.ParseDeploymentLabels(service.Labels)
@@ -315,7 +315,7 @@ func DemoDeployment(savepoint composemodel.Savepoint) model.SavepointDeployment 
 // DeployedFrom matches spec labelled with deployment as core gave it: the arcave project, the
 // session and the savepoint stamped as they were.
 func DeployedFrom(spec *types.Project, deployment model.SavepointDeployment) any {
-	return DeployedAs(spec, func(stamped model.SavepointDeployment) bool {
+	return DeployedAs(spec, func(stamped composemodel.Deployment) bool {
 		return stamped.ArcaveProject == deployment.ArcaveProject && stamped.Session == deployment.Session &&
 			stamped.Savepoint == deployment.Savepoint
 	})

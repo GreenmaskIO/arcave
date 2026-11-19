@@ -264,11 +264,14 @@ const (
 		"A deleted image's layers go on the next run; a removed savepoint's restic snapshots " +
 		"are forgotten and pruned; a restored layer tag goes once no container uses it. " +
 		"A busy project is refused: retry when its command finishes."
-	descStatus = "What the daemon runs for a compose project: which savepoint a rollback deployed and when, " +
+	descStatus = "What runs for a compose project: which savepoint a rollback deployed and when, " +
 		"whether every recorded replica is up and healthy, the published ports, and a rollback in progress or " +
 		"interrupted. Call it before tests, after a rollback, or when something looks wrong; it reads only. " +
-		"state sums it up; notices say what is wrong, severe first, each with a stable code to act on. A store " +
-		"that cannot be read leaves unreadable non-empty and the daemon's part whole; a session naming none fails it."
+		"state sums it up: rollback-pending, else the provider's word (compose: running, starting, degraded, " +
+		"stopped, absent). detail is the provider's body; compose's holds source (savepoint, mixed or compose), " +
+		"replaced and services, each with its replicas, states, health and ports. notices say what is wrong, " +
+		"severe first, each with a stable code to act on. A store that cannot be read leaves unreadable " +
+		"non-empty and the daemon's part whole; a session naming none fails it."
 	descSessionShow = "Show one session — by name or id, latest for the newest, else the pinned or current one, " +
 		"which current_source says where it was named — and its committed " +
 		"savepoints, grouped by compose project: compose projects by name, savepoints newest first, each the " +

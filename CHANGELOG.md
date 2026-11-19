@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Breaking changes
+
+- **`arcave status --format json` moves the compose project's services under `detail`.** `services` is `detail.services`, `deployment.source` and `deployment.replaced` are `detail.source` and `detail.replaced`, and `deployment.savepoint.restored` is gone; `deployment` is `null` when no container carries a rollback's labels. `state` keeps its words. The same holds for the MCP `status` tool. See [output](https://www.greenmask.io/docs/arcave/reference/output/#status).
+- **Text `status` says `absent`, not `not running`**, and no longer prints `N containers replaced since` or `restored N volumes, M layers`: each recreated replica has its `replica-recreated` warning, and `savepoint list` shows what a savepoint holds.
+- **A savepoint's `summary` has no `gaps` and no `replicas`.** What a rollback does not put back is in `detail.not_covered` and in a status of its deployment; the layers it holds in `detail.writable_layers`.
+- **`down`'s `deployment` has no `service_replicas`.**
+
 ## v0.1.0-alpha.6 — 2026-11-18
 
 Take a savepoint without restarting a service, prepare the application for it with hooks, and end an environment or bring it back from a savepoint with `arcave down` and `arcave up`.

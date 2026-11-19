@@ -16,7 +16,6 @@ package provider
 
 import (
 	"encoding/json"
-	"time"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -67,44 +66,4 @@ type PreparedSummary struct {
 	Overwritten []string
 	// Warnings say what Overwritten names, to warn of before the build starts.
 	Warnings []model.Notice
-}
-
-// ObservedWorkload is a workload's replicas as the daemon runs them: what a provider's Observe
-// reads for a status, nothing they mount or run on.
-type ObservedWorkload struct {
-	// Services are the services the daemon holds a replica of, sorted by name.
-	Services []ObservedService
-}
-
-// ObservedService is one service's replicas.
-type ObservedService struct {
-	Name string
-	// Job is a service another waits on to complete successfully: its exit 0 is its success.
-	Job bool
-	// Replicas are sorted by Number.
-	Replicas []ObservedReplica
-}
-
-// ObservedReplica is one container as the daemon reports it. State is never completed or missing:
-// whether an exit is a job's success, and what is missing, are a status's to judge.
-type ObservedReplica struct {
-	Number      int
-	Container   string
-	ContainerID string
-	// Deployment is the rollback build the container carries; nil for none or unreadable.
-	Deployment *model.SavepointDeployment
-	// DeploymentErr is why the container's deployment does not read; nil when it does or it has none.
-	DeploymentErr error
-	State         model.ReplicaState
-	Health        model.ReplicaHealth
-	ExitCode      int
-	OOMKilled     bool
-	RestartCount  int
-	FailingChecks int
-	CreatedAt     *time.Time
-	StartedAt     *time.Time
-	FinishedAt    *time.Time
-	// Replaces is the container this one was recreated over; empty for one created anew.
-	Replaces string
-	Ports    []model.PublishedPort
 }

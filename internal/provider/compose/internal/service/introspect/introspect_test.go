@@ -41,7 +41,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider"
 )
 
 const (
@@ -595,7 +594,7 @@ func TestReader_Observe_DaemonFailures(t *testing.T) {
 
 			// Assert
 			require.ErrorIs(t, err, daemonErr)
-			assert.Equal(t, provider.ObservedWorkload{}, got)
+			assert.Equal(t, composemodel.ObservedComposeProject{}, got)
 			daemon.AssertExpectations(t)
 		})
 	}

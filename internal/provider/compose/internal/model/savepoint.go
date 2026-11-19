@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -123,14 +122,11 @@ func newSharedSavepoint(m Savepoint, summary model.SavepointSummary) (model.Save
 	}, nil
 }
 
-// NewSavepointSummary sums detail up: its units, what its capture left out, what a rollback to it
-// does not put back, and the writable layers it holds by replica.
+// NewSavepointSummary sums detail up: its units, and what its capture left out.
 func NewSavepointSummary(detail SavepointDetail) model.SavepointSummary {
 	return model.SavepointSummary{
-		Units:    newUnitTotals(detail),
-		Notices:  newSavepointNotices(detail),
-		Gaps:     newNotRestoredNotices(detail.NotCovered),
-		Replicas: newReplicaHoldings(detail.WritableLayers),
+		Units:   newUnitTotals(detail),
+		Notices: newSavepointNotices(detail),
 	}
 }
 
@@ -191,65 +187,10 @@ func newSavepointNotices(detail SavepointDetail) []model.Notice {
 	return model.SortSevereFirst(notices)
 }
 
-// newNotRestoredNotices say what the savepoint left out, so a rollback to it did not put back: a
-// mount a label or the config excluded, and a writable layer.
-func newNotRestoredNotices(notCovered *NotCovered) []model.Notice {
-	if notCovered == nil {
-		return nil
-	}
-	var notices []model.Notice
-	for _, mount := range notCovered.Mounts {
-		if mount.Reason != SkipReasonExcluded {
-			continue
-		}
-		var message string
-		switch {
-		case mount.Volume != "":
-			message = "volume " + mount.Volume + " was not in the savepoint: it holds what it held before the rollback"
-		case mount.RawType == string(VolumeTypeBind):
-			message = fmt.Sprintf("%s %s was not in the savepoint: the host folder holds what it held before the rollback",
-				mount.Service, mount.Target)
-		default:
-			message = fmt.Sprintf("%s %s was not in the savepoint: it came back empty",
-				formatReplicaName(mount.Service, mount.Replica), mount.Target)
-		}
-		notices = append(notices, model.Notice{
-			Code:    model.NoticeCodeVolumeNotRestored,
-			Message: message,
-		})
-	}
-	for _, layer := range notCovered.WritableLayers {
-		notices = append(notices, model.Notice{
-			Code: model.NoticeCodeLayerNotRestored,
-			Message: fmt.Sprintf("%s's writable layer was not in the savepoint: it started fresh from its image",
-				formatReplicaName(layer.Service, layer.Replica)),
-		})
-	}
-	return notices
-}
-
-// newReplicaHoldings names, by replica, the writable layers the savepoint holds.
-func newReplicaHoldings(layers []WritableLayer) []model.ReplicaHolding {
-	var holdings []model.ReplicaHolding
-	for _, layer := range layers {
-		holdings = append(holdings, model.ReplicaHolding{
-			Service: layer.Service,
-			Replica: layer.Replica,
-			Held:    []string{model.ReplicaHeldLayer},
-		})
-	}
-	return holdings
-}
-
 // newImageName is an image's first reference, else its short id.
 func newImageName(image Image) string {
 	if len(image.Refs) > 0 {
 		return image.Refs[0]
 	}
 	return formatShortID(strings.TrimPrefix(image.ID.String(), "sha256:"))
-}
-
-// formatReplicaName names a replica as compose numbers it: service-n.
-func formatReplicaName(service string, number int) string {
-	return service + "-" + strconv.Itoa(number)
 }

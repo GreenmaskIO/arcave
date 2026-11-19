@@ -58,10 +58,10 @@ func Owner(
 				unlabelled = append(unlabelled, fmt.Sprintf("%s-%d", service.Name, replica.Number))
 			case deployment.ArcaveProject != arcaveProject || deployment.Session.ID != session:
 				if elsewhere == nil {
-					elsewhere = &deployment
+					elsewhere = &deployment.SavepointDeployment
 				}
 			case own == nil || deployment.DeployedAt.After(own.DeployedAt):
-				own = &deployment
+				own = &deployment.SavepointDeployment
 			}
 		}
 	}

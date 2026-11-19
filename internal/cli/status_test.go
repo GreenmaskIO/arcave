@@ -27,7 +27,7 @@ import (
 
 func TestStatusHandler_Status(t *testing.T) {
 	req := model.StatusRequest{Session: "feat"}
-	status := model.ComposeProjectStatus{ComposeProject: "demo", State: model.ComposeProjectStateRunning}
+	status := model.ComposeProjectStatus{ComposeProject: "demo", State: "running"}
 	daemonErr := errors.New("daemon unreachable")
 	tests := []struct {
 		name        string

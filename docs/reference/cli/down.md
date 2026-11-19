@@ -96,8 +96,7 @@ Warnings (1)
     "arcave_project": "myapp",
     "session": { "id": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "name": "feat/add-new-table" },
     "savepoint": { "id": "019e843e-1650-7000-8000-000000000000", "name": "before-migration",
-                   "created_at": "2026-06-01T19:41:12.123456789Z", "safety_snapshot": false },
-    "service_replicas": { "app": [1], "db": [1] }
+                   "created_at": "2026-06-01T19:41:12.123456789Z", "safety_snapshot": false }
   },
   "forced": false,
   "discarded": {

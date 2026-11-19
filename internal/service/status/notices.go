@@ -16,31 +16,25 @@ package status
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// statusFacts is everything a status's notices are read off.
+// statusFacts is everything arcave's own notices are read off.
 type statusFacts struct {
-	checkedAt time.Time
 	// arcaveProject is the one the config names.
 	arcaveProject model.ArcaveProjectName
 	// ref is the request's --session, empty when none was given.
-	ref         string
-	state       model.ComposeProjectState
-	marker      *model.InflightMarker
-	deployments containerDeployments
-	view        storeView
-	services    []model.ServiceStatus
-	unreadable  []model.StatusUnreadable
+	ref        string
+	marker     *model.InflightMarker
+	deployment *model.SavepointDeployment
+	view       storeView
+	unreadable []model.StatusUnreadable
 }
 
-// newStatusNotices is one notice per thing that is wrong or worth knowing, the severe first. A
-// notice states what is so; what to do about it is the documentation's, by its code.
-func newStatusNotices(facts statusFacts) []model.Notice {
+// newStatusNotices is arcave's notices and the provider's, one per thing that is wrong or worth
+// knowing, the severe first.
+func newStatusNotices(facts statusFacts, reported []model.Notice) []model.Notice {
 	var notices []model.Notice
 	if facts.marker != nil {
 		notices = append(notices, newInflightNotice(*facts.marker))
@@ -48,23 +42,10 @@ func newStatusNotices(facts statusFacts) []model.Notice {
 	for _, unreadable := range facts.unreadable {
 		notices = append(notices, newUnreadableNotice(unreadable, facts.ref))
 	}
-	for _, labels := range facts.deployments.unreadable {
-		notices = append(notices, newUnreadableLabelsNotice(labels))
+	if facts.deployment != nil {
+		notices = append(notices, newDeploymentNotices(facts, *facts.deployment)...)
 	}
-	if deployment := facts.deployments.latest; deployment != nil {
-		notices = append(notices, newDeploymentNotices(facts, *deployment)...)
-	}
-	for _, service := range facts.services {
-		for _, replica := range service.Replicas {
-			notices = append(notices, newReplicaNotices(facts, service.Name, replica)...)
-		}
-	}
-	if facts.state == model.ComposeProjectStateStopped {
-		notices = append(notices, model.Notice{
-			Code:    model.NoticeCodeComposeProjectStopped,
-			Message: "no container runs",
-		})
-	}
+	notices = append(notices, reported...)
 	// Non-nil, so none marshals as [], not null: slices.Concat of empty slices is nil.
 	return append([]model.Notice{}, model.SortSevereFirst(notices)...)
 }
@@ -125,19 +106,8 @@ func newSessionUnresolvedMessage(ref, cause string) string {
 	return fmt.Sprintf("session %q could not be resolved: %s", ref, cause)
 }
 
-// newUnreadableLabelsNotice names a container whose deployment labels do not parse: edited by hand,
-// or written by another arcave.
-func newUnreadableLabelsNotice(labels unreadableLabels) model.Notice {
-	return model.Notice{
-		Code: model.NoticeCodeDeploymentLabelsUnreadable,
-		Message: fmt.Sprintf("%s carries unreadable deployment labels: %s; read as deployed by none",
-			formatStatusReplica(labels.service, labels.replica), labels.err),
-	}
-}
-
 // newDeploymentNotices are what the deployment itself says: another arcave project or session than
-// the one commands work in, a safety snapshot deployed, a savepoint the store no longer holds, and
-// what the savepoint's record says it did not put back.
+// the one commands work in, a safety snapshot deployed, a savepoint the store no longer holds.
 func newDeploymentNotices(facts statusFacts, deployment model.SavepointDeployment) []model.Notice {
 	var (
 		notices []model.Notice
@@ -166,168 +136,12 @@ func newDeploymentNotices(facts statusFacts, deployment model.SavepointDeploymen
 				deployment.Savepoint),
 		})
 	}
-	switch {
-	case facts.view.record == model.DeploymentRecordMissing:
+	if facts.view.record == model.DeploymentRecordMissing {
 		notices = append(notices, model.Notice{
 			Code: model.NoticeCodeDeployedSavepointGone,
 			Message: fmt.Sprintf("savepoint %s is no longer in session %s",
 				deployment.Savepoint, deployment.Session),
 		})
-	case facts.view.savepoint != nil:
-		notices = append(notices, facts.view.savepoint.Summary.Gaps...)
 	}
 	return notices
-}
-
-// newReplicaNotices say what is wrong with one replica, or what happened to it since the rollback.
-func newReplicaNotices(facts statusFacts, service string, replica model.ReplicaStatus) []model.Notice {
-	var (
-		name    = formatStatusReplica(service, replica.Number)
-		notices []model.Notice
-	)
-	switch replica.State {
-	case model.ReplicaStateMissing:
-		return []model.Notice{{
-			Code: model.NoticeCodeReplicaMissing,
-			Message: fmt.Sprintf("%s is missing: savepoint %s recorded it", name,
-				facts.deployments.latest.Savepoint),
-			Severe: true,
-		}}
-	case model.ReplicaStateExited:
-		// With every container stopped, compose-project-stopped says it once; a clean exit adds
-		// nothing to that, a failing one is still a failure.
-		if replica.ExitCode == 0 && facts.state == model.ComposeProjectStateStopped {
-			break
-		}
-		notices = append(notices, model.Notice{
-			Code: model.NoticeCodeReplicaExited,
-			Message: fmt.Sprintf("%s exited with code %d%s%s", name, replica.ExitCode, formatExitCause(replica),
-				formatStatusTime(replica.FinishedAt, facts.checkedAt)),
-			Severe: replica.ExitCode != 0,
-		})
-	case model.ReplicaStateDead:
-		notices = append(notices, model.Notice{
-			Code:    model.NoticeCodeReplicaDead,
-			Message: name + " is dead",
-			Severe:  true,
-		})
-	case model.ReplicaStateRemoving:
-		notices = append(notices, model.Notice{
-			Code:    model.NoticeCodeReplicaRemoving,
-			Message: name + " is being removed",
-			Severe:  true,
-		})
-	case model.ReplicaStateRestarting:
-		notices = append(notices, model.Notice{
-			Code:    model.NoticeCodeReplicaRestarting,
-			Message: fmt.Sprintf("%s is restarting (%d restarts)", name, replica.RestartCount),
-			Severe:  true,
-		})
-	case model.ReplicaStateCreated:
-		notices = append(notices, model.Notice{
-			Code:    model.NoticeCodeReplicaCreated,
-			Message: name + " was created but never started",
-			Severe:  true,
-		})
-	case model.ReplicaStatePaused:
-		notices = append(notices, model.Notice{
-			Code:    model.NoticeCodeReplicaPaused,
-			Message: name + " is paused",
-		})
-	case model.ReplicaStateRunning:
-		if replica.RestartCount > 0 {
-			notices = append(notices, model.Notice{
-				Code:    model.NoticeCodeReplicaRestarted,
-				Message: fmt.Sprintf("%s restarted %d times since it was created", name, replica.RestartCount),
-			})
-		}
-	}
-	if replica.Health == model.ReplicaHealthUnhealthy {
-		notices = append(notices, model.Notice{
-			Code:    model.NoticeCodeReplicaUnhealthy,
-			Message: fmt.Sprintf("%s is unhealthy: %d failing checks", name, replica.FailingChecks),
-			Severe:  true,
-		})
-	}
-	if notice, ok := newDriftNotice(facts, service, replica); ok {
-		notices = append(notices, notice)
-	}
-	return notices
-}
-
-// formatExitCause says what an exit code means where the daemon tells: out of memory, or a signal.
-func formatExitCause(replica model.ReplicaStatus) string {
-	const (
-		exitKilled     = 128 + 9
-		exitTerminated = 128 + 15
-	)
-	switch {
-	case replica.OOMKilled:
-		return " (out of memory)"
-	case replica.ExitCode == exitKilled:
-		return " (killed)"
-	case replica.ExitCode == exitTerminated:
-		return " (terminated)"
-	default:
-		return ""
-	}
-}
-
-// newDriftNotice says a replica is not what the rollback built: recreated outside arcave since,
-// or added after it; none for one whose labels do not parse, which another notice names.
-func newDriftNotice(facts statusFacts, service string, replica model.ReplicaStatus) (model.Notice, bool) {
-	deployment := facts.deployments.latest
-	if deployment == nil || replica.InDeployment || facts.deployments.isUnreadable(service, replica.Number) {
-		return model.Notice{}, false
-	}
-	name := formatStatusReplica(service, replica.Number)
-	if !replica.InSavepoint {
-		return model.Notice{
-			Code: model.NoticeCodeReplicaAdded,
-			Message: fmt.Sprintf("%s is not in savepoint %s: added after the rollback", name,
-				deployment.Savepoint),
-		}, true
-	}
-	if !isRecreated(replica) {
-		return model.Notice{}, false
-	}
-	var message strings.Builder
-	fmt.Fprintf(&message, "%s was recreated outside arcave%s", name, formatStatusTime(replica.CreatedAt, facts.checkedAt))
-	if replica.Replaces != "" {
-		fmt.Fprintf(&message, " (compose replaced %s)", replica.Replaces)
-	}
-	if restoredLayer(facts.view.savepoint, service, replica.Number) {
-		message.WriteString(": the writable layer the rollback restored is gone")
-	}
-	message.WriteString("; volumes are untouched")
-	return model.Notice{
-		Code:    model.NoticeCodeReplicaRecreated,
-		Message: message.String(),
-	}, true
-}
-
-// isRecreated reports whether the replica is one the deployed savepoint recorded that something
-// other than the deployment built since.
-func isRecreated(replica model.ReplicaStatus) bool {
-	return replica.InSavepoint && !replica.InDeployment && replica.State != model.ReplicaStateMissing
-}
-
-// restoredLayer reports whether the deployed savepoint's record holds a writable layer of the
-// replica numbered number; false with no record.
-func restoredLayer(savepoint *model.Savepoint, service string, number int) bool {
-	return savepoint != nil && savepoint.Summary.Holds(service, number, model.ReplicaHeldLayer)
-}
-
-// formatStatusReplica names a replica as compose numbers it: service-n.
-func formatStatusReplica(service string, number int) string {
-	return service + "-" + strconv.Itoa(number)
-}
-
-// formatStatusTime is " <age> ago" at checkedAt; empty for no time. An age reads the same in every
-// zone the result is shown in.
-func formatStatusTime(t *time.Time, checkedAt time.Time) string {
-	if t == nil {
-		return ""
-	}
-	return " " + model.FormatAge(checkedAt.Sub(*t)) + " ago"
 }

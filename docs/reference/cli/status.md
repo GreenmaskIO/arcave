@@ -18,7 +18,7 @@ arcave status -p <compose-project> [--session <session>] [flags]
 
 A rollback — or an [`up`](up.md) — marks every container it builds, so `status` reads what is deployed — which savepoint, from which session, when — off the Docker daemon alone: it answers even after the savepoint or its session is removed. A container recreated outside arcave — `docker compose up` of your own file, say — is no longer part of the rollback, and `status` warns of it; once every container was recreated, the title says `not deployed by arcave`.
 
-The store only adds to that: whether the deployed savepoint still exists, and, while it does, its description, what it restored and what it left out. A store that cannot be read — unreachable, or opened with the wrong `encryption.key` — leaves the daemon's part whole: the result is printed and the command exits `1`.
+The store only adds to that: whether the deployed savepoint still exists, and, while it does, its description and what it left out. A store that cannot be read — unreachable, or opened with the wrong `encryption.key` — leaves the daemon's part whole: the result is printed and the command exits `1`.
 
 `--session` names the session your commands work in, as everywhere. A `--session` that names no session fails the command, as it fails every other: the typo is yours to fix, not something `status` could not read. A current session (`arcave session set`) that was removed since only leaves the store's part out, and the command exits `1`. When the deployed savepoint is another session's, a warning says so. When another checkout of the same compose project, under another `project.name`, deployed it, a warning names that arcave project, and its savepoint is not looked up.
 
@@ -26,7 +26,7 @@ The store only adds to that: whether the deployed savepoint still exists, and, w
 
 ## The state
 
-One word sums the compose project up — the first that applies:
+One word sums the compose project up. `rollback-pending` is arcave's; every other word is the provider's, and the compose provider's are below — the first that applies:
 
 | `state` | When |
 |---|---|
@@ -49,7 +49,7 @@ After a rollback:
 myapp · running · savepoint before-migration (019e843e-1650-7000-8000-000000000000)
   session    baseline
   deployed   2026-11-07 14:02 (3h 12m ago)
-  savepoint  taken 2026-11-06 19:41 (18h 33m ago) · restored 3 volumes, 2 layers
+  savepoint  taken 2026-11-06 19:41 (18h 33m ago)
              the schema before 0042
 
 SERVICE  REPLICAS  STATE      UP      PORTS
@@ -58,14 +58,14 @@ web      2/2       running    3h 11m  0.0.0.0:8080→80/tcp
 migrate  1/1       completed  —
 ```
 
-`restored` and the description come from the savepoint's record: with the savepoint removed, or the store unreadable, the line says when it was taken alone.
+The description comes from the savepoint's record: with the savepoint removed, or the store unreadable, it is not shown. The table is the provider's; `savepoint list` shows what the savepoint holds.
 
 Something failed, something rebuilt outside arcave:
 
 ```text
 myapp · degraded · savepoint before-migration (019e843e-1650-7000-8000-000000000000)
   session    baseline
-  deployed   2026-11-07 14:02 (3h 12m ago) · 1 container replaced since
+  deployed   2026-11-07 14:02 (3h 12m ago)
   ...
 
 Warnings (2)
@@ -87,7 +87,7 @@ Warnings (1)
 Nothing running:
 
 ```text
-myapp · not running
+myapp · absent
   session    baseline
 ```
 
@@ -95,7 +95,7 @@ myapp · not running
 
 ## What the warnings say
 
-A warning states what is so, and ends with its code in brackets; the JSON carries the code as `code`. The code is stable, the wording is not: a script or an agent acts on the code. What to do about each is below, and on [the troubleshooting page](../troubleshooting.md#what-status-warns-of).
+A warning states what is so, and ends with its code in brackets; the JSON carries the code as `code`. The code is stable, the wording is not: a script or an agent acts on the code. `rollback-pending` through `safety-snapshot-deployed` are arcave's own; the rest are the compose provider's. What to do about each is below, and on [the troubleshooting page](../troubleshooting.md#what-status-warns-of).
 
 | Code | What happened | What to do |
 |---|---|---|
@@ -103,11 +103,11 @@ A warning states what is so, and ends with its code in brackets; the JSON carrie
 | `store-unreadable` | The store could not be read; the result shows the daemon alone and the command exits `1`. | Check `storage` and `encryption.key`. |
 | `session-unresolved` | The session could not be resolved: the current session (`.arcave/current_session`) names a session removed since, or the sessions could not be listed. The message names the `--session` given, else the current session. | For a removed session, `arcave session unset`, or `arcave session set <session>`; for a listing that failed, as `store-unreadable`. |
 | `inflight-marker-unreadable` | `.arcave/inflight.json` does not parse. | See [the troubleshooting page](../troubleshooting.md#an-interrupted-rollback). |
-| `deployment-labels-unreadable` | What arcave marked a container with does not parse: edited by hand, or written by another arcave. It counts as deployed by none. | — |
 | `deployed-savepoint-gone` | The deployed savepoint, or its whole session, was removed since — by `savepoint remove`, `session remove`, or a gc retiring a safety snapshot: no rollback can return to it. | `arcave savepoint create` keeps what runs now. |
 | `other-arcave-project` | The deployed savepoint is another arcave project's: another checkout of this compose project, with another `project.name`. Its savepoint is not looked up. | Run `status` from that checkout. |
 | `other-session` | The deployed savepoint is another session's than the one your commands work in. | `arcave session set <that session>` to work in it. |
 | `safety-snapshot-deployed` | A rollback's undo runs: you rolled back to it, or a failed rollback put it back. | `arcave savepoint create` keeps what runs now. |
+| `deployment-labels-unreadable` | What arcave marked a container with does not parse: edited by hand, or written by another arcave. It counts as deployed by none. | — |
 | `volume-not-restored`, `layer-not-restored` | A label or the config left that out of the deployed savepoint, as its record says: a volume kept what it held, an anonymous volume came back empty, a writable layer started fresh. Not reported once the record is gone. | — |
 | `replica-missing` | A replica the deployed savepoint recorded is gone. | A rollback to the deployed savepoint rebuilds it, and puts the savepoint's volumes back: `savepoint create` first keeps today's data. |
 | `replica-exited` | The container exited. With a code other than `0` the warning is severe, and says out of memory, killed or terminated where the daemon tells. An exit `0` is named only while another container still runs: with every container stopped, `compose-project-stopped` covers it. A process with no SIGTERM handler exits `143` (terminated) or `137` (killed) at a `docker compose stop`, and is named even then. | `docker logs <container>`. A replica that exited `0` was stopped by hand or finished its job. |

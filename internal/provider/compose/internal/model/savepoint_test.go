@@ -42,7 +42,7 @@ func TestNewSavepointSummary(t *testing.T) {
 	}{
 		{name: "nothing held, nothing left out", want: model.SavepointSummary{Units: volumesOnly}},
 		{
-			name: "layers and images counted when held, by replica",
+			name: "layers and images counted when held",
 			detail: SavepointDetail{
 				Stats: []SnapshotStat{{SizeBytes: 10, StoredBytes: 4}, {SizeBytes: 5, StoredBytes: 5}},
 				WritableLayers: []WritableLayer{
@@ -56,10 +56,6 @@ func TestNewSavepointSummary(t *testing.T) {
 					{Kind: model.UnitKindVolumes, Count: 2, SizeBytes: 15, StoredBytes: 9},
 					{Kind: model.UnitKindLayers, Count: 2, SizeBytes: 7, StoredBytes: 2},
 					{Kind: model.UnitKindImages, Count: 1, SizeBytes: 100},
-				},
-				Replicas: []model.ReplicaHolding{
-					{Service: "db", Replica: 1, Held: []string{model.ReplicaHeldLayer}},
-					{Service: "db", Replica: 3, Held: []string{model.ReplicaHeldLayer}},
 				},
 			},
 		},
@@ -97,7 +93,7 @@ func TestNewSavepointSummary(t *testing.T) {
 			},
 		},
 		{
-			name: "what was excluded is a gap a rollback leaves; a mount nothing excluded, a tmpfs, is none",
+			name: "what was excluded is a notice",
 			detail: SavepointDetail{NotCovered: &NotCovered{
 				Mounts: []SkippedVolume{
 					{Service: "db", Target: "/data", Volume: "demo_cache", Reason: SkipReasonExcluded},
@@ -116,23 +112,6 @@ func TestNewSavepointSummary(t *testing.T) {
 					},
 					WritableLayers: []SkippedWritableLayer{{Service: "web", Replica: 1}},
 				}).Notices(),
-				Gaps: []model.Notice{
-					{Code: model.NoticeCodeVolumeNotRestored,
-						Message: "volume demo_cache was not in the savepoint: it holds what it held before the rollback"},
-					{Code: model.NoticeCodeVolumeNotRestored,
-						Message: "web /srv was not in the savepoint: the host folder holds what it held before the rollback"},
-					{Code: model.NoticeCodeVolumeNotRestored, Message: "web-2 /tmp/x was not in the savepoint: it came back empty"},
-					{Code: model.NoticeCodeLayerNotRestored,
-						Message: "web-1's writable layer was not in the savepoint: it started fresh from its image"},
-				},
-			},
-		},
-		{
-			name:   "a tmpfs left out is no gap",
-			detail: SavepointDetail{NotCovered: &NotCovered{Mounts: []SkippedVolume{{Service: "web", Target: "/run", Reason: SkipReasonTmpfs}}}},
-			want: model.SavepointSummary{
-				Units:   volumesOnly,
-				Notices: (&NotCovered{Mounts: []SkippedVolume{{Service: "web", Target: "/run", Reason: SkipReasonTmpfs}}}).Notices(),
 			},
 		},
 	}
