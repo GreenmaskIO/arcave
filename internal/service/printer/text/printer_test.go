@@ -208,7 +208,6 @@ func TestPrinter_Print(t *testing.T) {
 					Unjudged: 2,
 					Aborted:  1,
 				},
-				Warnings: []string{"docker-layer-tags: the daemon cannot be reached"},
 			},
 		},
 		{

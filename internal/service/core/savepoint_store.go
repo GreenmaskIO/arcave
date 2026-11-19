@@ -45,7 +45,6 @@ type SavepointStoreDeps struct {
 	WriteAdmission writeAdmission
 	// SessionLocker holds Session's lock in the store for the whole of a workflow.
 	SessionLocker model.SessionLocker
-	Inflight      inflightMarkers
 	// Session is the session Savepoints belong to; zero means model.DefaultSession.
 	Session model.SessionID
 	// ComposeProject is the compose project Savepoints belong to.
@@ -61,7 +60,6 @@ type SavepointStoreService struct {
 	projectLocker  projectLocker
 	writeAdmission writeAdmission
 	sessionLocker  model.SessionLocker
-	inflightMarker inflightMarkers
 	session        model.SessionID
 	composeProject model.DockerComposeProjectName
 	sessions       sessionLookup
@@ -76,7 +74,6 @@ func NewSavepointStoreService(deps SavepointStoreDeps) *SavepointStoreService {
 		projectLocker:  deps.ProjectLocker,
 		writeAdmission: deps.WriteAdmission,
 		sessionLocker:  deps.SessionLocker,
-		inflightMarker: deps.Inflight,
 		session:        deps.Session,
 		composeProject: deps.ComposeProject,
 		sessions:       deps.Sessions,
@@ -120,11 +117,6 @@ func (s *SavepointStoreService) RemoveSavepoints(ctx context.Context, req model.
 
 	return locked(ctx, s, model.SessionLockOperationSavepointRemove,
 		func(ctx context.Context, grantedLock model.GrantedSessionLock, _ model.SessionRef) (model.RemoveResult, error) {
-			// The gate guards the safety snapshot too: while an interrupted rollback is unresolved,
-			// that snapshot is the way back, and no selector may delete it.
-			if _, err := s.requireNoInflight(ctx, ""); err != nil {
-				return model.RemoveResult{}, err
-			}
 			return s.removeSavepoints(ctx, grantedLock, req)
 		})
 }
@@ -405,53 +397,4 @@ func (s *SavepointStoreService) removeSavepoint(
 		return err
 	}
 	return nil
-}
-
-// rollbackRecovery is what a rollback takes over from the interrupted one it recovers from; zero
-// when it recovers from none.
-type rollbackRecovery struct {
-	recovering bool
-	// safety is the safety snapshot the standing marker names: the recovery's marker keeps naming
-	// it, as the last copy of the state before them both.
-	safety model.SavepointID
-}
-
-// requireNoInflight refuses to run while .arcave/inflight.json stands, except for the rollback
-// that recovers from it. restoring is the savepoint the caller rolls back to, "" for any other
-// workflow. It reports what the caller, if it is that recovery, takes over.
-func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring model.SavepointID) (rollbackRecovery, error) {
-	marker, found, err := s.inflightMarker.Get(ctx)
-	if err != nil {
-		return rollbackRecovery{}, fmt.Errorf("reading the inflight marker: %w", err)
-	}
-	if !found {
-		return rollbackRecovery{}, nil
-	}
-	if s.isRecoveryRollback(marker, restoring) {
-		zerolog.Ctx(ctx).Info().Str("interrupted_target", marker.Target.String()).
-			Msg("recovering from an interrupted rollback; the marker clears on success")
-		return rollbackRecovery{
-			recovering: true,
-			safety:     marker.Safety,
-		}, nil
-	}
-	err = &model.InterruptedRollbackError{Marker: marker}
-	zerolog.Ctx(ctx).Error().Err(err).
-		Str("interrupted_target", marker.Target.String()).
-		Str("session", marker.Session.String()).
-		Str("compose_project", marker.ComposeProject.String()).
-		Str("safety_snapshot_id", marker.Safety.String()).
-		Str("phase", string(marker.Phase)).
-		Msg(workflow.RecoveryHint(marker))
-	return rollbackRecovery{}, err
-}
-
-// isRecoveryRollback reports whether a rollback to id, in this session and compose project,
-// recovers from the interrupted rollback the marker records: one to its safety snapshot or, when
-// the marker accepts any, one to any savepoint.
-func (s *SavepointStoreService) isRecoveryRollback(marker model.InflightMarker, id model.SavepointID) bool {
-	if id == "" || marker.Session != s.session || marker.ComposeProject != s.composeProject {
-		return false
-	}
-	return marker.AcceptsAnySavepoint() || id == marker.Safety
 }

@@ -181,7 +181,7 @@ Removes a session and everything under it — its savepoints, and the backend da
 
 **The running compose project is left alone.** Deleting the session a compose project was rolled back from does not stop it or touch its volumes; only the savepoints go.
 
-`baseline` cannot be deleted: `--force` only empties it, and it stays the default session. A session an interrupted rollback left its marker in cannot be deleted at all — recover that rollback first.
+`baseline` cannot be deleted: `--force` only empties it, and it stays the default session. A session an interrupted rollback names is deleted like any other: the marker is not read, and recovering then goes as [Troubleshooting](../troubleshooting.md#the-way-back-from-an-interrupted-rollback-is-gone) says.
 
 The current session is refused unless `--force` is given; with it, the session is deleted and `.arcave/current_session` is cleared, so commands that name no session work in `baseline` again.
 
@@ -231,7 +231,6 @@ arcave session current
 | `session remove` of a `cloning` directory without `--force` | `session is still being cloned`; nothing is deleted. |
 | `session remove` of an `unknown` directory without `--force` | `session tree status is unknown`, with why; nothing is deleted. |
 | `session remove` of the current session without `--force` | `session is the current session`, naming it; switch away first or force it. |
-| `session remove` of a session an interrupted rollback names | Refused, with the interrupted rollback's recovery hint. |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
 
 ## Examples

@@ -5,8 +5,7 @@ Garbage found (dry run) · session 019a2b3c-4d5e-7000-8000-000000000007
   restored-layers       1      ?
   total                 3      12.4 MB+
 
-Warnings (4)
-  ! docker-layer-tags: the daemon cannot be reached
+Warnings (3)
   ! savepoint-data in demo: 1 object held back
   ! deduplicated-volumes in demo: not judged: backend-unreadable
   ! restored-layers: 2 objects could not be judged

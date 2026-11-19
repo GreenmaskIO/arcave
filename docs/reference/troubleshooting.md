@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Recovering from an interrupted rollback, finding what is deployed, a held project or session lock, a torn-down project, an up or a down refused, a missing volume, a refused label or config, a stale current session, a health-check timeout and cdc container networking.
+description: Recovering from an interrupted rollback or one whose way back is gone, finding what is deployed, a held project or session lock, a torn-down project, an up or a down refused, a missing volume, a refused label or config, a stale current session, a health-check timeout and cdc container networking.
 keywords: [arcave troubleshooting, interrupted rollback, safety snapshot, project lock, health check, cdc, restic]
 ---
 
@@ -13,13 +13,13 @@ Each entry names the symptom as arcave reports it, what happened, and what to do
 
 ## An interrupted rollback
 
-**Symptom.** Every command that changes something refuses to run (`rollback` prefixes it with `require no inflight: `):
+**Symptom.** Every command that changes the compose project — `rollback`, `savepoint create`, `up`, `down` — refuses to run (`rollback` prefixes it with `require no inflight: `):
 
 ```text
 rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring); recover by rolling back to 019e8491-04c8-7000-8000-000000000000
 ```
 
-**What happened.** A rollback was killed after it began writing. `.arcave/inflight.json` records the phase it died in, and that marker refuses the next mutating workflow so nothing is built on a half-written environment.
+**What happened.** A rollback was killed after it began writing. The [inflight marker](../concepts.md#inflight-marker), a volume on the daemon, records the phase it died in, and refuses the next workflow that changes the compose project so nothing is built on a half-written environment. Every checkout and machine with the same `project.name` sees it against that daemon; another daemon or Podman user does not, nor the containers it guards.
 
 **The remedy.** Return to the safety snapshot that rollback took of the pre-rollback state. It is the one operation the marker lets through, and only in the session and compose project the marker names. An error log line on stderr, just before the error, prints the full command, `--session` and `-p` included:
 
@@ -81,15 +81,15 @@ An id is the only reference that reaches a safety snapshot: `latest` and name lo
 arcave savepoint remove 019e8491-04c8-7000-8000-000000000000
 ```
 
-Not before. Until then it is the last copy of the pre-rollback state.
+Not before. Until then it is the last copy of the pre-rollback state. `gc` refuses to delete in the marker's session, unless the daemon cannot be reached; `savepoint remove` and `session remove` do not read the marker, so nothing but you keeps it from them; see [The way back from an interrupted rollback is gone](#the-way-back-from-an-interrupted-rollback-is-gone).
 
 **What the phase tells you.** The remedy above is the same in every case; the phase says how much was overwritten.
 
 | Phase | What it means |
 |---|---|
-| `recreating` | Died between the teardown and the containers existing again. The volumes are untouched. Under `--no-safety-snapshot` the teardown itself may have failed, with the project still running: if `docker compose ps` shows it whole, removing `.arcave/inflight.json` keeps it. |
+| `recreating` | Died between the teardown and the containers existing again. The volumes are untouched. Under `--no-safety-snapshot` the teardown itself may have failed, with the project still running: if `docker compose ps` shows it whole, removing the marker volume keeps it. |
 | `restoring` | Died while writing volumes. The environment is partly overwritten. |
-| `restore-done` | Every volume was written back; only the start did not finish. Starting the project and removing `.arcave/inflight.json` is enough, if that is what you want. A failed rollback of a project with no containers has removed what it created, so it reads `restoring` instead. |
+| `restore-done` | Every volume was written back; only the start did not finish. Starting the compose project and removing the marker volume keeps the rollback, if that is what you want. A failed rollback of a project with no containers has removed what it created, so it reads `restoring` instead. |
 | `inconsistent` | The automatic replay failed too. The safety snapshot is retained and is the last copy of the pre-rollback state. |
 
 **A rollback that took no safety snapshot** — of a project that had no containers, never started or taken down, or one run with `--no-safety-snapshot` — has nothing to return to. The hint says so, and names the savepoint the rollback was applying:
@@ -103,6 +103,32 @@ Run that same rollback again; the marker lets it through, and it finishes what t
 **Recovering takes no safety snapshot**, whichever savepoint the hint names: it would capture half-restored volumes and call them an undo. If the recovery fails, the marker stays until you run it again. The anonymous volumes the interrupted attempt orphaned are not removed: find them with `docker volume ls --filter dangling=true`.
 
 **A recovery to a safety snapshot that keeps failing** takes none of its own. Its marker still names that snapshot, and from there a rollback to any savepoint passes too.
+
+**Removing the marker by hand** makes arcave forget the rollback was interrupted; do it only once the environment is what you want. Find its volume by the compose project, then remove it:
+
+```shell
+docker volume ls --filter label=io.arcave.inflight.compose-project=myapp
+docker volume rm arcave-inflight-myapp-019e8492-…
+```
+
+**A marker volume whose labels do not read** — edited by hand, or written by another arcave — is an error naming it, and every command that reads the marker fails on it, `down --force` and `status` included. Removing that volume, as above, is the way out.
+
+## The way back from an interrupted rollback is gone
+
+**Symptom.** A rollback is refused by the marker, but the savepoint its hint names to recover with is not in `arcave savepoint list --include-safety-snapshots`, or the session it names is gone:
+
+```text
+rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring); recover by rolling back to 019e8491-04c8-7000-8000-000000000000
+```
+
+**What happened.** `savepoint remove`, `session remove` and `gc` do not read the marker. While it stood, one of them deleted the way back: its safety snapshot, removed by id or retired by gc (under `retain_recent: 0`, or after a newer one), or the session it names. No data is damaged, but the marker still names what is gone and still refuses a rollback to any other savepoint.
+
+**The remedy.** Take the environment down, which clears this compose project's marker, then bring it up from a savepoint you have:
+
+```shell
+arcave down --force
+arcave up 019e843e-1650-7000-8000-000000000000
+```
 
 ## What is deployed, and why a container lost its files
 

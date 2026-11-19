@@ -102,7 +102,7 @@ A prune that is cut short after restic has forgotten the snapshots leaves their 
 On a store several machines share, the session's lock can, rarely, let a capture on another machine run while gc deletes: the lock is taken by writing and reading back, with no write-if-absent. gc could then delete a blob that capture has just reused. Run `arcave gc` without `--dry-run` only while no other machine works in the session. See [Limitations](../limitations.md#gc-on-a-shared-store).
 :::
 
-gc refuses to delete while an interrupted rollback is marked in `.arcave/inflight.json`: what that rollback was writing isn't settled. Recover or finish the rollback first. `--dry-run` still runs, and warns of the marker.
+gc does not read the [inflight marker](../../concepts.md#inflight-marker) and runs while an interrupted rollback stands. That rollback's safety snapshot is the newest of its compose project, so `gc.safety_snapshots.retain_recent`, one by default, keeps it; under `0` gc retires it, and the way back is gone — see [Troubleshooting](../troubleshooting.md#the-way-back-from-an-interrupted-rollback-is-gone). [`arcave status`](status.md) shows a standing rollback.
 
 ## Output
 
@@ -253,7 +253,6 @@ A target is relative to the compose project's directory in the store. A `restore
 | Condition | What happens |
 |---|---|
 | A kind could not be judged, an object was left unjudged, a collector failed, or an op failed to delete or was not run | The full report is printed, then the command exits `1` with `garbage collection was partial`. |
-| An interrupted rollback is marked, and `--dry-run` is not passed | `rollback to savepoint 019e843e-… was interrupted (restoring); recover by rolling back to 019e8491-…`. Nothing is read or deleted. |
 | `--kind` names a kind arcave does not know | `invalid garbage collect request: unknown kind "restic"`. Nothing is opened first. |
 | Another arcave command holds the project lock | The command fails at once, without reading anything. |
 | No daemon answers within 10 seconds | The `restored-layers` and `deduplicated-volumes` reports are `aborted` with the ping's error, whether or not `--kind` names them. The other kinds still run, and the run is partial: the full report is printed, then the command exits `1`. |

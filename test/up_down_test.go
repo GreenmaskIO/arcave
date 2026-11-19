@@ -78,7 +78,7 @@ func TestUpDown_TheEnvironmentCycle(t *testing.T) {
 	env.upDocument(t, document)
 	env.write(t, env.replicas(t)[0], "base")
 	projectRoot := t.TempDir()
-	runArcave(t, projectRoot, nil, "init", "--name", "arcave-up-down")
+	runArcave(t, projectRoot, nil, "init", "--name", "arcave-up-down-"+daemontest.RandomSuffix(t))
 	writeStorageConfig(t, projectRoot, config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: t.TempDir()},
@@ -157,6 +157,45 @@ func TestUpDown_TheEnvironmentCycle(t *testing.T) {
 	assert.Empty(t, again.Discarded.Volumes)
 }
 
+// An inflight marker's volume naming the compose project is no part of it: a rollback, a down and
+// an up leave it be, a down does not name it, and an up does not take it for something there.
+func TestUpDown_LeaveAnInflightMarkerVolume(t *testing.T) {
+	t.Parallel()
+
+	// Arrange: the marker of another arcave project, so it refuses nothing here.
+	env := newComposeProject(t, "updown-marker")
+	env.up(t, 1)
+	markerVolume := "arcave-inflight-" + env.project + "-it"
+	_, err := env.daemon.VolumeCreate(env.ctx, client.VolumeCreateOptions{
+		Name: markerVolume,
+		Labels: map[string]string{
+			"io.arcave.inflight.arcave-project":  "arcave-up-down-other",
+			"io.arcave.inflight.compose-project": env.project,
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = env.daemon.VolumeRemove(context.WithoutCancel(env.ctx), markerVolume, client.VolumeRemoveOptions{Force: true})
+	})
+	projectRoot := initDownProject(t)
+	run := func(args ...string) []byte {
+		t.Helper()
+		return runArcave(t, projectRoot, nil, append([]string{"-p", env.project}, args...)...)
+	}
+	run("savepoint", "create", "--name", "base")
+
+	// Act
+	run("rollback", "base")
+	down := decode[model.DownResult](t, run("down"))
+	run("up", "base")
+
+	// Assert
+	assert.NotContains(t, down.Discarded.Volumes, markerVolume)
+	_, err = env.daemon.VolumeInspect(env.ctx, markerVolume, client.VolumeInspectOptions{})
+	assert.NoError(t, err, "the marker volume stays")
+	assert.Len(t, env.replicas(t), 1, "the up built over nothing it took for the compose project's")
+}
+
 // A volume of the compose project something outside it holds survives compose's down, which only
 // warns. A forced up refuses to build over it, a down refuses to call it gone; once it is free,
 // a forced up creates it anew, its old data gone.
@@ -182,7 +221,7 @@ volumes:
 	data := env.project + "_data"
 	env.write(t, env.replicas(t)[0], "base")
 	projectRoot := t.TempDir()
-	runArcave(t, projectRoot, nil, "init", "--name", "arcave-up-down-busy")
+	runArcave(t, projectRoot, nil, "init", "--name", "arcave-up-down-busy-"+daemontest.RandomSuffix(t))
 	writeStorageConfig(t, projectRoot, config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: t.TempDir()},
@@ -244,7 +283,7 @@ func TestUpDown_VolumesSharingALogicalName(t *testing.T) {
 				require.NoError(t, err)
 			}
 			projectRoot := t.TempDir()
-			runArcave(t, projectRoot, nil, "init", "--name", "arcave-up-down-volumes")
+			runArcave(t, projectRoot, nil, "init", "--name", "arcave-up-down-volumes-"+daemontest.RandomSuffix(t))
 			writeStorageConfig(t, projectRoot, config.Storage{
 				Type:      config.StorageTypeDirectory,
 				Directory: &config.DirectoryStorage{Path: t.TempDir()},
@@ -375,7 +414,7 @@ func initDownProject(t *testing.T) string {
 	t.Helper()
 
 	projectRoot := t.TempDir()
-	runArcave(t, projectRoot, nil, "init", "--name", "arcave-up-down-beside")
+	runArcave(t, projectRoot, nil, "init", "--name", "arcave-up-down-beside-"+daemontest.RandomSuffix(t))
 	writeStorageConfig(t, projectRoot, config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: t.TempDir()},

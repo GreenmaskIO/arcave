@@ -31,6 +31,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	sprepo "github.com/greenmaskio/arcave/internal/provider/compose/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/inflightmarker"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/workload"
@@ -41,7 +42,8 @@ import (
 type Config struct {
 	// Settings are the provider's own sections of arcave's config, defaults applied.
 	Settings composeconfig.Config
-	// ArcaveProject is project.name: the namespace of the layer tags a rollback leaves.
+	// ArcaveProject is project.name: the namespace of the layer tags a rollback leaves and of the
+	// inflight marker.
 	ArcaveProject model.ArcaveProjectName
 	// Concurrency is common.concurrency: how many units one fan-out works at once; below 1 leaves
 	// the capture and rollback fan-outs unbounded.
@@ -78,6 +80,16 @@ type Surveyor struct {
 // Close releases what OpenSurveyor opened.
 func (s Surveyor) Close(ctx context.Context) { s.opened.Release(ctx) }
 
+// InflightMarkers is the marker of an interrupted rollback of the arcave project, kept on the
+// daemon it guards, with the connection it holds open.
+type InflightMarkers struct {
+	*inflightmarker.Store
+	opened utils.Closers
+}
+
+// Close releases the connection OpenInflightMarkers opened.
+func (m InflightMarkers) Close(ctx context.Context) { m.opened.Release(ctx) }
+
 // Open connects the daemon and opens the workload of composeProject over its store; on error it
 // releases whatever it had opened.
 func Open(
@@ -107,6 +119,20 @@ func OpenObserver(cfg Config, composeProject model.DockerComposeProjectName) (Ob
 	return Observer{
 		Observer: introspect.NewReader(daemon.api, composeProject),
 		opened:   opened,
+	}, nil
+}
+
+// OpenInflightMarkers connects the daemon to keep cfg.ArcaveProject's inflight marker on it, as
+// composeProject writes and clears it; a volume's labels need no runtime profile.
+func OpenInflightMarkers(cfg Config, composeProject model.DockerComposeProjectName) (InflightMarkers, error) {
+	var opened utils.Closers
+	daemon, err := connectDaemon(cfg.Settings.Docker, io.Discard, &opened)
+	if err != nil {
+		return InflightMarkers{}, err
+	}
+	return InflightMarkers{
+		Store:  inflightmarker.NewStore(daemon.api, cfg.ArcaveProject, composeProject),
+		opened: opened,
 	}, nil
 }
 

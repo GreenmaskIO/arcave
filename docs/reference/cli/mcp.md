@@ -55,7 +55,7 @@ Start the server **in the project directory**: `.arcave/config.yaml` is resolved
 | `--session` names no session | The server refuses to start: `session not found`, naming what was given. |
 | `savepoint_create` names a compose project that is not in the daemon | The call fails; the server stays up. |
 | Another arcave run holds the project lock | A call that changes something fails at once rather than queuing. |
-| An interrupted rollback is marked | Mutating calls are refused until it is resolved. |
+| An interrupted rollback is marked | `savepoint_create`, `rollback`, `up` and `down` are refused until it is resolved; `savepoint_remove`, the session tools and `gc` run. |
 
 A tool call runs the same workflow the CLI runs, under the same rules: the project is stopped and started again, the project lock is claimed, and a failed rollback replays its safety snapshot. A rollback of a project that is not running takes the [cold-start path](rollback.md#rolling-back-a-project-that-is-not-running), with `compose.leftover_volumes` from the config. `rollback.safety_snapshot` is the default for the `rollback` tool, whose `safety_snapshot` argument overrides it per call. A savepoint an agent takes is listed and applied by the CLI, and the reverse.
 

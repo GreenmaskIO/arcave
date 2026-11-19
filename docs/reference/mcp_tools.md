@@ -183,7 +183,7 @@ Returns what the CLI prints — see [`arcave down`](cli/down.md#output):
 }
 ```
 
-When `force` clears a marker, `cleared_inflight` names it, and a severe notice names its safety snapshot: the last copy of the state before that rollback, which nothing now keeps a `gc` from retiring. The tool is marked destructive.
+When `force` clears a marker, `cleared_inflight` names it, and a severe notice names its safety snapshot: the last copy of the state before that rollback, which only retention now keeps a `gc` from retiring. The tool is marked destructive.
 
 ## `session_list`
 

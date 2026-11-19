@@ -40,7 +40,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/sessionstore"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
-	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/core/gc"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
@@ -153,7 +152,6 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 			freed += *report.Deletion.FreedBytes()
 		}
 	}
-	assert.Empty(t, result.Warnings)
 	after := fileSizes(t, env.storeDir())
 	assert.Equal(t, newWithoutTargets(before, composeDir, append(slices.Clone(deleted), retired...)), after,
 		"exactly what was named is gone")
@@ -279,12 +277,12 @@ func (e *sessionEnv) newGarbageCollector(
 	root, err := storefactory.Root(t.Context(), e.storage, e.projectRoot)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = root.Close() })
-	arcaveProjectStore, err := storefactory.ArcaveProject(root, sessionArcaveProject)
+	arcaveProjectStore, err := storefactory.ArcaveProject(root, model.ArcaveProjectName(e.arcaveProject))
 	require.NoError(t, err)
 
 	gcDeps := gcfinder.Deps{
 		NewSavepointReader: newSavepointReader,
-		ArcaveProject:      sessionArcaveProject,
+		ArcaveProject:      model.ArcaveProjectName(e.arcaveProject),
 		Concurrency:        2,
 	}
 	if engine != nil {
@@ -292,7 +290,7 @@ func (e *sessionEnv) newGarbageCollector(
 		gcDeps = gcfinder.Deps{
 			NewSavepointReader: newSavepointReader,
 			Daemon:             engine,
-			ArcaveProject:      sessionArcaveProject,
+			ArcaveProject:      model.ArcaveProjectName(e.arcaveProject),
 			Concurrency:        2,
 			ResticInspectors:   opener,
 			ResticPruners:      resticPrunerOpener{opener},
@@ -324,7 +322,7 @@ func TestGC_DryRun_ForgetsTheSnapshotsOfADeadSavepoint(t *testing.T) {
 	root, err := storefactory.Root(t.Context(), env.storageCfg, env.projectRoot)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = root.Close() })
-	arcaveProjectStore, err := storefactory.ArcaveProject(root, cdcArcaveProject)
+	arcaveProjectStore, err := storefactory.ArcaveProject(root, model.ArcaveProjectName(env.arcaveProject))
 	require.NoError(t, err)
 	svc := newGC(t, arcaveProjectStore, env.projectRoot, model.DefaultSession, newCDCGarbage(t, env))
 
@@ -459,7 +457,7 @@ func newCDCGarbage(t *testing.T, env *cdcEnv) gcfinder.Deps {
 	return gcfinder.Deps{
 		NewSavepointReader: newSavepointReader,
 		Daemon:             env.engine,
-		ArcaveProject:      cdcArcaveProject,
+		ArcaveProject:      model.ArcaveProjectName(env.arcaveProject),
 		Concurrency:        1,
 		ResticInspectors:   opener,
 		ResticPruners:      resticPrunerOpener{opener},
@@ -486,7 +484,6 @@ func newGC(
 		Locker:         lock.New(projectRoot),
 		SessionLocker:  newSessionLocker(t, arcaveProjectStore, session),
 		WriteAdmission: newPlainAdmission(arcaveProjectStore),
-		Inflight:       inflightrepo.New(projectRoot),
 		RetainRecent:   config.DefaultSafetySnapshotRetainRecent,
 	})
 }

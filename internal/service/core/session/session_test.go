@@ -730,16 +730,12 @@ func TestSessionService_CreateSession_BlankNameTakesNoLock(t *testing.T) {
 }
 
 func TestSessionService_RemoveSession(t *testing.T) {
-	// Arrange: a marker of another session does not stand in the way.
+	// Arrange
 	locker := &mockLocker{}
 	acquire := locker.On("Acquire", mock.Anything).Return(nil).Once()
 	repo := &mockSessionRepo{}
 	load := repo.On("ListSessions", mock.Anything).
 		Return([]model.Session{model.DefaultSessionRecord, sessionRecord(demoSession, "exp", sessionNow)}, nil).Once()
-	inflight := &fakeInflight{}
-	marker := demoMarker(model.InflightRestoring)
-	marker.Session = otherSession
-	require.NoError(t, inflight.Put(context.Background(), marker))
 	sessionLocker := &mockSessionLocker{}
 	grantedLock := &mockGrantedSessionLock{}
 	lock := sessionLocker.On("Lock", mock.Anything, model.SessionLockOperationSessionRemove).Return(grantedLock, nil).Once()
@@ -754,7 +750,7 @@ func TestSessionService_RemoveSession(t *testing.T) {
 		lockedSession = id
 		return sessionLocker, nil
 	}
-	svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newLocker, Current: &fakePointer{}, Sessions: repo, Locker: locker, Inflight: inflight})
+	svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newLocker, Current: &fakePointer{}, Sessions: repo, Locker: locker})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -779,11 +775,10 @@ var errSessionSize = errors.New("list failed")
 
 func TestSessionService_RemoveSession_Refused(t *testing.T) {
 	tests := []struct {
-		name   string
-		ref    string
-		marker *model.InflightMarker
-		setup  func(repo *mockSessionRepo)
-		check  func(t *testing.T, err error)
+		name  string
+		ref   string
+		setup func(repo *mockSessionRepo)
+		check func(t *testing.T, err error)
 	}{
 		{
 			name: "the default session",
@@ -792,23 +787,6 @@ func TestSessionService_RemoveSession_Refused(t *testing.T) {
 				repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord}, nil).Once()
 			},
 			check: func(t *testing.T, err error) { require.ErrorIs(t, err, model.ErrDefaultSessionDelete) },
-		},
-		{
-			name: "a session an interrupted rollback names",
-			ref:  "exp",
-			marker: func() *model.InflightMarker {
-				m := demoMarker(model.InflightRestoring)
-				m.Session = demoSession
-				return &m
-			}(),
-			setup: func(repo *mockSessionRepo) {
-				repo.On("ListSessions", mock.Anything).
-					Return([]model.Session{sessionRecord(demoSession, "exp", sessionNow)}, nil).Once()
-			},
-			check: func(t *testing.T, err error) {
-				var interrupted *model.InterruptedRollbackError
-				require.ErrorAs(t, err, &interrupted)
-			},
 		},
 		{
 			name: "a session that cannot be measured",
@@ -828,11 +806,7 @@ func TestSessionService_RemoveSession_Refused(t *testing.T) {
 			expectLock(locker)
 			repo := &mockSessionRepo{}
 			tt.setup(repo)
-			inflight := &fakeInflight{}
-			if tt.marker != nil {
-				require.NoError(t, inflight.Put(context.Background(), *tt.marker))
-			}
-			svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: &fakePointer{}, Sessions: repo, Locker: locker, Inflight: inflight})
+			svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: &fakePointer{}, Sessions: repo, Locker: locker})
 
 			// Act
 			_, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: tt.ref})
@@ -877,7 +851,7 @@ func TestSessionService_RemoveSession_Uncommitted(t *testing.T) {
 				repo.On("SessionSize", mock.Anything, demoSession).Return(int64(10), nil).Once()
 				expectSessionDeleted(repo, demoSession)
 			}
-			svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: &fakePointer{}, Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
+			svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: &fakePointer{}, Sessions: repo, Locker: locker})
 			beats := map[model.SessionID]heartbeat.Heartbeat{}
 			if tt.status != "" {
 				beats[demoSession] = heartbeat.Heartbeat{Operation: cmp.Or(tt.op, model.HeartbeatOperationFork), Status: tt.status}
@@ -923,7 +897,7 @@ func TestSessionService_RemoveSession_NotFound(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup(repo)
 			}
-			svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: &fakePointer{}, Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
+			svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: &fakePointer{}, Sessions: repo, Locker: locker})
 
 			// Act
 			_, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: tt.ref})
@@ -1094,7 +1068,7 @@ func TestSessionService_RemoveSession_Current(t *testing.T) {
 				expectSessionDeleted(repo, demoSession)
 			}
 			pointer := pointerAt(demoSession)
-			svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: pointer, Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
+			svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: pointer, Sessions: repo, Locker: locker})
 
 			// Act
 			got, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: "exp", Force: tt.force})
@@ -1123,7 +1097,7 @@ func TestSessionService_RemoveSession_NotCurrentKeepsThePointer(t *testing.T) {
 	repo.On("SessionSize", mock.Anything, demoSession).Return(int64(10), nil).Once()
 	expectSessionDeleted(repo, demoSession)
 	pointer := pointerAt(otherSession)
-	svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: pointer, Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
+	svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: pointer, Sessions: repo, Locker: locker})
 
 	// Act
 	_, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: "exp"})
@@ -1144,7 +1118,7 @@ func TestSessionService_RemoveSession_ForcedDefaultKeepsThePointer(t *testing.T)
 	repo.On("SessionSize", mock.Anything, model.DefaultSession).Return(int64(10), nil).Once()
 	expectSessionDeleted(repo, model.DefaultSession)
 	pointer := pointerAt(model.DefaultSession)
-	svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: pointer, Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
+	svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: pointer, Sessions: repo, Locker: locker})
 
 	// Act
 	got, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: model.DefaultSessionName, Force: true})
@@ -1240,7 +1214,7 @@ func TestSessionService_RemoveSession_UnreadablePointerNamesNoSession(t *testing
 	repo.On("SessionSize", mock.Anything, demoSession).Return(int64(10), nil).Once()
 	expectSessionDeleted(repo, demoSession)
 	svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: &fakePointer{err: errPointerUnreadable}, Sessions: repo,
-		Locker: locker, Inflight: &fakeInflight{}})
+		Locker: locker})
 
 	// Act
 	got, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: "exp"})
@@ -1341,7 +1315,7 @@ func TestSessionService_RemoveSession_Pinned(t *testing.T) {
 				expectSessionDeleted(repo, demoSession)
 			}
 			pointer := pointerAt(thirdSession)
-			svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: pointer, Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
+			svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: pointer, Sessions: repo, Locker: locker})
 
 			// Act
 			_, err := svc.RemoveSession(context.Background(),
@@ -1373,7 +1347,7 @@ func TestSessionService_RemoveSession_PointerClearFailureKeepsTheResult(t *testi
 	expectSessionDeleted(repo, demoSession)
 	pointer := pointerAt(demoSession)
 	pointer.clearErr = errors.New("permission denied")
-	svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: pointer, Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
+	svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: pointer, Sessions: repo, Locker: locker})
 
 	// Act
 	got, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: "exp", Force: true})

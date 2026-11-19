@@ -29,7 +29,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
 	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
-	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/core/gc"
@@ -125,6 +124,10 @@ func openSavepointService(
 	if err != nil {
 		return nil, err
 	}
+	inflightMarkers, err := openComposeInflightMarkers(cfg, composeProject, opened)
+	if err != nil {
+		return nil, err
+	}
 
 	// The locker is bound to the project root here, so the service never names a path.
 	return core.New(core.Deps{
@@ -132,10 +135,9 @@ func openSavepointService(
 		ProjectLocker:  lock.New(projectPath),
 		WriteAdmission: scope.writeAdmission,
 		// The session's lock in the store, which the flock beside it cannot be across hosts.
-		SessionLocker: scope.sessionLocker,
-		Workload:      workload,
-		// The marker an interrupted rollback leaves behind, host-local beside the lock.
-		Inflight:       inflightrepo.New(projectPath),
+		SessionLocker:  scope.sessionLocker,
+		Workload:       workload,
+		Inflight:       inflightMarkers,
 		ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
 		Session:        scope.sessionID,
 		ComposeProject: composeProject,
@@ -165,9 +167,13 @@ func openDownService(
 	if err != nil {
 		return nil, err
 	}
+	inflightMarkers, err := openComposeInflightMarkers(cfg, composeProject, opened)
+	if err != nil {
+		return nil, err
+	}
 	return core.NewDownService(core.DownDeps{
 		ProjectLocker:  lock.New(projectPath),
-		Inflight:       inflightrepo.New(projectPath),
+		Inflight:       inflightMarkers,
 		Sessions:       scope.sessions,
 		Session:        scope.sessionID,
 		ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
@@ -191,7 +197,6 @@ func openSavepointStoreService(
 		ProjectLocker:  lock.New(projectPath),
 		WriteAdmission: scope.writeAdmission,
 		SessionLocker:  scope.sessionLocker,
-		Inflight:       inflightrepo.New(projectPath),
 		Session:        scope.sessionID,
 		ComposeProject: composeProject,
 		Sessions:       scope.sessions,
@@ -210,9 +215,13 @@ func openStatusService(
 	if err != nil {
 		return nil, err
 	}
+	inflightMarkers, err := openComposeInflightMarkers(cfg, composeProject, opened)
+	if err != nil {
+		return nil, err
+	}
 	return status.New(status.Deps{
 		Observer: observer,
-		Inflight: inflightrepo.New(projectPath),
+		Inflight: inflightMarkers,
 		Current:  currentsession.New(projectPath),
 		OpenArcaveProjectStore: func(ctx context.Context) (storages.Storager, error) {
 			arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath, opened)
@@ -248,7 +257,6 @@ func newSessionService(
 		Sessions:       sessions,
 		Locker:         lock.New(projectPath),
 		WriteAdmission: arcaveProject.writeAdmission,
-		Inflight:       inflightrepo.New(projectPath),
 		Current:        currentsession.New(projectPath),
 		Store:          arcaveProject.store,
 		NewSession: func(id model.SessionID) provider.Session {
@@ -399,13 +407,18 @@ func openGCService(
 	if err != nil {
 		return nil, err
 	}
+	// gc spans the session's compose projects and only reads the marker: no compose project writes it.
+	inflightMarkers, err := openComposeInflightMarkers(cfg, "", opened)
+	if err != nil {
+		return nil, err
+	}
 	return gc.New(gc.Deps{
 		Sessions:        scope.sessions,
 		ProviderSession: providerSession,
 		Locker:          lock.New(projectPath),
 		WriteAdmission:  scope.writeAdmission,
 		SessionLocker:   scope.sessionLocker,
-		Inflight:        inflightrepo.New(projectPath),
+		Inflight:        inflightMarkers,
 		RetainRecent:    utils.Value(cfg.GC.SafetySnapshots.RetainRecent),
 	}), nil
 }

@@ -849,7 +849,7 @@ func TestService_Status(t *testing.T) {
 			deployments: []observedDeployment{deployedBy(baselineDeployment)},
 			state:       runningStateAt(started),
 			stored:      []model.Savepoint{statusDeployed},
-			markerErr:   errors.New("inflight.json: unexpected end of JSON input"),
+			markerErr:   errors.New("reading the inflight marker volume arcave-inflight-demo-x: io.arcave.inflight.phase: blank"),
 			wantErr:     model.ErrStatusPartial,
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, model.ComposeProjectStateRunning, status.State)

@@ -159,7 +159,7 @@ func encryptionMarkerPath(env *statusEnv) string {
 }
 
 func arcaveProjectDir(env *statusEnv) string {
-	return filepath.Join(env.storeDir, "arcave", "projects", statusArcaveProject)
+	return filepath.Join(env.storeDir, "arcave", "projects", env.arcaveProject)
 }
 
 // readProjectTree is every file of the arcave project with its contents; none for a project never

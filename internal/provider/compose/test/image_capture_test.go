@@ -37,7 +37,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
-	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -148,22 +147,25 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second, Prompter: prompter,
 	})
 
+	// Unique per test: the inflight marker is the arcave project's on the shared daemon.
+	arcaveProject := "arcave-image-tenant-" + daemontest.RandomSuffix(t)
 	projectRoot := t.TempDir()
 	store, err := storefactory.New(t.Context(), config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
-	}, projectRoot, "arcave-image-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
+	}, projectRoot, model.ArcaveProjectName(arcaveProject), model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
 		Savepoints:     compose.NewStoreSavepoints(store),
 		Store:          store,
-		ArcaveProject:  "arcave-image-tenant",
+		ArcaveProject:  model.ArcaveProjectName(arcaveProject),
+		ComposeProject: model.DockerComposeProjectName(project),
 		SessionLocker:  newStoreLocker(store, model.DefaultSession),
 		WriteAdmission: newPlainAdmission(store),
 		ProjectLocker:  lock.New(projectRoot),
-		Inflight:       inflightrepo.New(projectRoot),
-		Workload:       openComposeWorkload(t, store, "arcave-image-tenant", project),
+		Inflight:       openInflightMarkers(t, arcaveProject, project),
+		Workload:       openComposeWorkload(t, store, arcaveProject, project),
 	})
 
 	env := &imageCaptureEnv{
