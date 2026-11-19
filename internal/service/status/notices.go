@@ -16,7 +16,6 @@ package status
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -174,42 +173,8 @@ func newDeploymentNotices(facts statusFacts, deployment model.SavepointDeploymen
 			Message: fmt.Sprintf("savepoint %s is no longer in session %s",
 				deployment.Savepoint, deployment.Session),
 		})
-	case facts.view.savepoint != nil && facts.view.savepoint.NotCovered != nil:
-		notices = append(notices, newNotRestoredNotices(*facts.view.savepoint.NotCovered)...)
-	}
-	return notices
-}
-
-// newNotRestoredNotices say what the deployed savepoint's record left out, so the rollback did not
-// put back: a mount a label or the config excluded, and a writable layer.
-func newNotRestoredNotices(notCovered model.NotCovered) []model.Notice {
-	var notices []model.Notice
-	for _, mount := range notCovered.Mounts {
-		if mount.Reason != model.SkipReasonExcluded {
-			continue
-		}
-		var message string
-		switch {
-		case mount.Volume != "":
-			message = "volume " + mount.Volume + " was not in the savepoint: it holds what it held before the rollback"
-		case mount.RawType == string(model.VolumeTypeBind):
-			message = fmt.Sprintf("%s %s was not in the savepoint: the host folder holds what it held before the rollback",
-				mount.Service, mount.Target)
-		default:
-			message = fmt.Sprintf("%s %s was not in the savepoint: it came back empty",
-				formatStatusReplica(mount.Service, mount.Replica), mount.Target)
-		}
-		notices = append(notices, model.Notice{
-			Code:    model.NoticeCodeVolumeNotRestored,
-			Message: message,
-		})
-	}
-	for _, layer := range notCovered.WritableLayers {
-		notices = append(notices, model.Notice{
-			Code: model.NoticeCodeLayerNotRestored,
-			Message: fmt.Sprintf("%s's writable layer was not in the savepoint: it started fresh from its image",
-				formatStatusReplica(layer.Service, layer.Replica)),
-		})
+	case facts.view.savepoint != nil:
+		notices = append(notices, facts.view.savepoint.Summary.Gaps...)
 	}
 	return notices
 }
@@ -350,9 +315,7 @@ func isRecreated(replica model.ReplicaStatus) bool {
 // restoredLayer reports whether the deployed savepoint's record holds a writable layer of the
 // replica numbered number; false with no record.
 func restoredLayer(savepoint *model.Savepoint, service string, number int) bool {
-	return savepoint != nil && slices.ContainsFunc(savepoint.WritableLayers, func(layer model.WritableLayer) bool {
-		return layer.Service == service && layer.Replica == number
-	})
+	return savepoint != nil && savepoint.Summary.Holds(service, number, model.ReplicaHeldLayer)
 }
 
 // formatStatusReplica names a replica as compose numbers it: service-n.

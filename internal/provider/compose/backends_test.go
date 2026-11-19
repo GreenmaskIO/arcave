@@ -20,7 +20,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/utils"
@@ -31,7 +30,7 @@ import (
 func TestNewCaptureDefaults(t *testing.T) {
 	// Arrange
 	cfg := composeconfig.Config{
-		Snapshot:       composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendCDC},
+		Snapshot:       composeconfig.Snapshot{Backend: string(composeconfig.SnapshotBackendCDC)},
 		WritableLayers: composeconfig.WritableLayers{Backend: "fullcopy"},
 		Capture: composeconfig.Capture{
 			Mode:           "pause",
@@ -47,11 +46,11 @@ func TestNewCaptureDefaults(t *testing.T) {
 
 	// Assert
 	assert.Equal(t, capturepolicy.CaptureDefaults{
-		VolumeBackend:        model.SnapshotBackendCDC,
-		WritableLayerBackend: model.ImageBackendFullCopy,
-		Mode:                 model.CaptureModePause,
+		VolumeBackend:        composeconfig.SnapshotBackendCDC,
+		WritableLayerBackend: composeconfig.ImageBackendFullCopy,
+		Mode:                 composeconfig.CaptureModePause,
 		HookTimeout:          2 * time.Minute,
-		HookOnError:          model.HookOnErrorContinue,
+		HookOnError:          composeconfig.HookOnErrorContinue,
 		SavepointCapture: capturepolicy.SavepointCaptureSettings{
 			WritableLayers:   false,
 			Images:           true,

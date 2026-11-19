@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // ErrRecordNotFound refuses a savepoint id the store holds no committed record of.
@@ -27,17 +28,17 @@ var ErrRecordNotFound = errors.New("savepoint not found")
 
 // SavepointLoader reads the committed records of ids; one not found is left out.
 type SavepointLoader interface {
-	LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error)
+	LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]composemodel.Savepoint, error)
 }
 
 // LoadSavepoint reads the record of the savepoint id names.
-func LoadSavepoint(ctx context.Context, loader SavepointLoader, id model.SavepointID) (model.Savepoint, error) {
+func LoadSavepoint(ctx context.Context, loader SavepointLoader, id model.SavepointID) (composemodel.Savepoint, error) {
 	savepoints, err := loader.LoadSavepoints(ctx, []model.SavepointID{id})
 	if err != nil {
-		return model.Savepoint{}, err
+		return composemodel.Savepoint{}, err
 	}
 	if len(savepoints) == 0 {
-		return model.Savepoint{}, fmt.Errorf("%w: %s", ErrRecordNotFound, id)
+		return composemodel.Savepoint{}, fmt.Errorf("%w: %s", ErrRecordNotFound, id)
 	}
 	return savepoints[0], nil
 }

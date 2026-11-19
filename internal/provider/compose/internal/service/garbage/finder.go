@@ -25,6 +25,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -33,7 +34,7 @@ var errNoEraser = errors.New("no eraser carries out the report's ops")
 
 // SavepointReader reads the committed savepoints of one compose project's store.
 type SavepointReader interface {
-	LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error)
+	LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]composemodel.Savepoint, error)
 }
 
 // Deps are Finder's collaborators.

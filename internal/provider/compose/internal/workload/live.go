@@ -38,7 +38,7 @@ func (l liveWorkload) Absent() bool {
 // opts.Restoring is read first, and one that cannot be read is no provider.CapturePolicyError.
 func (l liveWorkload) PlanCapture(ctx context.Context, opts provider.CaptureOptions) (provider.CapturePlan, error) {
 	var (
-		restoring *model.Savepoint
+		restoring *composemodel.Savepoint
 		plan      composemodel.Plan
 		err       error
 	)
@@ -74,7 +74,7 @@ func (l liveWorkload) PrepareSavepoint(
 	if err != nil {
 		return nil, err
 	}
-	return preparedSavepoint{Target: target}, nil
+	return newPreparedSavepoint(target, opts.Recovering)
 }
 
 // Teardown resumes the replicas found frozen and runs `compose down` of prepared's project; over

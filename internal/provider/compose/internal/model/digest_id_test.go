@@ -21,14 +21,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 const validDigest = "sha256:5f2b8d7c1a4e6039bc82d1f470a3e59c8d24b7061fe93a5c8b70d1e2f4a6c983"
 
 func TestParseDigestID(t *testing.T) {
 	// Act
-	id, err := model.ParseImageDigestID(validDigest)
+	id, err := composemodel.ParseImageDigestID(validDigest)
 
 	// Assert
 	require.NoError(t, err)
@@ -54,40 +54,40 @@ func TestParseDigestID_RefusesWhatIsNotContent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			_, err := model.ParseImageDigestID(tt.s)
+			_, err := composemodel.ParseImageDigestID(tt.s)
 
 			// Assert
-			require.ErrorIs(t, err, model.ErrInvalidDigestID)
+			require.ErrorIs(t, err, composemodel.ErrInvalidDigestID)
 		})
 	}
 }
 
 func TestDigestID_UnmarshalJSON(t *testing.T) {
 	// Arrange
-	var capture model.WritableLayer
+	var capture composemodel.WritableLayer
 
 	// Act
 	err := json.Unmarshal([]byte(`{"committed_image_id":"`+validDigest+`"}`), &capture)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, model.ImageDigestID(validDigest), capture.CommittedImageID)
+	assert.Equal(t, composemodel.ImageDigestID(validDigest), capture.CommittedImageID)
 }
 
 func TestDigestID_UnmarshalJSON_RefusesAReference(t *testing.T) {
 	// Arrange
-	var capture model.WritableLayer
+	var capture composemodel.WritableLayer
 
 	// Act
 	err := json.Unmarshal([]byte(`{"committed_image_id":"postgres:16"}`), &capture)
 
 	// Assert: a stored id that is not content fails at the decode, not at the daemon.
-	require.ErrorIs(t, err, model.ErrInvalidDigestID)
+	require.ErrorIs(t, err, composemodel.ErrInvalidDigestID)
 }
 
 func TestDigestID_MarshalJSON_RoundTrips(t *testing.T) {
 	// Arrange
-	capture := model.WritableLayer{CommittedImageID: model.ImageDigestID(validDigest)}
+	capture := composemodel.WritableLayer{CommittedImageID: composemodel.ImageDigestID(validDigest)}
 
 	// Act
 	body, err := json.Marshal(capture)

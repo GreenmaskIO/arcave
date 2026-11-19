@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // A1: the volume is reached by its docker name, so the service's container is
@@ -42,7 +42,7 @@ func TestSnapshotter_NoServiceContainer(t *testing.T) {
 	env.mutate(t, vol)
 	env.addFile(t, vol, "extra")
 	require.NotEqual(t, captured, env.hash(t, vol), "the volume must actually diverge first")
-	err := backend.Restore(env.ctx, model.BackendRestoreRequest{SnapshotID: idFirst, Payload: payload})
+	err := backend.Restore(env.ctx, composemodel.BackendRestoreRequest{SnapshotID: idFirst, Payload: payload})
 
 	// Assert
 	require.NoError(t, err)
@@ -74,7 +74,7 @@ func TestSnapshotter_SubpathMountedVolume(t *testing.T) {
 	require.NotEqual(t, captured, env.hash(t, vol))
 
 	// Act
-	err := backend.Restore(env.ctx, model.BackendRestoreRequest{SnapshotID: idFirst, Payload: payload})
+	err := backend.Restore(env.ctx, composemodel.BackendRestoreRequest{SnapshotID: idFirst, Payload: payload})
 
 	// Assert
 	require.NoError(t, err)

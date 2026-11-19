@@ -16,9 +16,10 @@ package composetest
 
 import (
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"strings"
 	"time"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/container"
@@ -27,6 +28,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capturepolicy"
 )
 
@@ -41,13 +43,13 @@ const (
 const (
 	DemoContainerID = "c0ffee"
 	DemoBaseImage   = "postgres:16"
-	DemoUpstreamID  = model.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	DemoUpstreamID  = composemodel.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 )
 
 // DemoCaptureDefaults are the backends every test Provider captures by, every kind captured.
 var DemoCaptureDefaults = capturepolicy.CaptureDefaults{
-	VolumeBackend:        model.SnapshotBackendFullCopy,
-	WritableLayerBackend: model.ImageBackendDedupCopy,
+	VolumeBackend:        composeconfig.SnapshotBackendFullCopy,
+	WritableLayerBackend: composeconfig.ImageBackendDedupCopy,
 	SavepointCapture: capturepolicy.SavepointCaptureSettings{
 		WritableLayers:   true,
 		Images:           true,
@@ -62,18 +64,22 @@ var DemoCaptureDefaults = capturepolicy.CaptureDefaults{
 var DemoAssembled = &types.Project{Name: DemoProject}
 
 // DemoRecord is a committed savepoint of DemoVolume.
-func DemoRecord() model.Savepoint {
-	return model.Savepoint{
-		ID:        "019e843e-1650-7000-8000-000000000000",
-		Name:      "sp",
-		CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC),
-		Stats: []model.SnapshotStat{{
-			Volume:    DemoVolume(),
-			Type:      model.SnapshotBackendFullCopy,
-			SizeBytes: 4096,
-			Payload:   "sp-payload",
-		}},
-		Spec: &model.SpecRef{Format: model.SpecFormatComposeYAML},
+func DemoRecord() composemodel.Savepoint {
+	return composemodel.Savepoint{
+		Header: model.Savepoint{
+			ID:        "019e843e-1650-7000-8000-000000000000",
+			Name:      "sp",
+			CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC),
+		},
+		Detail: composemodel.SavepointDetail{
+			Stats: []composemodel.SnapshotStat{{
+				Volume:    DemoVolume(),
+				Type:      composeconfig.SnapshotBackendFullCopy,
+				SizeBytes: 4096,
+				Payload:   "sp-payload",
+			}},
+			Spec: &composemodel.SpecRef{Format: composemodel.SpecFormatComposeYAML},
+		},
 	}
 }
 
@@ -85,11 +91,11 @@ func DemoIntrospection() composemodel.IntrospectionResult {
 		Services: []composemodel.Service{{
 			Name: DemoService,
 			Volumes: []composemodel.ServiceVolume{{
-				Type: model.VolumeTypeNamed, Source: "db", Target: DemoTarget, VolumeName: DemoVolumeName,
+				Type: composemodel.VolumeTypeNamed, Source: "db", Target: DemoTarget, VolumeName: DemoVolumeName,
 			}},
 		}},
 		Volumes: []composemodel.NamedVolume{{Key: "db", Name: DemoVolumeName,
-			UsedBy: []model.ServiceReference{{Service: DemoService, Target: DemoTarget}}}},
+			UsedBy: []composemodel.ServiceReference{{Service: DemoService, Target: DemoTarget}}}},
 	}}
 }
 
@@ -117,7 +123,7 @@ func DemoContainerInspect() container.InspectResponse {
 // DemoImageCaptureRequest is the one upstream DemoIntrospectionWithContainers names.
 func DemoImageCaptureRequest() composemodel.ImageCaptureRequest {
 	return composemodel.ImageCaptureRequest{
-		Image: model.Image{
+		Image: composemodel.Image{
 			ID: DemoUpstreamID, Refs: []string{DemoBaseImage}, RepoDigests: []string{"postgres@sha256:dd"}, SizeBytes: 1 << 20,
 		},
 		ExistsInDaemon: true,
@@ -137,7 +143,7 @@ func DemoIntrospectionWithContainers() composemodel.IntrospectionResult {
 			Inspect: DemoContainerInspect(),
 		}},
 	}}
-	introspection.Images = map[model.ImageDigestID]image.InspectResponse{
+	introspection.Images = map[composemodel.ImageDigestID]image.InspectResponse{
 		DemoUpstreamID: {
 			ID: DemoUpstreamID.String(), RepoTags: []string{DemoBaseImage},
 			RepoDigests: []string{"postgres@sha256:dd"}, Size: 1 << 20,
@@ -172,21 +178,21 @@ func DemoCodec() *MockCodec {
 func DemoAssembler() *MockAssembler { return AssemblerFor(DemoIntrospection()) }
 
 // DemoRecordWithImages is DemoRecord carrying the writable layer of its one replica.
-func DemoRecordWithImages() model.Savepoint {
+func DemoRecordWithImages() composemodel.Savepoint {
 	record := DemoRecord()
-	record.WritableLayers = []model.WritableLayer{DemoWritableLayer()}
+	record.Detail.WritableLayers = []composemodel.WritableLayer{DemoWritableLayer()}
 	return record
 }
 
 // DemoRestoredTag is the tag a rollback of DemoRecord puts on one replica's layer;
 // DemoBaseImage's colon is what a docker repository path cannot carry.
 func DemoRestoredTag(replica int) string {
-	return fmt.Sprintf("arcave/%s-%s-%d-postgres-16:sp-%s", DemoProject, DemoService, replica, DemoRecord().ID)
+	return fmt.Sprintf("arcave/%s-%s-%d-postgres-16:sp-%s", DemoProject, DemoService, replica, DemoRecord().Header.ID)
 }
 
 // DemoWritableLayerRestoreResult is what the copier reports for DemoWritableLayer.
-func DemoWritableLayerRestoreResult() model.WritableLayerRestoreResult {
-	return model.WritableLayerRestoreResult{
+func DemoWritableLayerRestoreResult() composemodel.WritableLayerRestoreResult {
+	return composemodel.WritableLayerRestoreResult{
 		Service: DemoService, Replica: 1, ContainerName: DemoContainerName(1),
 		ImageID: DemoWritableLayer().CommittedImageID, Tag: DemoRestoredTag(1),
 	}
@@ -213,7 +219,7 @@ func DemoScaledIntrospection() composemodel.IntrospectionResult {
 }
 
 // DemoSecondWritableLayer is the second replica's own layer.
-func DemoSecondWritableLayer() model.WritableLayer {
+func DemoSecondWritableLayer() composemodel.WritableLayer {
 	capture := DemoWritableLayer()
 	capture.Replica = 2
 	capture.ContainerID = DemoSecondContainerID
@@ -223,9 +229,9 @@ func DemoSecondWritableLayer() model.WritableLayer {
 }
 
 // DemoScaledRecord is a savepoint of the scaled compose project: one capture per replica.
-func DemoScaledRecord() model.Savepoint {
+func DemoScaledRecord() composemodel.Savepoint {
 	record := DemoRecord()
-	record.WritableLayers = []model.WritableLayer{DemoWritableLayer(), DemoSecondWritableLayer()}
+	record.Detail.WritableLayers = []composemodel.WritableLayer{DemoWritableLayer(), DemoSecondWritableLayer()}
 	return record
 }
 
@@ -249,7 +255,7 @@ var DefaultSessionRef = model.SessionRef{
 func DeployedAs(spec *types.Project, want func(model.SavepointDeployment) bool) any {
 	return mock.MatchedBy(func(project *types.Project) bool {
 		for _, service := range project.Services {
-			deployment, ok, err := model.ParseSavepointDeployment(service.Labels)
+			deployment, ok, err := composemodel.ParseDeploymentLabels(service.Labels)
 			if err != nil || !ok || !want(deployment) {
 				return false
 			}
@@ -268,7 +274,7 @@ func WithoutDeploymentLabels(project *types.Project) *types.Project {
 	for name, service := range project.Services {
 		labels := types.Labels{}
 		for key, value := range service.Labels {
-			if !strings.HasPrefix(key, model.DeploymentLabelPrefix) {
+			if !strings.HasPrefix(key, composemodel.DeploymentLabelPrefix) {
 				labels[key] = value
 			}
 		}
@@ -294,14 +300,14 @@ var (
 const DemoArcaveProject model.ArcaveProjectName = "demo-arcave"
 
 // DemoDeployment is a build of savepoint in the default session, as core hands it.
-func DemoDeployment(savepoint model.Savepoint) model.SavepointDeployment {
+func DemoDeployment(savepoint composemodel.Savepoint) model.SavepointDeployment {
 	return model.SavepointDeployment{
 		ArcaveProject: DemoArcaveProject,
 		Session:       DefaultSessionRef,
 		Savepoint: model.DeployedSavepoint{
-			ID:        savepoint.ID,
-			Name:      savepoint.Name,
-			CreatedAt: savepoint.CreatedAt,
+			ID:        savepoint.Header.ID,
+			Name:      savepoint.Header.Name,
+			CreatedAt: savepoint.Header.CreatedAt,
 		},
 	}
 }
@@ -316,14 +322,14 @@ func DeployedFrom(spec *types.Project, deployment model.SavepointDeployment) any
 }
 
 // DemoWritableLayer is what the backend reports for DemoContainerRef's layer.
-func DemoWritableLayer() model.WritableLayer {
-	return model.WritableLayer{
+func DemoWritableLayer() composemodel.WritableLayer {
+	return composemodel.WritableLayer{
 		Service:          DemoService,
 		Replica:          1,
 		ContainerID:      DemoContainerID,
 		ContainerName:    DemoContainerName(1),
 		CommittedImageID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		ImageBackend:     model.ImageBackendDedupCopy,
+		ImageBackend:     composeconfig.ImageBackendDedupCopy,
 		UpstreamImageID:  DemoUpstreamID,
 		UpstreamImageRef: DemoBaseImage,
 		SizeBytes:        4096,
@@ -351,7 +357,7 @@ func MatchDeploymentOf(target *types.Project) func(*types.Project) bool {
 
 func hasDeploymentLabel(labels types.Labels) bool {
 	for key := range labels {
-		if strings.HasPrefix(key, model.DeploymentLabelPrefix) {
+		if strings.HasPrefix(key, composemodel.DeploymentLabelPrefix) {
 			return true
 		}
 	}

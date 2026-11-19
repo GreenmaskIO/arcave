@@ -22,33 +22,33 @@ import (
 
 	"github.com/mattn/go-shellwords"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // hookLabelKeys are the labels of one hook: its command and the settings beside it.
 type hookLabelKeys struct {
-	command model.CaptureLabel
-	user    model.CaptureLabel
-	timeout model.CaptureLabel
-	onError model.CaptureLabel
+	command composemodel.CaptureLabel
+	user    composemodel.CaptureLabel
+	timeout composemodel.CaptureLabel
+	onError composemodel.CaptureLabel
 }
 
 // newHookLabelKeys are the labels of the hook of phase.
-func newHookLabelKeys(phase model.HookPhase) hookLabelKeys {
-	if phase == model.HookPhasePostCapture {
+func newHookLabelKeys(phase composemodel.HookPhase) hookLabelKeys {
+	if phase == composemodel.HookPhasePostCapture {
 		return hookLabelKeys{
-			command: model.CaptureLabelHookPostCapture,
-			user:    model.CaptureLabelHookPostCaptureUser,
-			timeout: model.CaptureLabelHookPostCaptureTimeout,
-			onError: model.CaptureLabelHookPostCaptureOnError,
+			command: composemodel.CaptureLabelHookPostCapture,
+			user:    composemodel.CaptureLabelHookPostCaptureUser,
+			timeout: composemodel.CaptureLabelHookPostCaptureTimeout,
+			onError: composemodel.CaptureLabelHookPostCaptureOnError,
 		}
 	}
 	return hookLabelKeys{
-		command: model.CaptureLabelHookPreCapture,
-		user:    model.CaptureLabelHookPreCaptureUser,
-		timeout: model.CaptureLabelHookPreCaptureTimeout,
-		onError: model.CaptureLabelHookPreCaptureOnError,
+		command: composemodel.CaptureLabelHookPreCapture,
+		user:    composemodel.CaptureLabelHookPreCaptureUser,
+		timeout: composemodel.CaptureLabelHookPreCaptureTimeout,
+		onError: composemodel.CaptureLabelHookPreCaptureOnError,
 	}
 }
 
@@ -68,11 +68,11 @@ func withHookDefaults(hook *composemodel.Hook, defaults CaptureDefaults) *compos
 
 // parseHookLabels reads the hook of phase off a service's labels, a zero Timeout or OnError being
 // unset; nil when it has none.
-func parseHookLabels(labels map[string]string, phase model.HookPhase, where string) (*composemodel.Hook, error) {
+func parseHookLabels(labels map[string]string, phase composemodel.HookPhase, where string) (*composemodel.Hook, error) {
 	keys := newHookLabelKeys(phase)
 	value, ok := labels[string(keys.command)]
 	if !ok {
-		for _, key := range []model.CaptureLabel{keys.user, keys.timeout, keys.onError} {
+		for _, key := range []composemodel.CaptureLabel{keys.user, keys.timeout, keys.onError} {
 			if setting, set := labels[string(key)]; set {
 				return nil, newInvalidLabelError(where, key, setting, "no "+keys.command.String()+" beside it")
 			}
@@ -83,7 +83,7 @@ func parseHookLabels(labels map[string]string, phase model.HookPhase, where stri
 	var (
 		command []string
 		timeout time.Duration
-		onError model.HookOnError
+		onError composeconfig.HookOnError
 		err     error
 	)
 	if command, err = parseHookCommand(value); err != nil {
@@ -98,7 +98,7 @@ func parseHookLabels(labels map[string]string, phase model.HookPhase, where stri
 		}
 	}
 	if setting, set := labels[string(keys.onError)]; set {
-		if onError, ok = model.ParseHookOnError(setting); !ok {
+		if onError, ok = composeconfig.ParseHookOnError(setting); !ok {
 			return nil, newInvalidLabelError(where, keys.onError, setting, "want fail or continue")
 		}
 	}

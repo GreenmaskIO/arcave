@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"net/netip"
 	"strconv"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v5/pkg/api"
@@ -31,8 +32,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 func TestAssembler_Assemble(t *testing.T) {
@@ -569,21 +568,21 @@ func TestUserLabels(t *testing.T) {
 		{
 			name: "compose, Docker Desktop and arcave labels are dropped",
 			labels: map[string]string{
-				api.ServiceLabel:                      "db",
-				"desktop.docker.io/ports.scheme":      "v2",
-				string(model.SystemLabelBaseImageID):  "sha256:cc",
-				string(model.SystemLabelBaseImageRef): "postgres:16",
-				"tier":                                "data",
+				api.ServiceLabel:                             "db",
+				"desktop.docker.io/ports.scheme":             "v2",
+				string(composemodel.SystemLabelBaseImageID):  "sha256:cc",
+				string(composemodel.SystemLabelBaseImageRef): "postgres:16",
+				"tier": "data",
 			},
 			want: types.Labels{"tier": "data"},
 		},
-		{name: "nothing left renders as nil", labels: map[string]string{string(model.SystemLabelBaseImageRef): "postgres:16"}, want: nil},
+		{name: "nothing left renders as nil", labels: map[string]string{string(composemodel.SystemLabelBaseImageRef): "postgres:16"}, want: nil},
 		{
 			// A deployment is the containers', never the spec's: the next savepoint must not carry it.
 			name: "the deployment a rollback labelled the container with is dropped",
 			labels: map[string]string{
-				string(model.SystemLabelDeploymentDeployedAt):  "2026-11-07T14:02:11Z",
-				string(model.SystemLabelDeploymentSavepointID): "019e843e-1650-7000-8000-000000000000",
+				string(composemodel.SystemLabelDeploymentDeployedAt):  "2026-11-07T14:02:11Z",
+				string(composemodel.SystemLabelDeploymentSavepointID): "019e843e-1650-7000-8000-000000000000",
 				"tier": "data",
 			},
 			want: types.Labels{"tier": "data"},
@@ -591,8 +590,8 @@ func TestUserLabels(t *testing.T) {
 		{
 			// The capture policy travels in the spec, so a rollback restores it with the topology.
 			name:   "the capture policy is kept",
-			labels: map[string]string{string(model.CaptureLabelCapture): "false", string(model.CaptureLabelMountsExclude): "/app"},
-			want:   types.Labels{string(model.CaptureLabelCapture): "false", string(model.CaptureLabelMountsExclude): "/app"},
+			labels: map[string]string{string(composemodel.CaptureLabelCapture): "false", string(composemodel.CaptureLabelMountsExclude): "/app"},
+			want:   types.Labels{string(composemodel.CaptureLabelCapture): "false", string(composemodel.CaptureLabelMountsExclude): "/app"},
 		},
 	}
 

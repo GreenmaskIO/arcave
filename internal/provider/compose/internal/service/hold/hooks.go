@@ -26,7 +26,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -92,7 +92,7 @@ func (t hookTrigger) beforeCapture(ctx context.Context) (Outcome, error) {
 	for _, idle := range t.skippedPre {
 		step.Warn(fmt.Sprintf(warnPreHookSkipped, newReplicaName(idle.Ref), idle.State))
 	}
-	failedHooks, err := runHooks(ctx, t.control, model.HookPhasePreCapture, t.pre)
+	failedHooks, err := runHooks(ctx, t.control, composemodel.HookPhasePreCapture, t.pre)
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -102,12 +102,12 @@ func (t hookTrigger) beforeCapture(ctx context.Context) (Outcome, error) {
 // afterCapture runs the post-capture hooks; the failures let through are only warned of, the
 // record being committed already.
 func (t hookTrigger) afterCapture(revertCtx context.Context) error {
-	_, err := runHooks(revertCtx, t.control, model.HookPhasePostCapture, t.post)
+	_, err := runHooks(revertCtx, t.control, composemodel.HookPhasePostCapture, t.post)
 	return err
 }
 
 // newHookLogger is the logger of ctx naming the hook of phase in the replica.
-func newHookLogger(ctx context.Context, phase model.HookPhase, ref composemodel.ContainerRef) zerolog.Logger {
+func newHookLogger(ctx context.Context, phase composemodel.HookPhase, ref composemodel.ContainerRef) zerolog.Logger {
 	return zerolog.Ctx(ctx).With().
 		Str("service", ref.Service).
 		Int("replica", ref.Replica).
@@ -132,8 +132,8 @@ func newHookTargets(replicas []composemodel.ContainerRef, hook composemodel.Hook
 // failures on-error continue let through, and the first by the targets' order of those fail did
 // not, naming how many more; an interrupt outranks them.
 func runHooks(
-	ctx context.Context, control ContainerControl, phase model.HookPhase, targets []hookTarget,
-) (_ []model.FailedHook, err error) {
+	ctx context.Context, control ContainerControl, phase composemodel.HookPhase, targets []hookTarget,
+) (_ []composemodel.FailedHook, err error) {
 	if len(targets) == 0 {
 		return nil, nil
 	}
@@ -152,7 +152,7 @@ func runHooks(
 	wg.Wait()
 
 	var (
-		failedHooks []model.FailedHook
+		failedHooks []composemodel.FailedHook
 		failures    []*hookError
 	)
 	for _, runErr := range errs {
@@ -162,7 +162,7 @@ func runHooks(
 		case !errors.As(runErr, &hookErr):
 			// An interrupt: the command is being stopped, whatever the hooks did.
 			return nil, runErr
-		case hookErr.target.hook.OnError == model.HookOnErrorContinue:
+		case hookErr.target.hook.OnError == composeconfig.HookOnErrorContinue:
 			failedHooks = append(failedHooks, hookErr.newFailedHook())
 		default:
 			failures = append(failures, hookErr)
@@ -177,7 +177,7 @@ func runHooks(
 // runHook runs one hook in one replica, under its timeout, and reports how it went. It returns
 // the hook's failure, a *hookError, whatever its on-error; a replica not running is skipped with a
 // warning, and an interrupt is returned as it is.
-func runHook(ctx context.Context, control ContainerControl, phase model.HookPhase, target hookTarget) error {
+func runHook(ctx context.Context, control ContainerControl, phase composemodel.HookPhase, target hookTarget) error {
 	var (
 		ref  = target.ref
 		hook = target.hook
@@ -216,10 +216,10 @@ func runHook(ctx context.Context, control ContainerControl, phase model.HookPhas
 	case hookErr == nil:
 		step.End(nil)
 		return nil
-	case hook.OnError != model.HookOnErrorContinue:
+	case hook.OnError != composeconfig.HookOnErrorContinue:
 		step.Fail(string(newHookOutput(result)), hookErr)
 		return hookErr
-	case phase == model.HookPhasePreCapture:
+	case phase == composemodel.HookPhasePreCapture:
 		// The result says it: the record carries the failure.
 		step.WarnInResult(hookErr.Error() + "; continuing")
 	default:
@@ -231,7 +231,7 @@ func runHook(ctx context.Context, control ContainerControl, phase model.HookPhas
 
 // newHookError is how a hook that ran failed, nil when it exited 0: an exit, its own timeout, or
 // the daemon's error.
-func newHookError(phase model.HookPhase, target hookTarget, result composemodel.ExecResult, err error) *hookError {
+func newHookError(phase composemodel.HookPhase, target hookTarget, result composemodel.ExecResult, err error) *hookError {
 	switch {
 	case err == nil && result.ExitCode == 0:
 		return nil
@@ -280,7 +280,7 @@ func newExitReason(exitCode int, output []byte) string {
 
 // hookError is how one hook in one replica failed.
 type hookError struct {
-	phase  model.HookPhase
+	phase  composemodel.HookPhase
 	target hookTarget
 	// exitCode is nil for a hook that did not exit: it timed out, or the daemon failed it.
 	exitCode *int
@@ -299,8 +299,8 @@ func (e *hookError) Unwrap() error {
 }
 
 // newFailedHook is the record of the hook let through.
-func (e *hookError) newFailedHook() model.FailedHook {
-	return model.FailedHook{
+func (e *hookError) newFailedHook() composemodel.FailedHook {
+	return composemodel.FailedHook{
 		Service:   e.target.ref.Service,
 		Replica:   e.target.ref.Replica,
 		Container: e.target.ref.Name,

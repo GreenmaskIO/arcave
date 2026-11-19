@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
@@ -37,11 +38,11 @@ var (
 )
 
 // DemoVolume is the unit, in the form the mock tests address it by.
-func DemoVolume() model.Volume {
-	return model.Volume{
+func DemoVolume() composemodel.Volume {
+	return composemodel.Volume{
 		ObjectID: "volume-named-" + DemoVolumeName,
-		Backend:  model.SnapshotBackendFullCopy,
-		Named:    &model.VolumePropertiesNamed{VolumeName: DemoVolumeName},
+		Backend:  composeconfig.SnapshotBackendFullCopy,
+		Named:    &composemodel.VolumePropertiesNamed{VolumeName: DemoVolumeName},
 	}
 }
 
@@ -145,15 +146,15 @@ func (m *MockCodec) Parse(ctx context.Context, spec []byte) (*types.Project, err
 
 type MockRegistry struct{ mock.Mock }
 
-func (m *MockRegistry) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
+func (m *MockRegistry) New(spec composemodel.BackendSpec) (composemodel.VolumeSnapshotBackend, error) {
 	args := m.Called(spec)
-	backend, _ := args.Get(0).(model.VolumeSnapshotBackend)
+	backend, _ := args.Get(0).(composemodel.VolumeSnapshotBackend)
 	return backend, args.Error(1)
 }
 
 // MatchSpec matches a backend built for objectID over store.
 func MatchSpec(store storages.Storager, objectID string) any {
-	return mock.MatchedBy(func(spec model.BackendSpec) bool {
+	return mock.MatchedBy(func(spec composemodel.BackendSpec) bool {
 		return spec.Store == store && spec.Volume.ObjectID == objectID
 	})
 }

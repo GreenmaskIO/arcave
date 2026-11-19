@@ -36,10 +36,10 @@ func (s *Printer) formatSavepoint(savepoint model.Savepoint) string {
 	if savepoint.IsSafetySnapshot() {
 		noun = "Safety snapshot "
 	}
-	title := noun + s.formatSavepointTitle(savepoint, "15:04:05") + " · stored " + formatSize(newStoredBytes(savepoint))
+	title := noun + s.formatSavepointTitle(savepoint, "15:04:05") + " · stored " + formatSize(savepoint.Summary.StoredBytes())
 	b.WriteString(styleTitle.Render(title) + "\n")
 	b.WriteString(formatCaptureRows([]string{"count", "size", "stored"}, newCaptureRows(savepoint)))
-	b.WriteString(formatNotices(savepoint.Notices()))
+	b.WriteString(formatNotices(savepoint.Summary.Notices))
 	b.WriteString("\n  roll back:  " + s.newCommand(true, "rollback", newSavepointRef(savepoint)) + "\n")
 	return b.String()
 }
@@ -60,10 +60,10 @@ func (s *Printer) formatSavepointTable(savepoints []model.Savepoint) string {
 			formatSavepointName(savepoint),
 			savepoint.ID.String(),
 			s.formatTime(savepoint.CreatedAt),
-			strconv.Itoa(len(savepoint.Stats)),
-			strconv.Itoa(len(savepoint.WritableLayers)),
-			formatSize(newStoredBytes(savepoint)),
-			formatZeroDash(len(savepoint.Notices())),
+			strconv.Itoa(savepoint.Summary.Unit(model.UnitKindVolumes).Count),
+			strconv.Itoa(savepoint.Summary.Unit(model.UnitKindLayers).Count),
+			formatSize(savepoint.Summary.StoredBytes()),
+			formatZeroDash(len(savepoint.Summary.Notices)),
 		})
 	}
 	return formatTable([]string{"NAME", "ID", "CREATED", "VOLUMES", "LAYERS", "STORED", "NOT COVERED"}, rows)
@@ -73,16 +73,7 @@ func (s *Printer) formatSavepointTable(savepoints []model.Savepoint) string {
 func (s *Printer) formatRollback(response model.RollbackResult) string {
 	var b strings.Builder
 	b.WriteString(styleTitle.Render(s.formatRolledBackTo(response.RolledBackTo)) + "\n")
-	rows := []captureRow{{
-		kind:  "volumes",
-		cells: []string{strconv.Itoa(len(response.Restored))},
-	}}
-	if len(response.WritableLayers) > 0 {
-		rows = append(rows, captureRow{
-			kind:  "layers",
-			cells: []string{strconv.Itoa(len(response.WritableLayers))},
-		})
-	}
+	rows := newRestoreRows(response.Restored)
 	// Whether one was taken, not which: its id is in the undo command below.
 	safety := "none"
 	if response.SafetySnapshot != "" {
@@ -92,7 +83,7 @@ func (s *Printer) formatRollback(response model.RollbackResult) string {
 	// Below the counts, not aligned with them: a word is no number.
 	b.WriteString(formatCaptureLine("safety", []string{safety}, []int{0}) + "\n")
 
-	b.WriteString(formatNotices(response.Notices()))
+	b.WriteString(formatNotices(response.Restored.Notices))
 	if response.SafetySnapshot != "" {
 		b.WriteString("\n  undo it:  " + s.newCommand(true, "rollback", response.SafetySnapshot.String()) + "\n")
 	}
@@ -140,30 +131,24 @@ func (s *Printer) formatSavepointTitle(savepoint model.Savepoint, layout string)
 	return strings.Join(parts, " · ")
 }
 
-// newCaptureRows sums up a savepoint by kind of unit: volumes always, layers and images when it
-// holds any. Kinds are not totalled: a layer's archive holds its image's layers.
+// newCaptureRows is a savepoint's tally by kind of unit, in the order the provider gave it. Kinds
+// are not totalled: a layer's archive holds its image's layers.
 func newCaptureRows(savepoint model.Savepoint) []captureRow {
-	var size, stored int64
-	for _, stat := range savepoint.Stats {
-		size += stat.SizeBytes
-		stored += stat.StoredBytes
+	rows := make([]captureRow, 0, len(savepoint.Summary.Units))
+	for _, unit := range savepoint.Summary.Units {
+		rows = append(rows, newCaptureRow(unit.Kind, unit.Count, unit.SizeBytes, unit.StoredBytes))
 	}
-	rows := []captureRow{newCaptureRow("volumes", len(savepoint.Stats), size, stored)}
-	if len(savepoint.WritableLayers) > 0 {
-		var layerSize, layerStored int64
-		for _, layer := range savepoint.WritableLayers {
-			layerSize += layer.SizeBytes
-			layerStored += layer.StoredBytes
-		}
-		rows = append(rows, newCaptureRow("layers", len(savepoint.WritableLayers), layerSize, layerStored))
-	}
-	if len(savepoint.Images) > 0 {
-		var imageSize, imageStored int64
-		for _, image := range savepoint.Images {
-			imageSize += image.SizeBytes
-			imageStored += image.StoredBytes
-		}
-		rows = append(rows, newCaptureRow("images", len(savepoint.Images), imageSize, imageStored))
+	return rows
+}
+
+// newRestoreRows counts what a build restored by kind of unit, in the order the provider gave it.
+func newRestoreRows(restored model.RestoreSummary) []captureRow {
+	rows := make([]captureRow, 0, len(restored.Units))
+	for _, unit := range restored.Units {
+		rows = append(rows, captureRow{
+			kind:  unit.Kind,
+			cells: []string{strconv.Itoa(unit.Count)},
+		})
 	}
 	return rows
 }
@@ -238,21 +223,6 @@ func formatSavepointName(savepoint model.Savepoint) string {
 // snapshot was taken, by its full id when it had no name.
 func formatTakenBefore(target model.SavepointRef) string {
 	return "before rollback to " + target.String()
-}
-
-// newStoredBytes is what the savepoint wrote to the store, every kind of unit together.
-func newStoredBytes(savepoint model.Savepoint) int64 {
-	var stored int64
-	for _, stat := range savepoint.Stats {
-		stored += stat.StoredBytes
-	}
-	for _, layer := range savepoint.WritableLayers {
-		stored += layer.StoredBytes
-	}
-	for _, image := range savepoint.Images {
-		stored += image.StoredBytes
-	}
-	return stored
 }
 
 func formatZeroDash(n int) string {

@@ -17,9 +17,10 @@ package layertag
 import (
 	"context"
 	"errors"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"strings"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -63,9 +64,9 @@ func TestCollector_Find(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	got := stat.(model.DockerLayerTagStat)
+	got := stat.(composemodel.DockerLayerTagStat)
 	assert.Equal(t, []model.GarbageOp{
-		{Action: model.GarbageActionUntag, Target: string(unused), Reason: model.GarbageReasonUnusedTag},
+		{Action: composemodel.GarbageActionUntag, Target: string(unused), Reason: composemodel.GarbageReasonUnusedTag},
 	}, got.Ops)
 	assert.Empty(t, got.Skipped)
 	assert.Empty(t, got.Unjudged)

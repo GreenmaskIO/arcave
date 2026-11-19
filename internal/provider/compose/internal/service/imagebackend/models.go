@@ -15,7 +15,7 @@
 package imagebackend
 
 import (
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // manifestName is the one file in a capture arcave writes rather than copies.
@@ -42,9 +42,9 @@ const (
 // Manifest describes one stored image: what it reassembles into, the form it was
 // stored in, and its members in the order they are to be read back.
 type Manifest struct {
-	ImageID model.ImageDigestID `json:"image_id"`
-	Format  Format              `json:"format"`
-	Members []Member            `json:"members"`
+	ImageID composemodel.ImageDigestID `json:"image_id"`
+	Format  Format                     `json:"format"`
+	Members []Member                   `json:"members"`
 }
 
 // Member is one part of a stored image, under the name it is stored by.

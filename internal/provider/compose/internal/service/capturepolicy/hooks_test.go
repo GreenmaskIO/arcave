@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
@@ -29,7 +29,7 @@ import (
 var hookDefaults = func() CaptureDefaults {
 	withHooks := defaults
 	withHooks.HookTimeout = time.Minute
-	withHooks.HookOnError = model.HookOnErrorFail
+	withHooks.HookOnError = composeconfig.HookOnErrorFail
 	return withHooks
 }()
 
@@ -50,7 +50,7 @@ func TestResolve_Hooks(t *testing.T) {
 			wantPre: &composemodel.Hook{
 				Command: []string{"pg_ctl", "checkpoint"},
 				Timeout: time.Minute,
-				OnError: model.HookOnErrorFail,
+				OnError: composeconfig.HookOnErrorFail,
 			},
 		},
 		{
@@ -59,7 +59,7 @@ func TestResolve_Hooks(t *testing.T) {
 			wantPost: &composemodel.Hook{
 				Command: []string{"/app/bin/maintenance", "off"},
 				Timeout: time.Minute,
-				OnError: model.HookOnErrorFail,
+				OnError: composeconfig.HookOnErrorFail,
 			},
 		},
 		{
@@ -78,13 +78,13 @@ func TestResolve_Hooks(t *testing.T) {
 				Command: []string{"on"},
 				User:    "postgres",
 				Timeout: 2 * time.Minute,
-				OnError: model.HookOnErrorContinue,
+				OnError: composeconfig.HookOnErrorContinue,
 			},
 			wantPost: &composemodel.Hook{
 				Command: []string{"off"},
 				User:    "1000:1000",
 				Timeout: 5 * time.Second,
-				OnError: model.HookOnErrorFail,
+				OnError: composeconfig.HookOnErrorFail,
 			},
 		},
 		{
@@ -95,7 +95,7 @@ func TestResolve_Hooks(t *testing.T) {
 			wantPre: &composemodel.Hook{
 				Command: []string{"sh", "-c", `psql -U "$POSTGRES_USER" -c CHECKPOINT; echo done`},
 				Timeout: time.Minute,
-				OnError: model.HookOnErrorFail,
+				OnError: composeconfig.HookOnErrorFail,
 			},
 		},
 	}

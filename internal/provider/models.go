@@ -15,6 +15,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -57,11 +58,15 @@ type CaptureRequest struct {
 
 // PreparedSummary is what building a prepared savepoint restores.
 type PreparedSummary struct {
-	// Volumes and WritableLayers are what building it restores.
-	Volumes        []model.Volume
-	WritableLayers []model.WritableLayerRestoreResult
+	// Restored is what the provider sums the build up as, the notices the result carries included.
+	Restored model.RestoreSummary
+	// Detail is the provider's body of what the build restores.
+	Detail json.RawMessage
 	// Overwritten names what outlived an absent workload and the build overwrites.
 	Overwritten []string
+	// Warnings say what the build overwrites that nothing holds, to warn of before it starts; none
+	// when recovering.
+	Warnings []model.Notice
 }
 
 // ObservedWorkload is a workload's replicas as the daemon runs them: what a provider's Observe

@@ -39,17 +39,6 @@ type RollbackRequest struct {
 	SkipSafetySnapshot bool
 }
 
-// LeftoverVolumesPolicy is what a rollback does with a volume that outlived its compose
-// project's containers.
-type LeftoverVolumesPolicy string
-
-const (
-	// LeftoverVolumesOverwrite restores over the volume and warns, naming it.
-	LeftoverVolumesOverwrite LeftoverVolumesPolicy = "overwrite"
-	// LeftoverVolumesRefuse fails the rollback before anything is created.
-	LeftoverVolumesRefuse LeftoverVolumesPolicy = "refuse"
-)
-
 // Validate refuses a request whose selector is nil or zero-valued.
 func (m RollbackRequest) Validate() error {
 	switch {

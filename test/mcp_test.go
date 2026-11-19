@@ -449,7 +449,7 @@ func TestMCP_CDCOverStdio(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendCDC)
+	writeStorageConfig(t, env.projectRoot, env.storage, string(composeconfig.SnapshotBackendCDC))
 	cs := newMCPClient(t, env)
 	compose := env.composeProject
 	compose.write(t, compose.replicas(t)[0], "v1")
@@ -465,11 +465,11 @@ func TestMCP_CDCOverStdio(t *testing.T) {
 	})
 	collected := callTool[mcpGCReports](t, cs, "gc", map[string]any{
 		"dry_run": false,
-		"kinds":   []string{string(model.GarbageDataKindDeduplicatedVolumes)},
+		"kinds":   []string{"deduplicated-volumes"},
 	})
 
 	// Assert
-	assert.Equal(t, []model.SnapshotBackendKind{model.SnapshotBackendCDC}, statKinds(v1))
+	assert.Equal(t, []string{"cdc"}, statKinds(t, v1))
 	assert.Equal(t, v1.ID, rolledBack.RolledBackTo.ID)
 	assert.Equal(t, "v1", compose.read(t, compose.replicas(t)[0], daemontest.VolumeMarker), "the volume is back at v1")
 	require.Len(t, collected.Reports, 1)

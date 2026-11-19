@@ -95,6 +95,8 @@ func (f fakeSession) Savepoints(workload provider.WorkloadName) (provider.Savepo
 	}
 }
 
+func (f fakeSession) GarbageDataKinds() []model.GarbageDataKind { return nil }
+
 func (f fakeSession) FindGarbage(context.Context, []model.GarbageDataKind) []provider.Garbage {
 	return nil
 }

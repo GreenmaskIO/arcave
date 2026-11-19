@@ -21,7 +21,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 // StatePaused is the state of a container frozen, as the daemon reports it.
@@ -36,7 +36,7 @@ type Plan struct {
 
 	// What the capture takes: one backend per volume, the distinct images the captured
 	// services run on, and the writable layers, each with its backend.
-	Volumes        []model.VolumeSnapshotBackend
+	Volumes        []VolumeSnapshotBackend
 	Images         []ImageCaptureRequest
 	WritableLayers []WritableLayerCaptureRequest
 
@@ -45,7 +45,7 @@ type Plan struct {
 	// Containers are every replica, to name the ones a stop killed.
 	Containers []ContainerRef
 	// NotCovered is what the capture leaves out, as known before the stop.
-	NotCovered model.NotCovered
+	NotCovered NotCovered
 	// LabelsIgnored is why the capture follows the config and not the compose project's labels,
 	// which it could not read; nil when it reads them.
 	LabelsIgnored error
@@ -54,7 +54,7 @@ type Plan struct {
 // ServiceHold is how one service is held still and the replicas it was found with.
 type ServiceHold struct {
 	Service string
-	Mode    model.CaptureMode
+	Mode    composeconfig.CaptureMode
 	// Running replicas are the ones a hold acts on; Idle ones are already still.
 	Running []ContainerRef
 	Idle    []IdleReplica
@@ -81,17 +81,17 @@ func (h ServiceHold) PausedOnEntry() []ContainerRef {
 }
 
 // heldMode is the mode the service is held by; an unknown one stops it.
-func (h ServiceHold) heldMode() model.CaptureMode {
+func (h ServiceHold) heldMode() composeconfig.CaptureMode {
 	switch h.Mode {
-	case model.CaptureModePause, model.CaptureModeLive:
+	case composeconfig.CaptureModePause, composeconfig.CaptureModeLive:
 		return h.Mode
 	default:
-		return model.CaptureModeStop
+		return composeconfig.CaptureModeStop
 	}
 }
 
 // ServicesHeldBy are the services of the plan held by mode.
-func (p Plan) ServicesHeldBy(mode model.CaptureMode) []ServiceHold {
+func (p Plan) ServicesHeldBy(mode composeconfig.CaptureMode) []ServiceHold {
 	var held []ServiceHold
 	for _, service := range p.Services {
 		if service.heldMode() == mode {
@@ -103,8 +103,8 @@ func (p Plan) ServicesHeldBy(mode model.CaptureMode) []ServiceHold {
 
 // NewNotCovered is what a capture of plan leaves out, beside the containers the stop killed and the
 // pre-capture hooks let through; nil when it leaves out nothing.
-func (p Plan) NewNotCovered(killed []string, failedHooks []model.FailedHook) *model.NotCovered {
-	// A copy of the plan's whole, so a field model.NotCovered gains is carried with no line here.
+func (p Plan) NewNotCovered(killed []string, failedHooks []FailedHook) *NotCovered {
+	// A copy of the plan's whole, so a field NotCovered gains is carried with no line here.
 	notCovered := p.NotCovered
 	notCovered.KilledContainers = p.newKilledContainers(killed)
 	notCovered.FailedHooks = failedHooks
@@ -115,13 +115,13 @@ func (p Plan) NewNotCovered(killed []string, failedHooks []model.FailedHook) *mo
 }
 
 // newKilledContainers names the replica behind each container id the stop killed.
-func (p Plan) newKilledContainers(ids []string) []model.KilledContainer {
-	var killedContainers []model.KilledContainer
+func (p Plan) newKilledContainers(ids []string) []KilledContainer {
+	var killedContainers []KilledContainer
 	for _, id := range ids {
-		killed := model.KilledContainer{Container: id}
+		killed := KilledContainer{Container: id}
 		if i := slices.IndexFunc(p.Containers, func(c ContainerRef) bool { return c.ID == id }); i >= 0 {
 			ref := p.Containers[i]
-			killed = model.KilledContainer{
+			killed = KilledContainer{
 				Service:   ref.Service,
 				Replica:   ref.Replica,
 				Container: ref.Name,

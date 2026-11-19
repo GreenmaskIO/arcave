@@ -17,6 +17,7 @@ package cli
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -502,9 +503,6 @@ func (h *MCPHandler) garbageCollectMCP(
 		DryRun:    in.DryRun == nil || *in.DryRun,
 		DataKinds: in.Kinds,
 	}
-	if err := req.Validate(); err != nil {
-		return nil, model.GarbageCollectResult{}, err
-	}
 	svc, release, err := h.factories.GC(ctx, cmp.Or(in.Session, h.pinRef()))
 	if err != nil {
 		return nil, model.GarbageCollectResult{}, h.mcpError(err)
@@ -783,15 +781,20 @@ func (h *MCPHandler) MCPRun(ctx context.Context) error {
 func (h *MCPHandler) Server() *mcpsdk.Server {
 	srv := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "arcave", Version: serverVersion}, nil)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_create", Description: descCreate}, h.createSavepointMCP)
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_list", Description: descList}, h.listSavepointsMCP)
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_remove", Description: descRemove}, h.removeSavepointsMCP)
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "rollback", Description: descRollback}, h.rollbackMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_create", Description: descCreate,
+		OutputSchema: newOutputSchema[model.Savepoint]()}, h.createSavepointMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_list", Description: descList,
+		OutputSchema: newOutputSchema[listOutput]()}, h.listSavepointsMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_remove", Description: descRemove,
+		OutputSchema: newOutputSchema[model.RemoveResult]()}, h.removeSavepointsMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "rollback", Description: descRollback,
+		OutputSchema: newOutputSchema[model.RollbackResult]()}, h.rollbackMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "up",
 		Description: descUp,
 		// Forced, it drops the compose project.
-		Annotations: &mcpsdk.ToolAnnotations{DestructiveHint: utils.New(true)},
+		Annotations:  &mcpsdk.ToolAnnotations{DestructiveHint: utils.New(true)},
+		OutputSchema: newOutputSchema[model.UpResult](),
 	}, h.upMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:         "down",
@@ -833,10 +836,12 @@ func (h *MCPHandler) Server() *mcpsdk.Server {
 	return srv
 }
 
-// newOutputSchema infers T's schema with a session id as the string it marshals to: inferred from
-// its Go type, it would be an array, and the SDK would refuse every result.
+// newOutputSchema infers T's schema with a session id as the string it marshals to, and a
+// provider's body as the object it is: inferred from their Go types, both would be arrays, and the
+// SDK would refuse every result.
 func newOutputSchema[T any]() *jsonschema.Schema {
 	return utils.Must(jsonschema.For[T](&jsonschema.ForOptions{TypeSchemas: map[reflect.Type]*jsonschema.Schema{
 		reflect.TypeFor[model.SessionID](): {Type: "string", Format: "uuid"},
+		reflect.TypeFor[json.RawMessage](): {Type: "object"},
 	}}))
 }

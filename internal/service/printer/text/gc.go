@@ -34,7 +34,7 @@ type garbageTally struct {
 func (s *Printer) formatGarbageCollect(result model.GarbageCollectResult) string {
 	var (
 		b       strings.Builder
-		tallies = newGarbageTallies(result.Reports)
+		dataKinds, tallies = newGarbageTallies(result.Reports)
 		rows    [][]string
 		header  = []string{"  DATA", "FOUND", "SIZE"}
 		title   = "Garbage collected"
@@ -44,11 +44,8 @@ func (s *Printer) formatGarbageCollect(result model.GarbageCollectResult) string
 	} else {
 		header = append(header, "DELETED", "FREED")
 	}
-	for _, dataKind := range model.GarbageDataKinds() {
-		tally, ok := tallies[dataKind]
-		if !ok {
-			continue
-		}
+	for _, dataKind := range dataKinds {
+		tally := tallies[dataKind]
 		row := []string{"  " + string(dataKind), strconv.Itoa(tally.found), formatOptionalSize(tally.bytes)}
 		if !result.DryRun {
 			row = append(row, strconv.Itoa(tally.deleted), formatOptionalSize(tally.freed))
@@ -70,12 +67,16 @@ func (s *Printer) formatGarbageCollect(result model.GarbageCollectResult) string
 	return b.String()
 }
 
-// newGarbageTallies sums every report by its data kind.
-func newGarbageTallies(reports []model.GarbageReport) map[model.GarbageDataKind]garbageTally {
-	tallies := make(map[model.GarbageDataKind]garbageTally)
+// newGarbageTallies sums every report by its data kind, the kinds in the order the reports name them.
+func newGarbageTallies(reports []model.GarbageReport) ([]model.GarbageDataKind, map[model.GarbageDataKind]garbageTally) {
+	var (
+		dataKinds []model.GarbageDataKind
+		tallies   = make(map[model.GarbageDataKind]garbageTally)
+	)
 	for _, report := range reports {
 		tally, seen := tallies[report.DataKind]
 		if !seen {
+			dataKinds = append(dataKinds, report.DataKind)
 			tally = garbageTally{
 				bytes: new(int64),
 				freed: new(int64),
@@ -92,7 +93,7 @@ func newGarbageTallies(reports []model.GarbageReport) map[model.GarbageDataKind]
 			freed:   addSizes(tally.freed, freed),
 		}
 	}
-	return tallies
+	return dataKinds, tallies
 }
 
 // addSizes adds two sizes, unknown when either is.

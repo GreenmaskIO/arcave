@@ -37,10 +37,20 @@ func TestResults_JSONKeys(t *testing.T) {
 		{
 			name: "a whole rollback",
 			result: RollbackResult{
-				WritableLayers: []WritableLayerRestoreResult{{}},
+				Detail:         json.RawMessage(`{}`),
 				SafetySnapshot: "019e843e-1650-7000-8000-000000000000",
 			},
-			want: []string{"rolled_back_to", "restored", "writable_layers", "safety_snapshot"},
+			want: []string{"rolled_back_to", "restored", "detail", "safety_snapshot"},
+		},
+		{
+			name:   "a savepoint as read carries its provider, summary and body",
+			result: Savepoint{Provider: "compose", Summary: SavepointSummary{Units: []UnitTally{{}}}, Detail: json.RawMessage(`{}`)},
+			want:   []string{"id", "name", "description", "created_at", "provider", "summary", "detail"},
+		},
+		{
+			name:   "a record on disk carries no summary",
+			result: Savepoint{Provider: "compose", Detail: json.RawMessage(`{}`)},
+			want:   []string{"id", "name", "description", "created_at", "provider", "detail"},
 		},
 		{
 			name:   "a cold rollback names the leftover volumes it overwrote",
@@ -51,21 +61,6 @@ func TestResults_JSONKeys(t *testing.T) {
 			name:   "a savepoint ref names an unnamed savepoint all the same",
 			result: SavepointRef{ID: "019e843e-1650-7000-8000-000000000000"},
 			want:   []string{"id", "name"},
-		},
-		{
-			name:   "a failed hook without an exit code omits it",
-			result: FailedHook{},
-			want:   []string{"service", "replica", "container", "hook", "error"},
-		},
-		{
-			name:   "a failed hook that exited",
-			result: FailedHook{ExitCode: new(3)},
-			want:   []string{"service", "replica", "container", "hook", "exit_code", "error"},
-		},
-		{
-			name:   "not covered by a failed hook",
-			result: NotCovered{FailedHooks: []FailedHook{{}}},
-			want:   []string{"failed_hooks"},
 		},
 		{
 			name:   "a remove",

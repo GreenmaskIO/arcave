@@ -27,20 +27,21 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // demoWritableLayer is what the backend reports for demoContainerRef's layer.
-func demoWritableLayer() model.WritableLayer {
-	return model.WritableLayer{
+func demoWritableLayer() composemodel.WritableLayer {
+	return composemodel.WritableLayer{
 		Service:          composetest.DemoService,
 		Replica:          1,
 		ContainerID:      composetest.DemoContainerID,
 		ContainerName:    composetest.DemoContainerName(1),
 		CommittedImageID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		ImageBackend:     model.ImageBackendDedupCopy,
+		ImageBackend:     composeconfig.ImageBackendDedupCopy,
 		UpstreamImageID:  composetest.DemoUpstreamID,
 		UpstreamImageRef: composetest.DemoBaseImage,
 		SizeBytes:        4096,
@@ -48,10 +49,10 @@ func demoWritableLayer() model.WritableLayer {
 }
 
 // demoImagePlan captures one volume, one image and one writable layer.
-func demoImagePlan(backend model.VolumeSnapshotBackend) composemodel.Plan {
+func demoImagePlan(backend composemodel.VolumeSnapshotBackend) composemodel.Plan {
 	return composemodel.Plan{
 		Spec:           demoSpecBytes,
-		Volumes:        []model.VolumeSnapshotBackend{backend},
+		Volumes:        []composemodel.VolumeSnapshotBackend{backend},
 		Images:         []composemodel.ImageCaptureRequest{composetest.DemoImageCaptureRequest()},
 		WritableLayers: []composemodel.WritableLayerCaptureRequest{{Container: composetest.DemoContainerRef()}},
 		Containers:     []composemodel.ContainerRef{composetest.DemoContainerRef()},
@@ -66,7 +67,7 @@ func TestCapturer_Capture_CommitsTheImagesAndWritableLayers(t *testing.T) {
 		name           string
 		killed         []string
 		req            provider.CaptureRequest
-		wantNotCovered *model.NotCovered
+		wantNotCovered *composemodel.NotCovered
 	}{
 		{
 			name: "a savepoint",
@@ -79,7 +80,7 @@ func TestCapturer_Capture_CommitsTheImagesAndWritableLayers(t *testing.T) {
 				Labels:      map[string]string{"team": "core"},
 				TakenBefore: target,
 			},
-			wantNotCovered: &model.NotCovered{KilledContainers: []model.KilledContainer{
+			wantNotCovered: &composemodel.NotCovered{KilledContainers: []composemodel.KilledContainer{
 				{Service: composetest.DemoService, Replica: 1, Container: "demo-db-1"},
 			}},
 		},
@@ -89,9 +90,9 @@ func TestCapturer_Capture_CommitsTheImagesAndWritableLayers(t *testing.T) {
 			// Arrange
 			var id model.SavepointID
 			backend := composetest.NewMockBackend(demoVolume())
-			stat := model.SnapshotStat{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy}
+			stat := composemodel.SnapshotStat{Volume: demoVolume(), Type: composeconfig.SnapshotBackendFullCopy}
 			snapshot := backend.On("Snapshot", mock.Anything, composetest.MatchValidSnapshotID()).
-				Run(func(args mock.Arguments) { id = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
+				Run(func(args mock.Arguments) { id = args.Get(1).(composemodel.BackendSnapshotRequest).SnapshotID }).
 				Return(stat, nil).Once()
 			images := &composetest.MockImageBackend{}
 			image := images.On("CaptureImage", mock.Anything, composetest.DemoImageCaptureRequest()).
@@ -106,10 +107,10 @@ func TestCapturer_Capture_CommitsTheImagesAndWritableLayers(t *testing.T) {
 			spec := repo.On("SaveSpec", mock.Anything,
 				mock.MatchedBy(func(specID model.SavepointID) bool { return specID == id }), demoSpecBytes).
 				Return(nil).Once()
-			var committed model.Savepoint
+			var committed composemodel.Savepoint
 			commit := repo.On("SaveSavepoint", mock.Anything,
-				mock.MatchedBy(func(savepoint model.Savepoint) bool { return savepoint.ID == id })).
-				Run(func(args mock.Arguments) { committed = args.Get(1).(model.Savepoint) }).
+				mock.MatchedBy(func(savepoint composemodel.Savepoint) bool { return savepoint.Header.ID == id })).
+				Run(func(args mock.Arguments) { committed = args.Get(1).(composemodel.Savepoint) }).
 				Return(nil).Once()
 			mock.InOrder(snapshot, image, layer, spec, commit)
 			svc := New(Deps{
@@ -122,17 +123,21 @@ func TestCapturer_Capture_CommitsTheImagesAndWritableLayers(t *testing.T) {
 
 			// Assert
 			require.NoError(t, err)
-			want := model.Savepoint{
-				ID:                    id,
-				Name:                  tt.req.Name,
-				Labels:                tt.req.Labels,
-				CreatedAt:             savepoint.CreatedAt,
-				TakenBeforeRollbackTo: tt.req.TakenBefore,
-				Stats:                 []model.SnapshotStat{stat},
-				Images:                []model.Image{demoImage()},
-				WritableLayers:        []model.WritableLayer{demoWritableLayer()},
-				Spec:                  &model.SpecRef{Format: model.SpecFormatComposeYAML},
-				NotCovered:            tt.wantNotCovered,
+			want := composemodel.Savepoint{
+				Header: model.Savepoint{
+					ID:                    id,
+					Name:                  tt.req.Name,
+					Labels:                tt.req.Labels,
+					CreatedAt:             savepoint.Header.CreatedAt,
+					TakenBeforeRollbackTo: tt.req.TakenBefore,
+				},
+				Detail: composemodel.SavepointDetail{
+					Stats:          []composemodel.SnapshotStat{stat},
+					Images:         []composemodel.Image{demoImage()},
+					WritableLayers: []composemodel.WritableLayer{demoWritableLayer()},
+					Spec:           &composemodel.SpecRef{Format: composemodel.SpecFormatComposeYAML},
+					NotCovered:     tt.wantNotCovered,
+				},
 			}
 			assert.Equal(t, want, savepoint)
 			assert.Equal(t, want, committed, "the record is what the caller gets")
@@ -169,15 +174,15 @@ func TestCapturer_Capture_FailedImageCaptureCommitsNothing(t *testing.T) {
 			var id model.SavepointID
 			backend := composetest.NewMockBackend(demoVolume())
 			backend.On("Snapshot", mock.Anything, composetest.MatchValidSnapshotID()).
-				Run(func(args mock.Arguments) { id = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
-				Return(model.SnapshotStat{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy}, nil).Once()
+				Run(func(args mock.Arguments) { id = args.Get(1).(composemodel.BackendSnapshotRequest).SnapshotID }).
+				Return(composemodel.SnapshotStat{Volume: demoVolume(), Type: composeconfig.SnapshotBackendFullCopy}, nil).Once()
 			images := &composetest.MockImageBackend{}
 			image := images.On("CaptureImage", mock.Anything, composetest.DemoImageCaptureRequest()).
 				Return(demoImage(), tt.imageErr).Once()
 			if tt.imageErr == nil {
 				layer := images.On("CaptureWritableLayer", mock.Anything,
 					mock.MatchedBy(func(req composemodel.WritableLayerCaptureRequest) bool { return req.SnapshotID == id })).
-					Return(model.WritableLayer{}, tt.layerErr).Once()
+					Return(composemodel.WritableLayer{}, tt.layerErr).Once()
 				mock.InOrder(image, layer)
 			}
 			repo := &composetest.MockSavepointRepo{}
@@ -209,8 +214,8 @@ func TestCapturer_Capture_ImageNotStoredWarns(t *testing.T) {
 	repo := &composetest.MockSavepointRepo{}
 	repo.On("SaveSpec", mock.Anything, mock.MatchedBy(func(id model.SavepointID) bool { return id.Validate() == nil }), demoSpecBytes).
 		Return(nil).Once()
-	repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint model.Savepoint) bool {
-		return assert.ObjectsAreEqual([]model.Image{notStored}, savepoint.Images)
+	repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint composemodel.Savepoint) bool {
+		return assert.ObjectsAreEqual([]composemodel.Image{notStored}, savepoint.Detail.Images)
 	})).Return(nil).Once()
 	svc := New(Deps{
 		SavepointRepo: repo,
@@ -229,7 +234,7 @@ func TestCapturer_Capture_ImageNotStoredWarns(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, []model.Image{notStored}, savepoint.Images)
+	assert.Equal(t, []composemodel.Image{notStored}, savepoint.Detail.Images)
 	assert.Equal(t, []string{"not stored: a replica left out of the capture cannot be rebuilt from it"}, recorder.Msgs)
 	assert.Equal(t, []bool{true}, recorder.InResult)
 	images.AssertExpectations(t)

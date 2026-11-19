@@ -16,6 +16,7 @@ package workload
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -28,6 +29,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/sessionstore"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
@@ -50,7 +52,7 @@ func TestLive_PlanCapture_RestoringRecord(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange: a refusal plans nothing, so the assembler carries no expectation.
 			repo := &composetest.MockSavepointRepo{}
-			repo.On("LoadSavepoints", mock.Anything, []model.SavepointID{record.ID}).Return(nil, tt.readErr).Once()
+			repo.On("LoadSavepoints", mock.Anything, []model.SavepointID{record.Header.ID}).Return(nil, tt.readErr).Once()
 			assembler := &composetest.MockAssembler{}
 			svc := newComposeWorkload(Deps{
 				SavepointRepo:    repo,
@@ -61,7 +63,7 @@ func TestLive_PlanCapture_RestoringRecord(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			plan, err := live.PlanCapture(ctx, provider.CaptureOptions{Restoring: record.ID})
+			plan, err := live.PlanCapture(ctx, provider.CaptureOptions{Restoring: record.Header.ID})
 
 			// Assert
 			require.ErrorIs(t, err, tt.wantErr)
@@ -79,10 +81,10 @@ func TestLive_PlanCapture_RestoringRecord(t *testing.T) {
 func TestLive_PrepareSavepoint(t *testing.T) {
 	errLoad := errors.New("daemon refused the archive")
 	noSpec := composetest.DemoRecordWithImages()
-	noSpec.Spec = nil
+	noSpec.Detail.Spec = nil
 	tests := []struct {
 		name      string
-		savepoint model.Savepoint
+		savepoint composemodel.Savepoint
 		found     bool
 		loadErr   error
 		wantErr   error
@@ -96,11 +98,13 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			repo := &composetest.MockSavepointRepo{}
-			var found []model.Savepoint
+			var found []composemodel.Savepoint
 			if tt.found {
-				found = []model.Savepoint{tt.savepoint}
+				found = []composemodel.Savepoint{
+					tt.savepoint,
+				}
 			}
-			calls := []*mock.Call{repo.On("LoadSavepoints", mock.Anything, []model.SavepointID{tt.savepoint.ID}).Return(found, nil).Once()}
+			calls := []*mock.Call{repo.On("LoadSavepoints", mock.Anything, []model.SavepointID{tt.savepoint.Header.ID}).Return(found, nil).Once()}
 			store := composetest.NewDirStore(t)
 			registry := &composetest.MockRegistry{}
 			images := &composetest.MockImageBackend{}
@@ -108,12 +112,12 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 			if tt.found {
 				calls = append(calls, registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(composetest.DemoVolume()), nil).Once())
 			}
-			if tt.found && tt.savepoint.Spec != nil {
+			if tt.found && tt.savepoint.Detail.Spec != nil {
 				calls = append(calls,
-					repo.On("LoadSpec", mock.Anything, tt.savepoint.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
+					repo.On("LoadSpec", mock.Anything, tt.savepoint.Header.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
 					codec.On("Parse", mock.Anything, composetest.DemoTargetSpecBytes).Return(composetest.DemoTargetSpec, nil).Once(),
 					images.On("RestoreWritableLayer", mock.Anything, composemodel.WritableLayerRestoreRequest{
-						SnapshotID: tt.savepoint.ID, Layer: composetest.DemoWritableLayer(), Tag: composetest.DemoRestoredTag(1),
+						SnapshotID: tt.savepoint.Header.ID, Layer: composetest.DemoWritableLayer(), Tag: composetest.DemoRestoredTag(1),
 					}).Return(composetest.DemoWritableLayerRestoreResult(), tt.loadErr).Once())
 			}
 			mock.InOrder(calls...)
@@ -129,7 +133,7 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			prepared, err := live.PrepareSavepoint(ctx, tt.savepoint.ID, provider.PrepareOptions{})
+			prepared, err := live.PrepareSavepoint(ctx, tt.savepoint.Header.ID, provider.PrepareOptions{})
 
 			// Assert
 			if tt.wantErr != nil {
@@ -140,8 +144,10 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 				target := prepared.(preparedSavepoint)
 				assert.Equal(t, composetest.DemoRestoredTag(1), target.Project.Services[composetest.DemoService].Image)
 				assert.Equal(t, types.PullPolicyNever, target.Project.Services[composetest.DemoService].PullPolicy)
-				assert.Equal(t, []model.WritableLayerRestoreResult{composetest.DemoWritableLayerRestoreResult()}, prepared.Summary().WritableLayers)
-				assert.Equal(t, []model.Volume{composetest.DemoVolume()}, prepared.Summary().Volumes)
+				assert.Equal(t, composemodel.RestoreDetail{
+					Volumes:        []composemodel.Volume{composetest.DemoVolume()},
+					WritableLayers: []composemodel.WritableLayerRestoreResult{composetest.DemoWritableLayerRestoreResult()},
+				}, restoreDetailOf(t, prepared.Summary()))
 			}
 			repo.AssertExpectations(t)
 			registry.AssertExpectations(t)
@@ -156,14 +162,14 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 func TestLive_PrepareSavepoint_LeftoverVolumes(t *testing.T) {
 	tests := []struct {
 		name       string
-		policy     model.LeftoverVolumesPolicy
+		policy     composeconfig.LeftoverVolumesPolicy
 		recovering bool
 		wantErr    error
 	}{
 		{name: "the default overwrites", wantErr: nil},
-		{name: "overwrite", policy: model.LeftoverVolumesOverwrite},
-		{name: "refuse", policy: model.LeftoverVolumesRefuse, wantErr: model.ErrLeftoverVolumes},
-		{name: "refuse, but a recovery", policy: model.LeftoverVolumesRefuse, recovering: true},
+		{name: "overwrite", policy: composeconfig.LeftoverVolumesOverwrite},
+		{name: "refuse", policy: composeconfig.LeftoverVolumesRefuse, wantErr: composemodel.ErrLeftoverVolumes},
+		{name: "refuse, but a recovery", policy: composeconfig.LeftoverVolumesRefuse, recovering: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -178,7 +184,7 @@ func TestLive_PrepareSavepoint_LeftoverVolumes(t *testing.T) {
 				mock.InOrder(
 					read,
 					registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(composetest.DemoVolume()), nil).Once(),
-					repo.On("LoadSpec", mock.Anything, record.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
+					repo.On("LoadSpec", mock.Anything, record.Header.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
 					codec.On("Parse", mock.Anything, composetest.DemoTargetSpecBytes).Return(composetest.DemoTargetSpec, nil).Once(),
 				)
 			}
@@ -194,15 +200,24 @@ func TestLive_PrepareSavepoint_LeftoverVolumes(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			prepared, err := live.PrepareSavepoint(ctx, record.ID, provider.PrepareOptions{Recovering: tt.recovering})
+			prepared, err := live.PrepareSavepoint(ctx, record.Header.ID, provider.PrepareOptions{Recovering: tt.recovering})
 
 			// Assert
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
-				assert.EqualError(t, err, model.ErrLeftoverVolumes.Error()+": demo_db")
+				assert.EqualError(t, err, composemodel.ErrLeftoverVolumes.Error()+": demo_db")
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, []string{"demo_db"}, prepared.Summary().Overwritten)
+				summary := prepared.Summary()
+				assert.Equal(t, []string{"demo_db"}, summary.Overwritten)
+				if tt.recovering {
+					assert.Empty(t, summary.Warnings, "a recovery overwrites its own partial writes")
+					assert.Empty(t, summary.Restored.Notices)
+				} else {
+					want := composemodel.NewLeftoverVolumeNotices([]string{"demo_db"})
+					assert.Equal(t, want, summary.Warnings)
+					assert.Equal(t, want, summary.Restored.Notices)
+				}
 			}
 			repo.AssertExpectations(t)
 			registry.AssertExpectations(t)
@@ -288,4 +303,12 @@ func TestLive_Teardown(t *testing.T) {
 			runner.AssertExpectations(t)
 		})
 	}
+}
+
+// restoreDetailOf is the body of what building prepared restores, as summary carries it.
+func restoreDetailOf(t *testing.T, summary provider.PreparedSummary) composemodel.RestoreDetail {
+	t.Helper()
+	var detail composemodel.RestoreDetail
+	require.NoError(t, json.Unmarshal(summary.Detail, &detail))
+	return detail
 }

@@ -41,12 +41,14 @@ var (
 	statusFeat      = model.Session{ID: model.SessionID{0x01, 0x9a, 0x70, 0, 0, 0, 0x70, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x01}, Name: "feat"}
 	statusFeatTwin  = model.Session{ID: model.SessionID{0x01, 0x9a, 0x70, 0, 0, 0, 0x70, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x02}, Name: "feat"}
 	statusDeployed  = model.Savepoint{
-		ID:             "019e843e-1650-7000-8000-000000000000",
-		Name:           "before-migration",
-		Description:    "the schema before 0042",
-		CreatedAt:      time.Date(2026, 11, 6, 19, 41, 0, 0, time.UTC),
-		Stats:          []model.SnapshotStat{{Volume: demoVolume()}},
-		WritableLayers: []model.WritableLayer{demoWritableLayer()},
+		ID:          "019e843e-1650-7000-8000-000000000000",
+		Name:        "before-migration",
+		Description: "the schema before 0042",
+		CreatedAt:   time.Date(2026, 11, 6, 19, 41, 0, 0, time.UTC),
+		Summary: model.SavepointSummary{
+			Units:    []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1}, {Kind: model.UnitKindLayers, Count: 1}},
+			Replicas: []model.ReplicaHolding{{Service: demoService, Replica: 1, Held: []string{model.ReplicaHeldLayer}}},
+		},
 	}
 	statusNewer = model.Savepoint{
 		ID:        "019e9000-0000-7000-8000-000000000000",
@@ -395,16 +397,23 @@ func TestService_Status(t *testing.T) {
 	twoReplicas := newStatusDeployment(statusDeployed, model.DefaultSessionRecord)
 	twoReplicas.ServiceReplicas[demoService] = []int{1, 2}
 	twoLayers := statusDeployed
-	secondLayer := demoWritableLayer()
-	secondLayer.Replica, secondLayer.ContainerName = 2, "demo-db-2"
-	twoLayers.WritableLayers = []model.WritableLayer{demoWritableLayer(), secondLayer}
-	leftOut := statusDeployed
-	leftOut.NotCovered = &model.NotCovered{
-		Mounts: []model.SkippedVolume{
-			{Service: demoService, Target: "/cache", Volume: "demo_cache", Reason: model.SkipReasonExcluded},
-			{Service: demoService, Target: "/tmp", Reason: model.SkipReasonTmpfs},
+	twoLayers.Summary = model.SavepointSummary{
+		Units: []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1}, {Kind: model.UnitKindLayers, Count: 2}},
+		Replicas: []model.ReplicaHolding{
+			{Service: demoService, Replica: 1, Held: []string{model.ReplicaHeldLayer}},
+			{Service: demoService, Replica: 2, Held: []string{model.ReplicaHeldLayer}},
 		},
-		WritableLayers: []model.SkippedWritableLayer{{Service: demoService, Replica: 1, Reason: model.SkipReasonExcluded}},
+	}
+	leftOut := statusDeployed
+	leftOut.Summary = model.SavepointSummary{
+		Units: statusDeployed.Summary.Units,
+		Gaps: []model.Notice{
+			{Code: model.NoticeCodeVolumeNotRestored,
+				Message: "volume demo_cache was not in the savepoint: it holds what it held before the rollback"},
+			{Code: model.NoticeCodeLayerNotRestored,
+				Message: "db-1's writable layer was not in the savepoint: it started fresh from its image"},
+		},
+		Replicas: statusDeployed.Summary.Replicas,
 	}
 	safety := model.Savepoint{
 		ID:     "019e8500-0000-7000-8000-000000000000",
@@ -1119,33 +1128,6 @@ func TestNewRollbackInFlight_Recover(t *testing.T) {
 			assert.Equal(t, tt.want, inFlight.Recover)
 		})
 	}
-}
-
-func TestNewNotRestoredNotices(t *testing.T) {
-	// Arrange
-	notCovered := model.NotCovered{
-		Mounts: []model.SkippedVolume{
-			{Service: "db", Target: "/data", Volume: "demo_cache", Reason: model.SkipReasonExcluded},
-			{Service: "web", Target: "/srv", RawType: string(model.VolumeTypeBind), Reason: model.SkipReasonExcluded},
-			{Service: "web", Replica: 2, Target: "/tmp/x", Reason: model.SkipReasonExcluded},
-			{Service: "web", Target: "/run", Reason: model.SkipReasonTmpfs},
-		},
-		WritableLayers: []model.SkippedWritableLayer{{Service: "web", Replica: 1}},
-	}
-
-	// Act
-	notices := newNotRestoredNotices(notCovered)
-
-	// Assert
-	assert.Equal(t, []model.Notice{
-		{Code: model.NoticeCodeVolumeNotRestored,
-			Message: "volume demo_cache was not in the savepoint: it holds what it held before the rollback"},
-		{Code: model.NoticeCodeVolumeNotRestored,
-			Message: "web /srv was not in the savepoint: the host folder holds what it held before the rollback"},
-		{Code: model.NoticeCodeVolumeNotRestored, Message: "web-2 /tmp/x was not in the savepoint: it came back empty"},
-		{Code: model.NoticeCodeLayerNotRestored,
-			Message: "web-1's writable layer was not in the savepoint: it started fresh from its image"},
-	}, notices, "a mount nothing excluded, a tmpfs, holds nothing to restore")
 }
 
 func TestNewReplicaNotices(t *testing.T) {

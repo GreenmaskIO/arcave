@@ -40,7 +40,7 @@ func TestUpHandler_Up(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			res := model.UpResult{RolledBackTo: model.Savepoint{ID: id}, Restored: []model.Volume{}}
+			res := model.UpResult{RolledBackTo: model.Savepoint{ID: id}, Restored: model.RestoreSummary{}}
 			svc := &mockService{}
 			svc.On("Up", mock.Anything, tt.wantReq).Return(res, nil).Once()
 			output := &capturePrinter{}

@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"io/fs"
 	"reflect"
@@ -26,12 +25,12 @@ import (
 	"strings"
 	"testing"
 
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // A stdio run is restic behind stdio.sh, copied in with the container, its
@@ -96,12 +95,12 @@ func TestSnapshotter_Snapshot_Stdio(t *testing.T) {
 		Transport:      StdioTransport{Server: &mockServer{}},
 		RepositoryRoot: newStore(t),
 		Options:        defaultOptions(),
-	}).New(model.BackendSpec{Volume: demoVolume()})
+	}).New(composemodel.BackendSpec{Volume: demoVolume()})
 	require.NoError(t, err)
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	_, err = snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
+	_, err = snapshotter.Snapshot(ctx, composemodel.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 
 	// Assert
 	require.NoError(t, err)

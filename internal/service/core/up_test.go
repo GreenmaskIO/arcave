@@ -17,6 +17,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -88,7 +89,8 @@ func TestService_Up_BuildsOverNothing(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, record.ID, res.RolledBackTo.ID, "the newest savepoint")
-	assert.Equal(t, demoSummary().Volumes, res.Restored)
+	assert.Equal(t, demoSummary().Restored, res.Restored)
+	assert.Equal(t, demoSummary().Detail, res.Detail)
 	assert.Nil(t, res.Discarded)
 	inflight.AssertExpectations(t)
 	savepoints.AssertExpectations(t)
@@ -167,7 +169,7 @@ func TestService_Up_ForceFailure(t *testing.T) {
 		dropErr  error
 		buildErr error
 	}{
-		{name: "the drop fails", dropErr: &model.ComposeProjectLeftError{Volumes: []string{"demo_db"}, Cause: errBoom}},
+		{name: "the drop fails", dropErr: fmt.Errorf("%w: volumes demo_db: %w", model.ErrComposeProjectLeft, errBoom)},
 		{name: "the build fails", buildErr: errBoom},
 	}
 	for _, tt := range tests {

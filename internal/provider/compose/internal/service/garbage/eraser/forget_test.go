@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/gctest"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 	"github.com/greenmaskio/arcave/internal/utils"
@@ -41,10 +42,10 @@ func TestForgetEraser_Erase(t *testing.T) {
 		snapshot      = strings.Repeat("a", 64)
 		otherSnapshot = strings.Repeat("b", 64)
 		cacheSnapshot = strings.Repeat("c", 64)
-		dbOp          = model.GarbageOp{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", snapshot)}
-		cacheOp       = model.GarbageOp{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-cache", cacheSnapshot)}
-		otherDBOp     = model.GarbageOp{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", otherSnapshot)}
-		pruneOp       = model.GarbageOp{Action: model.GarbageActionForget, Target: cdc.NewRepositoryKey("volume-named-logs")}
+		dbOp          = model.GarbageOp{Action: composemodel.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", snapshot)}
+		cacheOp       = model.GarbageOp{Action: composemodel.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-cache", cacheSnapshot)}
+		otherDBOp     = model.GarbageOp{Action: composemodel.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", otherSnapshot)}
+		pruneOp       = model.GarbageOp{Action: composemodel.GarbageActionForget, Target: cdc.NewRepositoryKey("volume-named-logs")}
 		ops           = []model.GarbageOp{dbOp, cacheOp, otherDBOp}
 		zero          = utils.New(int64(0))
 	)
@@ -121,7 +122,7 @@ func TestForgetEraser_Erase(t *testing.T) {
 		},
 		{
 			name: "a target that is no snapshot key fails without a run",
-			ops:  []model.GarbageOp{{Action: model.GarbageActionForget, Target: "restic/volume-named-db/locks/x"}},
+			ops:  []model.GarbageOp{{Action: composemodel.GarbageActionForget, Target: "restic/volume-named-db/locks/x"}},
 			want: model.GarbageDeletion{Failed: []model.GarbageDeleteFailure{{
 				Target: "restic/volume-named-db/locks/x",
 				Error:  `"restic/volume-named-db/locks/x" is no restic snapshot key`,
@@ -129,7 +130,7 @@ func TestForgetEraser_Erase(t *testing.T) {
 		},
 		{
 			name: "a target that is no snapshot key fails beside the repositories that run",
-			ops:  []model.GarbageOp{{Action: model.GarbageActionForget, Target: "restic/volume-named-db/locks/x"}, dbOp, cacheOp},
+			ops:  []model.GarbageOp{{Action: composemodel.GarbageActionForget, Target: "restic/volume-named-db/locks/x"}, dbOp, cacheOp},
 			forgets: []forget{
 				{objectID: "volume-named-db", ids: []string{snapshot}, err: errors.New("repository is locked")},
 				{objectID: "volume-named-cache", ids: []string{cacheSnapshot}, freed: utils.New(int64(3))},
@@ -216,8 +217,8 @@ func TestForgetEraser_Erase_concurrent(t *testing.T) {
 		dbSnapshot    = strings.Repeat("a", 64)
 		cacheSnapshot = strings.Repeat("c", 64)
 		ops           = []model.GarbageOp{
-			{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", dbSnapshot)},
-			{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-cache", cacheSnapshot)},
+			{Action: composemodel.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", dbSnapshot)},
+			{Action: composemodel.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-cache", cacheSnapshot)},
 		}
 		started sync.WaitGroup
 	)
@@ -253,8 +254,8 @@ func TestForgetEraser_Erase_progress(t *testing.T) {
 	var (
 		dbSnapshot = strings.Repeat("a", 64)
 		ops        = []model.GarbageOp{
-			{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", dbSnapshot)},
-			{Action: model.GarbageActionForget, Target: cdc.NewRepositoryKey("volume-named-logs")},
+			{Action: composemodel.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", dbSnapshot)},
+			{Action: composemodel.GarbageActionForget, Target: cdc.NewRepositoryKey("volume-named-logs")},
 		}
 	)
 	tests := []struct {

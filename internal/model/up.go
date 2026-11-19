@@ -14,7 +14,10 @@
 
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // UpRequest carries what Up needs: the savepoint to bring up and whether what the daemon still
 // holds of the compose project may be dropped for it. No selector is the newest savepoint.
@@ -53,9 +56,11 @@ func (m UpRequest) Ref() string {
 
 // UpResult is what an up built, and the JSON 'arcave up' prints.
 type UpResult struct {
-	RolledBackTo   Savepoint                    `json:"rolled_back_to"`
-	Restored       []Volume                     `json:"restored"`
-	WritableLayers []WritableLayerRestoreResult `json:"writable_layers,omitempty"`
+	RolledBackTo Savepoint `json:"rolled_back_to"`
+	// Restored is what the provider sums the build up as: its units and what to say of it.
+	Restored RestoreSummary `json:"restored"`
+	// Detail is the provider's body of what the build restored.
+	Detail json.RawMessage `json:"detail,omitempty"`
 	// Discarded is what a forced up dropped first; absent when the daemon held nothing of the
 	// compose project.
 	Discarded *DiscardedResources `json:"discarded,omitempty"`

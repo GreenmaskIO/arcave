@@ -21,7 +21,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
@@ -30,38 +31,38 @@ func TestRegistry_New(t *testing.T) {
 	store := composetest.NewDirStore(t)
 	// Carries a mount: fullcopy resolves the one it captures through at build time,
 	// so a volume with no way in never gets as far as a backend instance.
-	volume := model.Volume{
+	volume := composemodel.Volume{
 		ObjectID: "volume-named-demo_pgdata",
-		Type:     model.VolumeTypeNamed,
-		Backend:  model.SnapshotBackendFullCopy,
-		Named: &model.VolumePropertiesNamed{
+		Type:     composemodel.VolumeTypeNamed,
+		Backend:  composeconfig.SnapshotBackendFullCopy,
+		Named: &composemodel.VolumePropertiesNamed{
 			VolumeName: "demo_pgdata",
-			UsedBy:     []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
+			UsedBy:     []composemodel.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
 		},
 	}
 
 	tests := []struct {
 		name     string
-		spec     model.BackendSpec
+		spec     composemodel.BackendSpec
 		wantType any
 		wantErr  error
 	}{
 		{
 			name:     "a full-copy volume builds the copy backend",
-			spec:     model.BackendSpec{Store: store, Volume: volume},
+			spec:     composemodel.BackendSpec{Store: store, Volume: volume},
 			wantType: &fullcopy.Snapshotter{},
 		},
 		{
 			name: "an unregistered backend is ErrUnknownBackend",
-			spec: model.BackendSpec{
+			spec: composemodel.BackendSpec{
 				Store:  store,
-				Volume: model.Volume{ObjectID: "volume-named-demo_pgdata", Backend: model.SnapshotBackendUnknown},
+				Volume: composemodel.Volume{ObjectID: "volume-named-demo_pgdata", Backend: composeconfig.SnapshotBackendUnknown},
 			},
 			wantErr: ErrUnknownBackend,
 		},
 		{
 			name:    "a spec with no store is refused",
-			spec:    model.BackendSpec{Volume: volume},
+			spec:    composemodel.BackendSpec{Volume: volume},
 			wantErr: ErrNoStore,
 		},
 	}
@@ -90,13 +91,13 @@ func TestRegistry_New(t *testing.T) {
 // expectation, so a dispatch fails the run where it happened.
 func TestRegistry_New_ValidatesBeforeTheFactory(t *testing.T) {
 	// Arrange
-	factory := &mockBackendFactory{kind: model.SnapshotBackendFullCopy}
+	factory := &mockBackendFactory{kind: composeconfig.SnapshotBackendFullCopy}
 	registry, err := NewRegistry(factory)
 	require.NoError(t, err)
 
 	// Act
-	_, err = registry.New(model.BackendSpec{
-		Volume: model.Volume{ObjectID: "volume-named-demo_pgdata", Backend: model.SnapshotBackendFullCopy},
+	_, err = registry.New(composemodel.BackendSpec{
+		Volume: composemodel.Volume{ObjectID: "volume-named-demo_pgdata", Backend: composeconfig.SnapshotBackendFullCopy},
 	})
 
 	// Assert
@@ -109,19 +110,19 @@ func TestRegistry_New_ValidatesBeforeTheFactory(t *testing.T) {
 func TestRegistry_New_PassesTheSpecThrough(t *testing.T) {
 	// Arrange
 	store := composetest.NewDirStore(t)
-	volume := model.Volume{ObjectID: "volume-named-demo_db", Backend: model.SnapshotBackendFullCopy}
+	volume := composemodel.Volume{ObjectID: "volume-named-demo_db", Backend: composeconfig.SnapshotBackendFullCopy}
 
-	factory := &mockBackendFactory{kind: model.SnapshotBackendFullCopy}
-	var got model.BackendSpec
-	factory.On("New", model.BackendSpec{Store: store, Volume: volume}).
+	factory := &mockBackendFactory{kind: composeconfig.SnapshotBackendFullCopy}
+	var got composemodel.BackendSpec
+	factory.On("New", composemodel.BackendSpec{Store: store, Volume: volume}).
 		Run(func(args mock.Arguments) {
-			got = args.Get(0).(model.BackendSpec)
+			got = args.Get(0).(composemodel.BackendSpec)
 		}).Return(composetest.NewMockBackend(volume), nil).Once()
 	registry, err := NewRegistry(factory)
 	require.NoError(t, err)
 
 	// Act
-	_, err = registry.New(model.BackendSpec{Store: store, Volume: volume})
+	_, err = registry.New(composemodel.BackendSpec{Store: store, Volume: volume})
 
 	// Assert
 	require.NoError(t, err)
@@ -141,17 +142,17 @@ func TestNew_DuplicateKind(t *testing.T) {
 	require.ErrorIs(t, err, ErrBackendAlreadyRegistered)
 }
 
-// mockBackendFactory doubles model.SnapshotBackendFactory; kind answers Kind()
+// mockBackendFactory doubles composemodel.SnapshotBackendFactory; kind answers Kind()
 // directly — the registry reads it at registration, not behavior to expect on.
 type mockBackendFactory struct {
 	mock.Mock
-	kind model.SnapshotBackendKind
+	kind composeconfig.SnapshotBackendKind
 }
 
-func (f *mockBackendFactory) Kind() model.SnapshotBackendKind { return f.kind }
+func (f *mockBackendFactory) Kind() composeconfig.SnapshotBackendKind { return f.kind }
 
-func (f *mockBackendFactory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
+func (f *mockBackendFactory) New(spec composemodel.BackendSpec) (composemodel.VolumeSnapshotBackend, error) {
 	args := f.Called(spec)
-	backend, _ := args.Get(0).(model.VolumeSnapshotBackend)
+	backend, _ := args.Get(0).(composemodel.VolumeSnapshotBackend)
 	return backend, args.Error(1)
 }

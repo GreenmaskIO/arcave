@@ -18,6 +18,8 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
@@ -28,16 +30,16 @@ const demoVolumeName = "demo_db"
 var demoSpecBytes = []byte("name: demo\n")
 
 // demoVolume is the unit, in the form the mock tests address it by.
-func demoVolume() model.Volume {
-	return model.Volume{
+func demoVolume() composemodel.Volume {
+	return composemodel.Volume{
 		ObjectID: "volume-named-" + demoVolumeName,
-		Backend:  model.SnapshotBackendFullCopy,
-		Named:    &model.VolumePropertiesNamed{VolumeName: demoVolumeName},
+		Backend:  composeconfig.SnapshotBackendFullCopy,
+		Named:    &composemodel.VolumePropertiesNamed{VolumeName: demoVolumeName},
 	}
 }
 
 // demoImage is what the backend reports for demoImageCaptureRequest.
-func demoImage() model.Image {
+func demoImage() composemodel.Image {
 	image := composetest.DemoImageCaptureRequest().Image
 	image.Stored = true
 	image.StoredBytes = 512

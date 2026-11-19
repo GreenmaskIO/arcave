@@ -17,9 +17,10 @@ package workload
 import (
 	"context"
 	"errors"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
 	"time"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/rs/zerolog"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -46,27 +48,33 @@ func matchRetargetedImage(service, ref string) any {
 }
 
 // expectRecordRead declares the read of savepoint's record by id.
-func expectRecordRead(repo *composetest.MockSavepointRepo, savepoint model.Savepoint) *mock.Call {
-	return repo.On("LoadSavepoints", mock.Anything, []model.SavepointID{savepoint.ID}).
-		Return([]model.Savepoint{savepoint}, nil).Once()
+func expectRecordRead(repo *composetest.MockSavepointRepo, savepoint composemodel.Savepoint) *mock.Call {
+	return repo.On("LoadSavepoints", mock.Anything, []model.SavepointID{savepoint.Header.ID}).
+		Return([]composemodel.Savepoint{
+			savepoint,
+		}, nil).Once()
 }
 
 // newRestoreOf is the restore request of savepoint's one volume.
-func newRestoreOf(savepoint model.Savepoint) model.BackendRestoreRequest {
-	return model.BackendRestoreRequest{
-		SnapshotID: savepoint.ID,
-		Payload:    savepoint.Stats[0].Payload,
-		SizeBytes:  savepoint.Stats[0].SizeBytes,
+func newRestoreOf(savepoint composemodel.Savepoint) composemodel.BackendRestoreRequest {
+	return composemodel.BackendRestoreRequest{
+		SnapshotID: savepoint.Header.ID,
+		Payload:    savepoint.Detail.Stats[0].Payload,
+		SizeBytes:  savepoint.Detail.Stats[0].SizeBytes,
 	}
 }
 
 // demoUndo is a savepoint other than composetest.DemoRecord, captured of a held project before it is replaced.
-func demoUndo() model.Savepoint {
-	return model.Savepoint{
-		ID:        "019e844b-7818-7000-8000-000000000000",
-		CreatedAt: time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),
-		Stats:     []model.SnapshotStat{{Volume: composetest.DemoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "undo-payload"}},
-		Spec:      &model.SpecRef{Format: model.SpecFormatComposeYAML},
+func demoUndo() composemodel.Savepoint {
+	return composemodel.Savepoint{
+		Header: model.Savepoint{
+			ID:        "019e844b-7818-7000-8000-000000000000",
+			CreatedAt: time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),
+		},
+		Detail: composemodel.SavepointDetail{
+			Stats: []composemodel.SnapshotStat{{Volume: composetest.DemoVolume(), Type: composeconfig.SnapshotBackendFullCopy, Payload: "undo-payload"}},
+			Spec:  &composemodel.SpecRef{Format: composemodel.SpecFormatComposeYAML},
+		},
 	}
 }
 
@@ -79,7 +87,7 @@ func TestProvider_Inspect(t *testing.T) {
 		wantErr error
 	}{
 		{name: "a daemon new enough", version: "27.3.1"},
-		{name: "an old daemon", version: "24.0.7", wantErr: model.ErrUnsupportedDaemon},
+		{name: "an old daemon", version: "24.0.7", wantErr: composemodel.ErrUnsupportedDaemon},
 		{name: "a version that cannot be read", version: ""},
 	}
 	for _, tt := range tests {
@@ -127,14 +135,14 @@ func TestProvider_Inspect_WalksALiveRollback(t *testing.T) {
 		registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(liveBackend, nil).Once(),
 		expectRecordRead(repo, record),
 		registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(targetBackend, nil).Once(),
-		repo.On("LoadSpec", mock.Anything, record.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
+		repo.On("LoadSpec", mock.Anything, record.Header.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
 		runner.On("Stop", mock.Anything, composetest.DemoSpec).Return([]string(nil), nil).Once(),
 		liveBackend.On("Snapshot", mock.Anything, composetest.MatchValidSnapshotID()).
-			Return(model.SnapshotStat{Volume: composetest.DemoVolume(), Type: model.SnapshotBackendFullCopy}, nil).Once(),
+			Return(composemodel.SnapshotStat{Volume: composetest.DemoVolume(), Type: composeconfig.SnapshotBackendFullCopy}, nil).Once(),
 		composetest.ExpectSpecCommit(repo),
 		// A fresh id: the capture never commits over the savepoint it is about to be replaced with.
-		repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint model.Savepoint) bool {
-			return savepoint.ID.Validate() == nil && savepoint.ID != record.ID
+		repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint composemodel.Savepoint) bool {
+			return savepoint.Header.ID.Validate() == nil && savepoint.Header.ID != record.Header.ID
 		})).Return(nil).Once(),
 		runner.On("Down", mock.Anything, composetest.DemoSpec).Return(nil).Once(),
 		runner.On("Create", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, deployment), demoRestoredVolumes).Return(nil).Once(),
@@ -163,9 +171,9 @@ func TestProvider_Inspect_WalksALiveRollback(t *testing.T) {
 	// Act
 	live, err := svc.Inspect(ctx)
 	require.NoError(t, err)
-	plan, err := live.PlanCapture(ctx, provider.CaptureOptions{Restoring: record.ID})
+	plan, err := live.PlanCapture(ctx, provider.CaptureOptions{Restoring: record.Header.ID})
 	require.NoError(t, err)
-	prepared, err := live.PrepareSavepoint(ctx, record.ID, provider.PrepareOptions{Deployment: deployment})
+	prepared, err := live.PrepareSavepoint(ctx, record.Header.ID, provider.PrepareOptions{Deployment: deployment})
 	require.NoError(t, err)
 	held, err := plan.Hold(ctx)
 	require.NoError(t, err)
@@ -184,7 +192,8 @@ func TestProvider_Inspect_WalksALiveRollback(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, provider.PreparedSummary{Volumes: []model.Volume{composetest.DemoVolume()}}, prepared.Summary())
+	assert.Equal(t, composemodel.RestoreDetail{Volumes: []composemodel.Volume{composetest.DemoVolume()}}, restoreDetailOf(t, prepared.Summary()))
+	assert.Equal(t, model.RestoreSummary{Units: []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1}}}, prepared.Summary().Restored)
 	repo.AssertExpectations(t)
 	runner.AssertExpectations(t)
 	registry.AssertExpectations(t)
@@ -213,7 +222,7 @@ func TestProvider_Inspect_DiscardsAFailedColdStart(t *testing.T) {
 		inspector.On("Introspect", mock.Anything).Return(composetest.DemoAbsentIntrospection(), nil).Once(),
 		expectRecordRead(repo, record),
 		registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(composetest.DemoVolume()), nil).Once(),
-		repo.On("LoadSpec", mock.Anything, record.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
+		repo.On("LoadSpec", mock.Anything, record.Header.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
 		codec.On("Parse", mock.Anything, composetest.DemoTargetSpecBytes).Return(composetest.DemoTargetSpec, nil).Once(),
 		runner.On("Create", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, composetest.DemoDeployment(record)), demoRestoredVolumes).
 			Return(errors.New("create boom")).Once(),
@@ -235,7 +244,7 @@ func TestProvider_Inspect_DiscardsAFailedColdStart(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 	live, err := svc.Inspect(ctx)
 	require.NoError(t, err)
-	prepared, err := live.PrepareSavepoint(ctx, record.ID, provider.PrepareOptions{Deployment: composetest.DemoDeployment(record)})
+	prepared, err := live.PrepareSavepoint(ctx, record.Header.ID, provider.PrepareOptions{Deployment: composetest.DemoDeployment(record)})
 	require.NoError(t, err)
 	vacant, err := live.Teardown(ctx, prepared)
 	require.NoError(t, err)
@@ -259,19 +268,19 @@ func TestProvider_Inspect_DiscardsAFailedColdStart(t *testing.T) {
 // mounted is reaped by the docker name it had before the teardown, once the restore replaced it.
 func TestProvider_Inspect_ReapsTheOrphanedAnonymousVolume(t *testing.T) {
 	// Arrange
-	anonVol := model.Volume{ObjectID: "volume-anon-app-1-scratch", Backend: model.SnapshotBackendFullCopy}
+	anonVol := composemodel.Volume{ObjectID: "volume-anon-app-1-scratch", Backend: composeconfig.SnapshotBackendFullCopy}
 	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: composetest.DemoProject,
 		Services: []composemodel.Service{{
 			Name: "app",
 			Volumes: []composemodel.ServiceVolume{
-				{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/scratch", VolumeName: "9f8e7d", Replica: 1},
+				{Type: composemodel.VolumeTypeAnon, RawType: "volume", Target: "/scratch", VolumeName: "9f8e7d", Replica: 1},
 			},
 			Containers: []composemodel.Container{{Name: "demo-app-1", Number: 1}},
 		}},
 	}}
 	record := composetest.DemoRecord()
-	record.Stats = []model.SnapshotStat{{Volume: anonVol, Type: model.SnapshotBackendFullCopy, Payload: "sp-payload"}}
+	record.Detail.Stats = []composemodel.SnapshotStat{{Volume: anonVol, Type: composeconfig.SnapshotBackendFullCopy, Payload: "sp-payload"}}
 	backend := composetest.NewMockBackend(anonVol)
 	repo := &composetest.MockSavepointRepo{}
 	store := composetest.NewDirStore(t)
@@ -284,7 +293,7 @@ func TestProvider_Inspect_ReapsTheOrphanedAnonymousVolume(t *testing.T) {
 		inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once(),
 		expectRecordRead(repo, record),
 		registry.On("New", composetest.MatchSpec(store, anonVol.ObjectID)).Return(backend, nil).Once(),
-		repo.On("LoadSpec", mock.Anything, record.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
+		repo.On("LoadSpec", mock.Anything, record.Header.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
 		codec.On("Parse", mock.Anything, composetest.DemoTargetSpecBytes).Return(composetest.DemoTargetSpec, nil).Once(),
 		runner.On("Down", mock.Anything, composetest.DemoTargetSpec).Return(nil).Once(),
 		runner.On("Create", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, composetest.DemoDeployment(record)), []string(nil)).Return(nil).Once(),
@@ -305,7 +314,7 @@ func TestProvider_Inspect_ReapsTheOrphanedAnonymousVolume(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 	live, err := svc.Inspect(ctx)
 	require.NoError(t, err)
-	prepared, err := live.PrepareSavepoint(ctx, record.ID, provider.PrepareOptions{Deployment: composetest.DemoDeployment(record)})
+	prepared, err := live.PrepareSavepoint(ctx, record.Header.ID, provider.PrepareOptions{Deployment: composetest.DemoDeployment(record)})
 	require.NoError(t, err)
 	vacant, err := live.Teardown(ctx, prepared)
 	require.NoError(t, err)

@@ -19,9 +19,10 @@ package fullcopybackend
 import (
 	"context"
 	"fmt"
-	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 	"os"
 	"testing"
+
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 
 	dockercontext "github.com/docker/cli/cli/context/docker"
 	"github.com/greenmaskio/storages"
@@ -34,7 +35,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	dockerclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/runtimeprofile"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
@@ -55,23 +58,25 @@ func TestSnapshotter_RoundTrip(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		volume func(t *testing.T, e *env) model.Volume
+		volume func(t *testing.T, e *env) composemodel.Volume
 	}{
 		{
-			name:   "a volume its service still mounts",
-			volume: func(t *testing.T, e *env) model.Volume { return e.newVolume(t, "db", "/var/lib/postgresql/data") },
+			name: "a volume its service still mounts",
+			volume: func(t *testing.T, e *env) composemodel.Volume {
+				return e.newVolume(t, "db", "/var/lib/postgresql/data")
+			},
 		},
 		{
 			// The case the volume-addressed engine exists for: no container to read
 			// the volume through, and the capture works anyway.
 			name:   "a volume no container mounts at all",
-			volume: func(t *testing.T, e *env) model.Volume { return e.newBareVolume(t, "db") },
+			volume: func(t *testing.T, e *env) composemodel.Volume { return e.newBareVolume(t, "db") },
 		},
 		{
 			// The subpath belongs to that one container and never to the volume, so
 			// the archive holds the volume whole.
 			name: "a volume whose only mount exposes a subdirectory",
-			volume: func(t *testing.T, e *env) model.Volume {
+			volume: func(t *testing.T, e *env) composemodel.Volume {
 				return e.newSubpathVolume(t, "db", "/var/lib/postgresql/data", "nested")
 			},
 		},
@@ -85,7 +90,7 @@ func TestSnapshotter_RoundTrip(t *testing.T) {
 				vol := tt.volume(t, e)
 				backend := e.backend(t, vol)
 
-				stat, err := backend.Snapshot(e.ctx, model.BackendSnapshotRequest{SnapshotID: idFirst})
+				stat, err := backend.Snapshot(e.ctx, composemodel.BackendSnapshotRequest{SnapshotID: idFirst})
 				require.NoError(t, err)
 				captured := e.hash(t, vol)
 				require.Contains(t, captured, "/data/blob", "the volume must hold a file outside any subpath")
@@ -103,7 +108,7 @@ func TestSnapshotter_RoundTrip(t *testing.T) {
 				require.NotEqual(t, captured, e.hash(t, vol), "the volume must actually diverge first")
 
 				// Act
-				err = backend.Restore(e.ctx, model.BackendRestoreRequest{
+				err = backend.Restore(e.ctx, composemodel.BackendRestoreRequest{
 					SnapshotID: idFirst,
 					Payload:    stat.Payload,
 					SizeBytes:  stat.SizeBytes,
@@ -129,7 +134,7 @@ func TestSnapshotter_Snapshot_MissingVolume(t *testing.T) {
 	vol := namedVolume(itProject + "-never-created-" + daemontest.RandomSuffix(t))
 
 	// Act
-	_, err := e.backend(t, vol).Snapshot(e.ctx, model.BackendSnapshotRequest{SnapshotID: idFirst})
+	_, err := e.backend(t, vol).Snapshot(e.ctx, composemodel.BackendSnapshotRequest{SnapshotID: idFirst})
 
 	// Assert
 	require.Error(t, err)
@@ -175,26 +180,26 @@ func newVolumeStreamer(t *testing.T, cli *client.Client) fullcopy.VolumeStreamer
 }
 
 // backend builds the instance under test, as the registry does.
-func (e *env) backend(t *testing.T, vol model.Volume) model.VolumeSnapshotBackend {
+func (e *env) backend(t *testing.T, vol composemodel.Volume) composemodel.VolumeSnapshotBackend {
 	t.Helper()
 
-	backend, err := e.factory.New(model.BackendSpec{Store: e.store, Volume: vol})
+	backend, err := e.factory.New(composemodel.BackendSpec{Store: e.store, Volume: vol})
 	require.NoError(t, err)
 	return backend
 }
 
 // newVolume creates a filled named volume plus the labelled container that
 // mounts it.
-func (e *env) newVolume(t *testing.T, service, target string) model.Volume {
+func (e *env) newVolume(t *testing.T, service, target string) composemodel.Volume {
 	t.Helper()
 
 	name := e.newFilledVolume(t, service)
 	createLabelledContainer(t, e.cli, service, name, target)
-	return namedVolume(name, model.ServiceReference{Service: service, Target: target})
+	return namedVolume(name, composemodel.ServiceReference{Service: service, Target: target})
 }
 
 // newBareVolume creates a filled named volume no container mounts.
-func (e *env) newBareVolume(t *testing.T, service string) model.Volume {
+func (e *env) newBareVolume(t *testing.T, service string) composemodel.Volume {
 	t.Helper()
 
 	return namedVolume(e.newFilledVolume(t, service))
@@ -203,12 +208,12 @@ func (e *env) newBareVolume(t *testing.T, service string) model.Volume {
 // newSubpathVolume creates a filled named volume whose only container sees a
 // subdirectory of it. The subdirectory must exist before the container is
 // created, so the fill runs first.
-func (e *env) newSubpathVolume(t *testing.T, service, target, subpath string) model.Volume {
+func (e *env) newSubpathVolume(t *testing.T, service, target, subpath string) composemodel.Volume {
 	t.Helper()
 
 	name := e.newFilledVolume(t, service)
 	createSubpathContainer(t, e.cli, service, name, target, subpath)
-	return namedVolume(name, model.ServiceReference{Service: service, Target: target, Subpath: subpath})
+	return namedVolume(name, composemodel.ServiceReference{Service: service, Target: target, Subpath: subpath})
 }
 
 func (e *env) newFilledVolume(t *testing.T, service string) string {
@@ -222,13 +227,13 @@ func (e *env) newFilledVolume(t *testing.T, service string) string {
 
 // namedVolume is the unit the backend is built for, assembled by hand: this
 // layer sits below the introspector.
-func namedVolume(name string, usedBy ...model.ServiceReference) model.Volume {
-	return model.Volume{
+func namedVolume(name string, usedBy ...composemodel.ServiceReference) composemodel.Volume {
+	return composemodel.Volume{
 		ObjectID:       "volume-named-" + name,
 		ComposeProject: itProject,
-		Type:           model.VolumeTypeNamed,
-		Backend:        model.SnapshotBackendFullCopy,
-		Named:          &model.VolumePropertiesNamed{VolumeName: name, UsedBy: usedBy},
+		Type:           composemodel.VolumeTypeNamed,
+		Backend:        composeconfig.SnapshotBackendFullCopy,
+		Named:          &composemodel.VolumePropertiesNamed{VolumeName: name, UsedBy: usedBy},
 	}
 }
 
@@ -247,7 +252,7 @@ func (e *env) fill(t *testing.T, name string) {
 }
 
 // mutate overwrites part of the blob, leaving its size alone.
-func (e *env) mutate(t *testing.T, vol model.Volume) {
+func (e *env) mutate(t *testing.T, vol composemodel.Volume) {
 	t.Helper()
 
 	composetest.Busybox(t, e.engine, vol.Named.VolumeName,
@@ -255,7 +260,7 @@ func (e *env) mutate(t *testing.T, vol model.Volume) {
 }
 
 // addFile writes a file no snapshot carries — what a restore has to take away.
-func (e *env) addFile(t *testing.T, vol model.Volume, name string) {
+func (e *env) addFile(t *testing.T, vol composemodel.Volume, name string) {
 	t.Helper()
 
 	composetest.Busybox(t, e.engine, vol.Named.VolumeName, fmt.Sprintf("dd if=/dev/urandom of=/data/%s bs=1k count=8", name))
@@ -264,7 +269,7 @@ func (e *env) addFile(t *testing.T, vol model.Volume, name string) {
 // hash lists every file in the volume with its digest, mode and owner: content,
 // file set and metadata in one string, so a leftover file or a lost mode
 // changes it.
-func (e *env) hash(t *testing.T, vol model.Volume) string {
+func (e *env) hash(t *testing.T, vol composemodel.Volume) string {
 	t.Helper()
 
 	out := composetest.Busybox(t, e.engine, vol.Named.VolumeName,

@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // Every mock forwards all of its seam's arguments to Called, ctx included;
@@ -28,9 +29,9 @@ import (
 
 type mockSavepointReader struct{ mock.Mock }
 
-func (m *mockSavepointReader) LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error) {
+func (m *mockSavepointReader) LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]composemodel.Savepoint, error) {
 	args := m.Called(ctx, ids)
-	return args.Get(0).([]model.Savepoint), args.Error(1)
+	return args.Get(0).([]composemodel.Savepoint), args.Error(1)
 }
 
 type mockCollector struct{ mock.Mock }

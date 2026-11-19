@@ -22,7 +22,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -30,7 +30,7 @@ import (
 func TestNewNotCoveredWarning(t *testing.T) {
 	tests := []struct {
 		name       string
-		notCovered *model.NotCovered
+		notCovered *composemodel.NotCovered
 		want       string
 	}{
 		{
@@ -38,14 +38,14 @@ func TestNewNotCoveredWarning(t *testing.T) {
 		},
 		{
 			name:       "an empty report",
-			notCovered: &model.NotCovered{},
+			notCovered: &composemodel.NotCovered{},
 		},
 		{
 			name: "every kind left out is counted",
-			notCovered: &model.NotCovered{
-				Mounts:           []model.SkippedVolume{{}, {}},
-				KilledContainers: []model.KilledContainer{{}},
-				FailedHooks:      []model.FailedHook{{}},
+			notCovered: &composemodel.NotCovered{
+				Mounts:           []composemodel.SkippedVolume{{}, {}},
+				KilledContainers: []composemodel.KilledContainer{{}},
+				FailedHooks:      []composemodel.FailedHook{{}},
 			},
 			want: "not covered: 2 mount(s), 1 killed container(s), 1 failed hook(s)",
 		},
@@ -98,12 +98,12 @@ func TestWarn(t *testing.T) {
 func TestNewImageSample(t *testing.T) {
 	tests := []struct {
 		name  string
-		image model.Image
+		image composemodel.Image
 		want  progress.Sample
 	}{
 		{
 			name: "stored by this capture",
-			image: model.Image{
+			image: composemodel.Image{
 				SizeBytes:   100,
 				StoredBytes: 40,
 				Stored:      true,
@@ -112,7 +112,7 @@ func TestNewImageSample(t *testing.T) {
 		},
 		{
 			name: "already stored",
-			image: model.Image{
+			image: composemodel.Image{
 				SizeBytes: 100,
 				Stored:    true,
 			},
@@ -120,7 +120,7 @@ func TestNewImageSample(t *testing.T) {
 		},
 		{
 			name: "not stored moves nothing",
-			image: model.Image{
+			image: composemodel.Image{
 				SizeBytes: 100,
 			},
 		},

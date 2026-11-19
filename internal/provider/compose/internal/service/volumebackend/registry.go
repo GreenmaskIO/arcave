@@ -22,7 +22,8 @@ import (
 
 	"github.com/greenmaskio/storages"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 var (
@@ -32,15 +33,15 @@ var (
 )
 
 // Registry resolves a volume's Backend to its factory. It
-// implements model.SnapshotBackendRegistry.
+// implements composemodel.SnapshotBackendRegistry.
 type Registry struct {
-	factories map[model.SnapshotBackendKind]model.SnapshotBackendFactory
+	factories map[composeconfig.SnapshotBackendKind]composemodel.SnapshotBackendFactory
 }
 
 // NewRegistry indexes the factories by Kind; a duplicate is
 // ErrBackendAlreadyRegistered.
-func NewRegistry(factories ...model.SnapshotBackendFactory) (*Registry, error) {
-	indexed := make(map[model.SnapshotBackendKind]model.SnapshotBackendFactory, len(factories))
+func NewRegistry(factories ...composemodel.SnapshotBackendFactory) (*Registry, error) {
+	indexed := make(map[composeconfig.SnapshotBackendKind]composemodel.SnapshotBackendFactory, len(factories))
 	for _, factory := range factories {
 		if _, ok := indexed[factory.Kind()]; ok {
 			return nil, fmt.Errorf("%w: %s", ErrBackendAlreadyRegistered, factory.Kind())
@@ -54,7 +55,7 @@ func NewRegistry(factories ...model.SnapshotBackendFactory) (*Registry, error) {
 // ErrUnknownBackend. The root is required, checked before any factory runs, and
 // reaches the factory as it was given: narrowing it here would decide a layout
 // this layer must not know.
-func (s *Registry) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
+func (s *Registry) New(spec composemodel.BackendSpec) (composemodel.VolumeSnapshotBackend, error) {
 	if spec.Store == nil {
 		return nil, fmt.Errorf("%w: volume %s", ErrNoStore, spec.Volume.ObjectID)
 	}
@@ -69,11 +70,11 @@ func (s *Registry) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, err
 // NewBackends builds one backend per volume through registry, all rooted at store, in
 // input order. All up front: an unregistered backend fails before any byte moves.
 func NewBackends(
-	registry model.SnapshotBackendRegistry, store storages.Storager, volumes []model.Volume,
-) ([]model.VolumeSnapshotBackend, error) {
-	backends := make([]model.VolumeSnapshotBackend, len(volumes))
+	registry composemodel.SnapshotBackendRegistry, store storages.Storager, volumes []composemodel.Volume,
+) ([]composemodel.VolumeSnapshotBackend, error) {
+	backends := make([]composemodel.VolumeSnapshotBackend, len(volumes))
 	for i, volume := range volumes {
-		backend, err := registry.New(model.BackendSpec{
+		backend, err := registry.New(composemodel.BackendSpec{
 			Store:  store,
 			Volume: volume,
 		})

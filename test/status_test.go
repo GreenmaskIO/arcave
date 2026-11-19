@@ -97,7 +97,7 @@ func newStatusEnv(t *testing.T, env ...string) *statusEnv {
 	}
 	runArcave(t, statusEnv.projectRoot, env, "init", "--name", statusArcaveProject)
 	writeStorageConfigWith(t, statusEnv.projectRoot, storage,
-		storageE2EBackend{name: composeconfig.SnapshotBackendFullCopy, backend: composeconfig.SnapshotBackendFullCopy}, len(env) > 0)
+		storageE2EBackend{name: string(composeconfig.SnapshotBackendFullCopy), backend: string(composeconfig.SnapshotBackendFullCopy)}, len(env) > 0)
 	compose.upDocument(t, statusEnv.document)
 	return statusEnv
 }
@@ -134,8 +134,8 @@ func TestStatus_AfterRollback(t *testing.T) {
 	assert.Equal(t, savepoint.ID, status.Deployment.Savepoint.ID)
 	assert.Equal(t, "sp1", status.Deployment.Savepoint.Name)
 	assert.Equal(t, &model.RestoredCounts{
-		Volumes:        len(savepoint.Stats),
-		WritableLayers: len(savepoint.WritableLayers),
+		Volumes:        savepoint.Summary.Unit(model.UnitKindVolumes).Count,
+		WritableLayers: savepoint.Summary.Unit(model.UnitKindLayers).Count,
 	}, status.Deployment.Savepoint.Restored, "the record says what was restored")
 	byName := map[string]model.ServiceStatus{}
 	for _, service := range status.Services {
@@ -175,7 +175,7 @@ func TestStatus_AfterRollback(t *testing.T) {
 func assertDeploymentLabelsOnContainersAlone(t *testing.T, env *statusEnv, status model.ComposeProjectStatus) {
 	t.Helper()
 
-	key := string(model.SystemLabelDeploymentSavepointID)
+	key := "io.arcave.deployment.savepoint-id"
 	for _, service := range status.Services {
 		for _, replica := range service.Replicas {
 			inspected, err := env.daemon.ContainerInspect(env.ctx, replica.ContainerID, client.ContainerInspectOptions{})
@@ -245,7 +245,7 @@ func recreateAsCompose(t *testing.T, env *statusEnv, id string) {
 	config := *old.Config
 	config.Labels = map[string]string{api.ContainerReplaceLabel: name}
 	for key, value := range old.Config.Labels {
-		if !strings.HasPrefix(key, model.DeploymentLabelPrefix) {
+		if !strings.HasPrefix(key, "io.arcave.deployment.") {
 			config.Labels[key] = value
 		}
 	}

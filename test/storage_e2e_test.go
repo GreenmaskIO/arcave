@@ -103,17 +103,17 @@ type storageE2EBackend struct {
 // default stdio transport, into the same store.
 var storageE2EBackends = []storageE2EBackend{
 	{
-		name:    composeconfig.SnapshotBackendFullCopy,
-		backend: composeconfig.SnapshotBackendFullCopy,
+		name:    string(composeconfig.SnapshotBackendFullCopy),
+		backend: string(composeconfig.SnapshotBackendFullCopy),
 	},
 	{
-		name:        composeconfig.SnapshotBackendFullCopy + "-" + composeconfig.CompressionNone,
-		backend:     composeconfig.SnapshotBackendFullCopy,
+		name:        string(composeconfig.SnapshotBackendFullCopy) + "-" + composeconfig.CompressionNone,
+		backend:     string(composeconfig.SnapshotBackendFullCopy),
 		compression: composeconfig.CompressionNone,
 	},
 	{
-		name:    composeconfig.SnapshotBackendCDC,
-		backend: composeconfig.SnapshotBackendCDC,
+		name:    string(composeconfig.SnapshotBackendCDC),
+		backend: string(composeconfig.SnapshotBackendCDC),
 	},
 }
 
@@ -188,10 +188,10 @@ func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend
 	afterGC := decode[[]model.Savepoint](t, run("savepoint", "list"))
 
 	// Assert
-	assert.Equal(t, []model.SnapshotBackendKind{model.SnapshotBackendKind(backend.backend)}, statKinds(sp1),
+	assert.Equal(t, []string{backend.backend}, statKinds(t, sp1),
 		"the volume went through the configured backend")
-	if backend.backend == composeconfig.SnapshotBackendFullCopy {
-		assert.Equal(t, []any{wantCompression(backend)}, statCompressions(sp1), "the record names the configured format")
+	if backend.backend == string(composeconfig.SnapshotBackendFullCopy) {
+		assert.Equal(t, []any{wantCompression(backend)}, statCompressions(t, sp1), "the record names the configured format")
 	}
 	assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(listed), "newest first by default")
 	assert.Equal(t, []string{"sp1", "sp2"}, savepointNames(ascending))
@@ -483,18 +483,22 @@ func wantCompression(backend storageE2EBackend) string {
 }
 
 // statCompressions is the format each fullcopy stat's payload names, as decoded from JSON.
-func statCompressions(savepoint model.Savepoint) []any {
-	compressions := make([]any, len(savepoint.Stats))
-	for i, stat := range savepoint.Stats {
-		payload, _ := stat.Payload.(map[string]any)
-		compressions[i] = payload["compression"]
+func statCompressions(t *testing.T, savepoint model.Savepoint) []any {
+	t.Helper()
+	stats := detailOf(t, savepoint).Stats
+	compressions := make([]any, len(stats))
+	for i, stat := range stats {
+		compressions[i] = stat.Payload["compression"]
 	}
 	return compressions
 }
 
-func statKinds(savepoint model.Savepoint) []model.SnapshotBackendKind {
-	kinds := make([]model.SnapshotBackendKind, len(savepoint.Stats))
-	for i, stat := range savepoint.Stats {
+// statKinds is the backend each stat names.
+func statKinds(t *testing.T, savepoint model.Savepoint) []string {
+	t.Helper()
+	stats := detailOf(t, savepoint).Stats
+	kinds := make([]string, len(stats))
+	for i, stat := range stats {
 		kinds[i] = stat.Type
 	}
 	return kinds

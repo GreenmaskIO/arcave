@@ -17,12 +17,13 @@ package docker
 import (
 	"context"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"maps"
 	"slices"
 	"strconv"
 	"strings"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
@@ -37,7 +38,7 @@ import (
 // is a digest, never a name.
 func (e *Engine) CommitContainer(
 	ctx context.Context, containerID, comment string, labels map[string]string,
-) (model.ImageDigestID, error) {
+) (composemodel.ImageDigestID, error) {
 	// Unpaused: the caller has already stopped the services, and a stopped container
 	// cannot be paused.
 	resp, err := e.api.ContainerCommit(ctx, containerID, client.ContainerCommitOptions{
@@ -48,7 +49,7 @@ func (e *Engine) CommitContainer(
 	if err != nil {
 		return "", fmt.Errorf("commit container %s: %w", containerID, err)
 	}
-	imageID, err := model.ParseImageDigestID(withDigestAlgorithm(resp.ID))
+	imageID, err := composemodel.ParseImageDigestID(withDigestAlgorithm(resp.ID))
 	if err != nil {
 		return "", fmt.Errorf("commit container %s: %w", containerID, err)
 	}
@@ -78,7 +79,7 @@ func newLabelChanges(labels map[string]string) []string {
 
 // SaveImage streams one image out of the daemon as a save archive. The caller
 // owns the stream and closes it.
-func (e *Engine) SaveImage(ctx context.Context, imageID model.ImageDigestID) (io.ReadCloser, error) {
+func (e *Engine) SaveImage(ctx context.Context, imageID composemodel.ImageDigestID) (io.ReadCloser, error) {
 	archive, err := e.api.ImageSave(ctx, []string{imageID.String()})
 	if err != nil {
 		return nil, fmt.Errorf("save image %s: %w", imageID, err)
@@ -88,7 +89,7 @@ func (e *Engine) SaveImage(ctx context.Context, imageID model.ImageDigestID) (io
 
 // RemoveImage drops one image from the daemon. Not forced, so an image something
 // still references is refused rather than taken.
-func (e *Engine) RemoveImage(ctx context.Context, imageID model.ImageDigestID) error {
+func (e *Engine) RemoveImage(ctx context.Context, imageID composemodel.ImageDigestID) error {
 	if _, err := e.api.ImageRemove(ctx, imageID.String(), client.ImageRemoveOptions{}); err != nil {
 		return fmt.Errorf("remove image %s: %w", imageID, err)
 	}
@@ -148,7 +149,7 @@ func (e *Engine) LoadImage(ctx context.Context, r io.Reader) error {
 }
 
 // TagImage points ref at an image already in the daemon.
-func (e *Engine) TagImage(ctx context.Context, imageID model.ImageDigestID, ref string) error {
+func (e *Engine) TagImage(ctx context.Context, imageID composemodel.ImageDigestID, ref string) error {
 	if _, err := e.api.ImageTag(ctx, client.ImageTagOptions{Source: imageID.String(), Target: ref}); err != nil {
 		return fmt.Errorf("tag image %s as %s: %w", imageID, ref, err)
 	}
@@ -169,7 +170,7 @@ func (e *Engine) ImageRefExists(ctx context.Context, ref string) (bool, error) {
 // ImageExists reports whether the daemon holds the image. A daemon that answers
 // "not found" is not an error — that is the answer. The argument is a digest, so
 // this is an identity check and not a lookup by name.
-func (e *Engine) ImageExists(ctx context.Context, imageID model.ImageDigestID) (bool, error) {
+func (e *Engine) ImageExists(ctx context.Context, imageID composemodel.ImageDigestID) (bool, error) {
 	if _, err := e.api.ImageInspect(ctx, imageID.String()); err != nil {
 		if cerrdefs.IsNotFound(err) {
 			return false, nil
@@ -183,7 +184,7 @@ func (e *Engine) ImageExists(ctx context.Context, imageID model.ImageDigestID) (
 // as Docker does, with the image it names and the origin that image's labels name.
 func (e *Engine) ListLayerImages(ctx context.Context) ([]composemodel.TaggedImage, error) {
 	summaries, err := e.api.ImageList(ctx, client.ImageListOptions{
-		Filters: make(client.Filters).Add("reference", model.RestoredLayerTagNamespace+"/*"),
+		Filters: make(client.Filters).Add("reference", composemodel.RestoredLayerTagNamespace+"/*"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list arcave images: %w", err)
@@ -193,12 +194,12 @@ func (e *Engine) ListLayerImages(ctx context.Context) ([]composemodel.TaggedImag
 		origin, _ := composemodel.ParseLayerOrigin(summary.Labels)
 		for _, ref := range summary.RepoTags {
 			familiar := model.ImageRef(ref).Familiar()
-			if !familiar.IsRestoredLayerTag() {
+			if !composemodel.IsRestoredLayerTag(familiar) {
 				continue
 			}
 			tagged = append(tagged, composemodel.TaggedImage{
 				Ref:     familiar,
-				ImageID: model.ImageDigestID(summary.ID),
+				ImageID: composemodel.ImageDigestID(summary.ID),
 				Origin:  origin,
 			})
 		}
@@ -219,7 +220,7 @@ func (e *Engine) ListContainerImages(ctx context.Context) ([]composemodel.Contai
 		images = append(images, composemodel.ContainerImage{
 			ContainerID: summary.ID,
 			Ref:         model.ImageRef(summary.Image).Familiar(),
-			ImageID:     model.ImageDigestID(summary.ImageID),
+			ImageID:     composemodel.ImageDigestID(summary.ImageID),
 		})
 	}
 	return images, nil

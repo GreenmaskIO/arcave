@@ -15,13 +15,14 @@
 package composespec
 
 import (
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"maps"
 	"net/netip"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v5/pkg/api"
@@ -33,8 +34,6 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 const fixtureContainerID = "3f1a2b3c4d5e6f708192a3b4c5d6e7f8"
@@ -49,10 +48,10 @@ func richService() composemodel.Service {
 		Image:  "postgres:16",
 		Labels: map[string]string{api.ServiceLabel: "db", api.DependenciesLabel: "cache:service_healthy:true"},
 		Volumes: []composemodel.ServiceVolume{
-			{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", VolumeName: "demo_pgdata", Target: "/var/lib/postgresql/data"},
-			{Type: model.VolumeTypeAnon, RawType: "volume", VolumeName: "9f8e7d", Target: "/tmp/scratch", Replica: 1},
-			{Type: model.VolumeTypeAnon, RawType: "volume", VolumeName: "1a2b3c", Target: "/tmp/scratch", Replica: 2},
-			{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/seed", Target: "/docker-entrypoint-initdb.d", ReadOnly: true,
+			{Type: composemodel.VolumeTypeNamed, RawType: "volume", Source: "pgdata", VolumeName: "demo_pgdata", Target: "/var/lib/postgresql/data"},
+			{Type: composemodel.VolumeTypeAnon, RawType: "volume", VolumeName: "9f8e7d", Target: "/tmp/scratch", Replica: 1},
+			{Type: composemodel.VolumeTypeAnon, RawType: "volume", VolumeName: "1a2b3c", Target: "/tmp/scratch", Replica: 2},
+			{Type: composemodel.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/seed", Target: "/docker-entrypoint-initdb.d", ReadOnly: true,
 				Bind: &composemodel.BindMount{Propagation: "rprivate", CreateHostPath: true}},
 		},
 		Containers: []composemodel.Container{{
@@ -208,7 +207,7 @@ func TestNewServiceVolume_Options(t *testing.T) {
 	}{
 		{
 			name: "a named volume's options",
-			mount: composemodel.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+			mount: composemodel.ServiceVolume{Type: composemodel.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
 				Target: "/data", Volume: &composemodel.VolumeMount{
 					NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"},
 				}},
@@ -219,7 +218,7 @@ func TestNewServiceVolume_Options(t *testing.T) {
 		},
 		{
 			name: "a bind's options, the default propagation left out",
-			mount: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host",
+			mount: composemodel.ServiceVolume{Type: composemodel.VolumeTypeBind, RawType: "bind", Source: "/host",
 				Target: "/etc/cfg", Bind: &composemodel.BindMount{
 					SELinux: "z", Propagation: "rprivate", CreateHostPath: true, Recursive: "readonly",
 				}},
@@ -228,21 +227,21 @@ func TestNewServiceVolume_Options(t *testing.T) {
 		},
 		{
 			name: "a bind that must not create its host path",
-			mount: composemodel.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host",
+			mount: composemodel.ServiceVolume{Type: composemodel.VolumeTypeBind, RawType: "bind", Source: "/host",
 				Target: "/etc/cfg", Bind: &composemodel.BindMount{Propagation: "rshared"}},
 			want: types.ServiceVolumeConfig{Type: "bind", Source: "/host", Target: "/etc/cfg",
 				Bind: &types.ServiceVolumeBind{Propagation: "rshared"}},
 		},
 		{
 			name: "a tmpfs mount's size and mode",
-			mount: composemodel.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run",
+			mount: composemodel.ServiceVolume{Type: composemodel.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run",
 				Tmpfs: &composemodel.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
 			want: types.ServiceVolumeConfig{Type: "tmpfs", Target: "/run",
 				Tmpfs: &types.ServiceVolumeTmpfs{Size: 1 << 20, Mode: 0o1777}},
 		},
 		{
 			name: "an image mount's subpath",
-			mount: composemodel.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1",
+			mount: composemodel.ServiceVolume{Type: composemodel.VolumeTypeImage, RawType: "image", Source: "assets:1",
 				Target: "/assets", ReadOnly: true, Image: &composemodel.ImageMount{Subpath: "static"}},
 			want: types.ServiceVolumeConfig{Type: "image", Source: "assets:1", Target: "/assets",
 				ReadOnly: true, Image: &types.ServiceVolumeImage{SubPath: "static"}},
@@ -461,8 +460,8 @@ func TestNewServiceConfig_SharedNamespaces(t *testing.T) {
 
 func TestNewServiceConfig_Image(t *testing.T) {
 	const (
-		upstreamID = model.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
-		layerID    = model.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+		upstreamID = composemodel.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+		layerID    = composemodel.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
 		layerRef   = "arcave/demo-db-1-postgres-16:sp-019e7044-8fd0-7000-8000-000000000000"
 	)
 	pulled := image.InspectResponse{RepoDigests: []string{"postgres@sha256:dddd"}}
@@ -474,24 +473,24 @@ func TestNewServiceConfig_Image(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		running    model.ImageDigestID
+		running    composemodel.ImageDigestID
 		ref        string
-		images     map[model.ImageDigestID]image.InspectResponse
+		images     map[composemodel.ImageDigestID]image.InspectResponse
 		want       string
 		wantPolicy string
 	}{
 		{
 			name:    "a container on its upstream",
 			running: upstreamID, ref: "postgres:16",
-			images: map[model.ImageDigestID]image.InspectResponse{upstreamID: pulled},
+			images: map[composemodel.ImageDigestID]image.InspectResponse{upstreamID: pulled},
 			want:   "postgres:16", wantPolicy: pullPolicyMissing,
 		},
 		{
 			name:    "a layer names its upstream by label",
 			running: layerID, ref: layerRef,
-			images: map[model.ImageDigestID]image.InspectResponse{
+			images: map[composemodel.ImageDigestID]image.InspectResponse{
 				layerID: labelled(map[string]string{
-					string(model.SystemLabelBaseImageID): upstreamID.String(), string(model.SystemLabelBaseImageRef): "postgres:16",
+					string(composemodel.SystemLabelBaseImageID): upstreamID.String(), string(composemodel.SystemLabelBaseImageRef): "postgres:16",
 				}),
 				upstreamID: pulled,
 			},
@@ -500,25 +499,25 @@ func TestNewServiceConfig_Image(t *testing.T) {
 		{
 			name:    "a layer carrying no labels keeps its tag",
 			running: layerID, ref: layerRef,
-			images: map[model.ImageDigestID]image.InspectResponse{layerID: labelled(nil)},
+			images: map[composemodel.ImageDigestID]image.InspectResponse{layerID: labelled(nil)},
 			want:   layerRef, wantPolicy: pullPolicyMissing,
 		},
 		{
 			name:    "an upstream built locally is never pulled",
 			running: upstreamID, ref: "app:dev",
-			images: map[model.ImageDigestID]image.InspectResponse{upstreamID: {}},
+			images: map[composemodel.ImageDigestID]image.InspectResponse{upstreamID: {}},
 			want:   "app:dev", wantPolicy: pullPolicyNever,
 		},
 		{
 			name:    "an image compose built under a bare name loses the :latest the engine tagged it with",
 			running: upstreamID, ref: "demo-app:latest",
-			images: map[model.ImageDigestID]image.InspectResponse{upstreamID: labelled(map[string]string{api.ProjectLabel: "demo"})},
+			images: map[composemodel.ImageDigestID]image.InspectResponse{upstreamID: labelled(map[string]string{api.ProjectLabel: "demo"})},
 			want:   "demo-app", wantPolicy: pullPolicyNever,
 		},
 		{
 			name:    "an image compose built is never pulled, though the containerd store digests it",
 			running: upstreamID, ref: "demo-app",
-			images: map[model.ImageDigestID]image.InspectResponse{upstreamID: {
+			images: map[composemodel.ImageDigestID]image.InspectResponse{upstreamID: {
 				RepoDigests: []string{"demo-app@sha256:eeee"},
 				Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{
 					Labels: map[string]string{api.ProjectLabel: "demo"},
@@ -864,7 +863,7 @@ func TestNewServiceConfig_VolumesFrom(t *testing.T) {
 			svc := composemodel.Service{
 				Name: "app",
 				Volumes: []composemodel.ServiceVolume{{
-					Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: 1,
+					Type: composemodel.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: 1,
 					InheritedFrom: tt.inheritedFrom,
 				}},
 				Containers: []composemodel.Container{{
@@ -1006,8 +1005,8 @@ func TestNewServiceConfig_PodmanDefaultOverImage(t *testing.T) {
 					Services: []composemodel.Service{service},
 					Networks: []composemodel.Network{{Key: "back", Name: "demo_back"}},
 				},
-				Images: map[model.ImageDigestID]image.InspectResponse{
-					model.ImageDigestID(inspect.Image): {ID: inspect.Image, Config: &tt.image},
+				Images: map[composemodel.ImageDigestID]image.InspectResponse{
+					composemodel.ImageDigestID(inspect.Image): {ID: inspect.Image, Config: &tt.image},
 				},
 			}
 
@@ -1093,8 +1092,8 @@ func TestNewServiceConfig_PodmanDefaults(t *testing.T) {
 					Services: []composemodel.Service{service},
 					Networks: []composemodel.Network{{Key: "back", Name: "demo_back"}},
 				},
-				Images: map[model.ImageDigestID]image.InspectResponse{
-					model.ImageDigestID(inspect.Image): {
+				Images: map[composemodel.ImageDigestID]image.InspectResponse{
+					composemodel.ImageDigestID(inspect.Image): {
 						ID:     inspect.Image,
 						Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Env: []string{"PATH=/bin"}}},
 					},

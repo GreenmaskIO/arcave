@@ -21,6 +21,7 @@ import (
 	"github.com/greenmaskio/storages"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend"
 )
@@ -30,7 +31,7 @@ type ObjectEraser struct{}
 
 func NewObjectEraser() ObjectEraser { return ObjectEraser{} }
 
-func (s ObjectEraser) Action() model.GarbageAction { return model.GarbageActionDeleteObject }
+func (s ObjectEraser) Action() model.GarbageAction { return composemodel.GarbageActionDeleteObject }
 
 // Erase deletes every object ops names, one at a time, since a batch Delete is refused whole for
 // one object already gone and fails whole for one that cannot be removed.
@@ -47,7 +48,7 @@ type TreeEraser struct{}
 
 func NewTreeEraser() TreeEraser { return TreeEraser{} }
 
-func (s TreeEraser) Action() model.GarbageAction { return model.GarbageActionDeleteTree }
+func (s TreeEraser) Action() model.GarbageAction { return composemodel.GarbageActionDeleteTree }
 
 // Erase deletes every directory ops names, whole.
 func (s TreeEraser) Erase(
@@ -63,7 +64,7 @@ type ImageEraser struct{}
 
 func NewImageEraser() ImageEraser { return ImageEraser{} }
 
-func (s ImageEraser) Action() model.GarbageAction { return model.GarbageActionDeleteImage }
+func (s ImageEraser) Action() model.GarbageAction { return composemodel.GarbageActionDeleteImage }
 
 // Erase deletes every image directory ops names, each one's manifest first.
 func (s ImageEraser) Erase(
@@ -88,7 +89,7 @@ func NewTagEraser(daemon tagRemover) TagEraser {
 	return TagEraser{daemon: daemon}
 }
 
-func (s TagEraser) Action() model.GarbageAction { return model.GarbageActionUntag }
+func (s TagEraser) Action() model.GarbageAction { return composemodel.GarbageActionUntag }
 
 // Erase takes every tag ops name off the daemon: a tag whose image a container was created from
 // since it was found fails alone.

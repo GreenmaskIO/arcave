@@ -14,7 +14,14 @@
 
 package model
 
-import "context"
+import (
+	"context"
+
+	"github.com/greenmaskio/storages"
+
+	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+)
 
 // VolumeSnapshotBackend captures and restores one volume; it never deletes. What it
 // writes under the savepoint's tree goes with the tree, and anything beside it needs
@@ -33,7 +40,7 @@ type VolumeSnapshotBackend interface {
 // names. Whatever a kind shares between its instances is built and owned at the
 // DI root and lives for the process — a factory has no lifecycle of its own.
 type SnapshotBackendFactory interface {
-	Kind() SnapshotBackendKind
+	Kind() composeconfig.SnapshotBackendKind
 	New(spec BackendSpec) (VolumeSnapshotBackend, error)
 }
 
@@ -42,3 +49,39 @@ type SnapshotBackendFactory interface {
 type SnapshotBackendRegistry interface {
 	New(spec BackendSpec) (VolumeSnapshotBackend, error)
 }
+
+// BackendSpec binds a snapshot backend to one volume and the root it may write
+// under. It carries no snapshot id — that is the request's, so one instance
+// serves a whole workflow — and no kind: Volume.Backend is what the registry
+// dispatches on.
+type BackendSpec struct {
+	// Store is the root the caller hands over: a savepoint's tree for a savepoint,
+	// a rollback's undo tree for a safety snapshot. Which of them it is, is the
+	// caller's call — the backend only knows it is a root, and what it lays out
+	// below it is its own policy. A backend whose data lives elsewhere (cdc, whose
+	// repository outlives every session) may ignore it.
+	Store  storages.Navigator
+	Volume Volume
+}
+
+// One request per kind of backend operation; the root an instance writes to is bound at construction.
+// SnapshotID addresses either kind of capture — a savepoint's or a safety snapshot's.
+type (
+	BackendSnapshotRequest struct {
+		SnapshotID model.SavepointID
+		// Labels are the savepoint's marks, for the backend to render into
+		// whatever marking its own store understands. A backend with nowhere to
+		// put them ignores them.
+		Labels map[string]string
+	}
+
+	BackendRestoreRequest struct {
+		SnapshotID model.SavepointID
+		// Payload is the SnapshotStat.Payload the write reported; only the backend
+		// that produced it interprets it.
+		Payload any
+		// SizeBytes is the SnapshotStat.SizeBytes the write reported, 0 when
+		// unknown: a total for progress, never a check.
+		SizeBytes int64
+	}
+)

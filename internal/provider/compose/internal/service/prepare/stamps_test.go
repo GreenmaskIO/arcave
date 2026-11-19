@@ -16,15 +16,14 @@ package prepare
 
 import (
 	"context"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // mountingProject is a spec whose db mounts pgdata at /data, its labels as the case says.
@@ -40,10 +39,12 @@ func mountingProject(labels types.Labels) *types.Project {
 }
 
 func TestCheckCaptureStamps(t *testing.T) {
-	record := model.Savepoint{
-		Stats: []model.SnapshotStat{{Volume: model.Volume{ObjectID: "volume-named-demo_pgdata", Named: &model.VolumePropertiesNamed{
-			VolumeName: "demo_pgdata", UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}},
-		}}}},
+	record := composemodel.Savepoint{
+		Detail: composemodel.SavepointDetail{
+			Stats: []composemodel.SnapshotStat{{Volume: composemodel.Volume{ObjectID: "volume-named-demo_pgdata", Named: &composemodel.VolumePropertiesNamed{
+				VolumeName: "demo_pgdata", UsedBy: []composemodel.ServiceReference{{Service: "db", Target: "/data"}},
+			}}}},
+		},
 	}
 	tests := []struct {
 		name      string
@@ -60,13 +61,13 @@ func TestCheckCaptureStamps(t *testing.T) {
 			string(composemodel.NewMountStampLabel("/cache")): "true; backend=fullcopy; origin=config",
 		}, wantErr: "the mount at /cache of service db", wantErrIs: errSpecRecordMismatch},
 		{name: "a layer the spec leaves out needs nothing of the record", labels: types.Labels{
-			string(model.SystemLabelWritableLayerStamp): "false; origin=config; source=capture.writable_layers=false in the config",
+			string(composemodel.SystemLabelWritableLayerStamp): "false; origin=config; source=capture.writable_layers=false in the config",
 		}},
 		{name: "a layer the spec captures and the record lacks is refused", labels: types.Labels{
-			string(model.SystemLabelWritableLayerStamp): "true; backend=dedupcopy; origin=config",
+			string(composemodel.SystemLabelWritableLayerStamp): "true; backend=dedupcopy; origin=config",
 		}, wantErr: "the writable layer of service db", wantErrIs: errSpecRecordMismatch},
 		{name: "a stamp arcave cannot read is refused", labels: types.Labels{
-			string(model.SystemLabelWritableLayerStamp): "yes",
+			string(composemodel.SystemLabelWritableLayerStamp): "yes",
 		}, wantErr: "want true or false first"},
 	}
 	for _, tt := range tests {

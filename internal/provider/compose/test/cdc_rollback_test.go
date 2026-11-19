@@ -20,12 +20,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/storages"
@@ -131,8 +132,8 @@ func TestCDCBackend_CreateAndRollback(t *testing.T) {
 			// The first capture initialises each volume's repository and ships it whole.
 			first, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "before-migration"})
 			require.NoError(t, err)
-			require.Len(t, first.Stats, len(env.volumes))
-			for _, stat := range first.Stats {
+			require.Len(t, detailOf(t, first).Stats, len(env.volumes))
+			for _, stat := range detailOf(t, first).Stats {
 				payload := resticPayload(t, stat)
 				assert.NotEmpty(t, payload.SnapshotObjectID, "%s", stat.Volume.ObjectID)
 				assert.Positive(t, stat.SizeBytes, "%s", stat.Volume.ObjectID)
@@ -162,7 +163,7 @@ func TestCDCBackend_CreateAndRollback(t *testing.T) {
 			require.NotEqual(t, before, env.hashAll(t), "the mutation must actually change a volume")
 			res, err := env.svc.Rollback(env.ctx, model.RollbackRequest{ID: &first.ID})
 			require.NoError(t, err)
-			assert.Len(t, res.Restored, len(env.volumes))
+			assert.Len(t, restoreDetailOf(t, res.Detail).Volumes, len(env.volumes))
 			assert.Equal(t, before, env.hashAll(t),
 				"the rolled-back volumes must hash as they did at capture time")
 		})
@@ -251,7 +252,7 @@ func TestCDCBackend_RollbackInAClonedSession(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, before, env.hashAll(t), "the clone restores the savepoint's data")
-	for _, stat := range savepoint.Stats {
+	for _, stat := range detailOf(t, savepoint).Stats {
 		snapshot := cdc.NamespaceRepos + "/" + stat.Volume.ObjectID + "/snapshots/" + resticPayload(t, stat).SnapshotObjectID
 		exists, err := cloneStore.Exists(env.ctx, snapshot)
 		require.NoError(t, err)
@@ -420,7 +421,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 			ProjectAssembler: spec,
 			SpecCodec:        spec,
 			BackendRegistry:  registry,
-			CaptureDefaults:  newCaptureDefaults(model.SnapshotBackendCDC),
+			CaptureDefaults:  newCaptureDefaults(composeconfig.SnapshotBackendCDC),
 			ComposeReader:    stubInspector{result: introspectionOf(e.volumes)},
 			VolumeRemover:    stubVolumeRemover{},
 		}),
@@ -430,13 +431,13 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 
 // newCaptureDefaults are the capture defaults the provider's root builds from a config that names
 // only the volume backend: every kind captured, layers deduplicated.
-func newCaptureDefaults(volumeBackend model.SnapshotBackendKind) capturepolicy.CaptureDefaults {
+func newCaptureDefaults(volumeBackend composeconfig.SnapshotBackendKind) capturepolicy.CaptureDefaults {
 	return capturepolicy.CaptureDefaults{
 		VolumeBackend:        volumeBackend,
-		WritableLayerBackend: model.ImageBackendDedupCopy,
+		WritableLayerBackend: composeconfig.ImageBackendDedupCopy,
 		HookTimeout:          composeconfig.DefaultHookTimeout,
-		HookOnError:          model.HookOnErrorFail,
-		Mode:                 model.CaptureModeStop,
+		HookOnError:          composeconfig.HookOnErrorFail,
+		Mode:                 composeconfig.CaptureModeStop,
 		SavepointCapture: capturepolicy.SavepointCaptureSettings{
 			WritableLayers:   true,
 			Images:           true,
@@ -511,7 +512,7 @@ func introspectionOf(volumes []cdcVolume) composemodel.IntrospectionResult {
 		named = append(named, composemodel.NamedVolume{
 			Key:    v.service,
 			Name:   v.name,
-			UsedBy: []model.ServiceReference{{Service: v.service, Target: v.target}},
+			UsedBy: []composemodel.ServiceReference{{Service: v.service, Target: v.target}},
 		})
 		services = append(services, composemodel.Service{Name: v.service, Image: daemontest.BusyboxImage})
 	}
@@ -524,7 +525,7 @@ func introspectionOf(volumes []cdcVolume) composemodel.IntrospectionResult {
 
 // resticPayload reads a stat's payload as the backend reported it — in memory,
 // so it is still the struct rather than the map a stored record decodes to.
-func resticPayload(t *testing.T, stat model.SnapshotStat) cdc.Payload {
+func resticPayload(t *testing.T, stat composemodel.SnapshotStat) cdc.Payload {
 	t.Helper()
 
 	payload, ok := stat.Payload.(cdc.Payload)
@@ -536,7 +537,7 @@ func totalDataAdded(t *testing.T, record model.Savepoint) int64 {
 	t.Helper()
 
 	var total int64
-	for _, stat := range record.Stats {
+	for _, stat := range detailOf(t, record).Stats {
 		total += stat.StoredBytes
 	}
 	return total

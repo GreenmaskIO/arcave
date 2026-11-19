@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
 	"github.com/stretchr/testify/assert"
@@ -63,27 +65,31 @@ func newStore(t *testing.T) (storages.Storager, string) {
 // record is a savepoint with one captured volume, for the id given. The stat's
 // payload is nil: a typed one would not survive the round trip (it decodes back
 // as a map), which is why nothing outside its own backend reads one.
-func record(id model.SavepointID) model.Savepoint {
-	return model.Savepoint{
-		ID:        id,
-		Name:      "before-migration",
-		CreatedAt: time.Date(2026, 6, 1, 19, 41, 12, 0, time.UTC),
-		Stats: []model.SnapshotStat{{
-			Type:        model.SnapshotBackendFullCopy,
-			SizeBytes:   10485760,
-			StoredBytes: 1048576,
-			Volume: model.Volume{
-				ObjectID: "volume-named-myapp_pgdata",
-				Type:     model.VolumeTypeNamed,
-				Backend:  model.SnapshotBackendFullCopy,
-				Named: &model.VolumePropertiesNamed{
-					VolumeName: "myapp_pgdata",
-					UsedBy: []model.ServiceReference{
-						{Service: "db", Target: "/var/lib/postgresql/data"},
+func record(id model.SavepointID) composemodel.Savepoint {
+	return composemodel.Savepoint{
+		Header: model.Savepoint{
+			ID:        id,
+			Name:      "before-migration",
+			CreatedAt: time.Date(2026, 6, 1, 19, 41, 12, 0, time.UTC),
+		},
+		Detail: composemodel.SavepointDetail{
+			Stats: []composemodel.SnapshotStat{{
+				Type:        composeconfig.SnapshotBackendFullCopy,
+				SizeBytes:   10485760,
+				StoredBytes: 1048576,
+				Volume: composemodel.Volume{
+					ObjectID: "volume-named-myapp_pgdata",
+					Type:     composemodel.VolumeTypeNamed,
+					Backend:  composeconfig.SnapshotBackendFullCopy,
+					Named: &composemodel.VolumePropertiesNamed{
+						VolumeName: "myapp_pgdata",
+						UsedBy: []composemodel.ServiceReference{
+							{Service: "db", Target: "/var/lib/postgresql/data"},
+						},
 					},
 				},
-			},
-		}},
+			}},
+		},
 	}
 }
 
@@ -227,7 +233,7 @@ func TestRepository_List(t *testing.T) {
 			require.NoError(t, err)
 			ids := make([]string, 0, len(got))
 			for _, r := range got {
-				ids = append(ids, r.ID.String())
+				ids = append(ids, r.Header.ID.String())
 			}
 			assert.Equal(t, tt.wantIDs, nilIfEmpty(ids))
 		})
@@ -265,7 +271,7 @@ func TestRepository_DeleteSavepoint_RealStore(t *testing.T) {
 	got, err := repo.ListSavepoints(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.Equal(t, model.SavepointID(neighbour), got[0].ID)
+	assert.Equal(t, model.SavepointID(neighbour), got[0].Header.ID)
 }
 
 // A savepoint already gone is no error.
@@ -481,7 +487,7 @@ func TestRepository_LoadSavepoints(t *testing.T) {
 	require.NoError(t, err)
 	ids := make([]string, 0, len(got))
 	for _, savepoint := range got {
-		ids = append(ids, savepoint.ID.String())
+		ids = append(ids, savepoint.Header.ID.String())
 	}
 	assert.Equal(t, []string{"019e843e-1650-7000-8000-000000000000", "019e844b-7818-7000-8000-000000000000"}, ids)
 }

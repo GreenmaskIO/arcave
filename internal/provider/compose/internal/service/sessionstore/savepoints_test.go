@@ -16,6 +16,7 @@ package sessionstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
@@ -31,13 +33,28 @@ func TestSavepoints_Load(t *testing.T) {
 	errRead := errors.New("read failed")
 	tests := []struct {
 		name      string
-		loaded    []model.Savepoint
+		loaded    []composemodel.Savepoint
 		loadErr   error
 		want      model.Savepoint
 		wantFound bool
 		wantErr   error
 	}{
-		{name: "committed", loaded: []model.Savepoint{{ID: id}}, want: model.Savepoint{ID: id}, wantFound: true},
+		{
+			name: "committed, summed up",
+			loaded: []composemodel.Savepoint{{
+				Header: model.Savepoint{ID: id},
+				Detail: composemodel.SavepointDetail{Stats: []composemodel.SnapshotStat{{SizeBytes: 10, StoredBytes: 4}}},
+			}},
+			want: model.Savepoint{
+				ID:       id,
+				Provider: composemodel.ProviderName,
+				Summary: model.SavepointSummary{
+					Units: []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: 10, StoredBytes: 4}},
+				},
+				Detail: json.RawMessage(`{"stats":[{"volume":{"object_id":"","compose_project":"","type":"","backend":""},"type":"","size_bytes":10,"stored_bytes":4}]}`),
+			},
+			wantFound: true,
+		},
 		{name: "never committed or removed since"},
 		{name: "a record that cannot be read", loadErr: errRead, wantErr: errRead},
 	}

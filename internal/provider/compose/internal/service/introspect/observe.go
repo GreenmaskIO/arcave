@@ -113,7 +113,7 @@ func newObservedReplica(c composemodel.Container) provider.ObservedReplica {
 	if state.Health != nil {
 		failing = state.Health.FailingStreak
 	}
-	if parsed, ok, err := model.ParseSavepointDeployment(c.Labels); err != nil {
+	if parsed, ok, err := composemodel.ParseDeploymentLabels(c.Labels); err != nil {
 		deploymentErr = err
 	} else if ok {
 		deployment = &parsed

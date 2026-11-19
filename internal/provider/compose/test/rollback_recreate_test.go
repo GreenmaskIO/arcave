@@ -130,7 +130,7 @@ func TestRollback_RebuiltReplicaKeepsItsMountsAndLogSize(t *testing.T) {
 	}
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "two-replicas"})
 	require.NoError(t, err)
-	require.Len(t, savepoint.WritableLayers, 2, "one layer per replica, so the second has to be rebuilt")
+	require.Len(t, detailOf(t, savepoint).WritableLayers, 2, "one layer per replica, so the second has to be rebuilt")
 
 	// Act
 	_, err = env.svc.Rollback(env.ctx, model.RollbackRequest{ID: &savepoint.ID})
@@ -175,7 +175,7 @@ func TestRollback_RebuildsTheComposeProjectFromTheSavepointSpec(t *testing.T) {
 
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "before-drift"})
 	require.NoError(t, err)
-	require.NotNil(t, savepoint.Spec, "the savepoint records the compose project it was taken of")
+	require.NotNil(t, detailOf(t, savepoint).Spec, "the savepoint records the compose project it was taken of")
 
 	// The compose project drifts: a new environment, label, alias and published port.
 	drifted := env.port + 1

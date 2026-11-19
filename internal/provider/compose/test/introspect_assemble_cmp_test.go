@@ -16,13 +16,14 @@ package test
 
 import (
 	"cmp"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"maps"
 	"net/netip"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v5/pkg/api"
@@ -32,8 +33,6 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/volume"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // setFields are the spec's fields whose order carries no meaning; command, entrypoint and
@@ -275,7 +274,7 @@ func (n normalizer) service(svc composemodel.Service) composemodel.Service {
 	for i, v := range svc.Volumes {
 		v.VolumeName = n.volumeName(v.VolumeName)
 		v.InheritedFrom = joinedService(n.id(v.InheritedFrom))
-		if v.Type == model.VolumeTypeAnon {
+		if v.Type == composemodel.VolumeTypeAnon {
 			v.Source = n.volumeName(v.Source)
 		}
 		out.Volumes[i] = v

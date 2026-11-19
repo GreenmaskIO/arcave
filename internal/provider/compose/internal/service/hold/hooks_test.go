@@ -24,14 +24,14 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // newTestHook is a hook running command, failing the workflow or not by onError.
-func newTestHook(command string, onError model.HookOnError) *composemodel.Hook {
+func newTestHook(command string, onError composeconfig.HookOnError) *composemodel.Hook {
 	return &composemodel.Hook{
 		Command: []string{command},
 		Timeout: time.Minute,
@@ -54,8 +54,8 @@ func exitedWith(code int, stderr string) composemodel.ExecResult {
 
 func TestNewHookTrigger(t *testing.T) {
 	var (
-		pre        = newTestHook("pre", model.HookOnErrorFail)
-		post       = newTestHook("post", model.HookOnErrorFail)
+		pre        = newTestHook("pre", composeconfig.HookOnErrorFail)
+		post       = newTestHook("post", composeconfig.HookOnErrorFail)
 		pausedWeb2 = composemodel.IdleReplica{Ref: webReplica2, State: "paused"}
 	)
 
@@ -126,9 +126,9 @@ func TestNewTriggersByMode_HooksFirst(t *testing.T) {
 	// Arrange
 	runner := &composetest.MockComposeRunner{}
 	control := &composetest.MockContainerControl{}
-	pre := newTestHook("pre", model.HookOnErrorFail)
+	pre := newTestHook("pre", composeconfig.HookOnErrorFail)
 	plan := composemodel.Plan{Project: demoSpec, Services: []composemodel.ServiceHold{
-		{Service: "db", Mode: model.CaptureModeStop, Running: []composemodel.ContainerRef{dbReplica1}, PreCapture: pre},
+		{Service: "db", Mode: composeconfig.CaptureModeStop, Running: []composemodel.ContainerRef{dbReplica1}, PreCapture: pre},
 	}}
 
 	// Act
@@ -141,19 +141,19 @@ func TestNewTriggersByMode_HooksFirst(t *testing.T) {
 
 func TestRunHooks(t *testing.T) {
 	var (
-		fail       = *newTestHook("hook", model.HookOnErrorFail)
-		continuing = *newTestHook("hook", model.HookOnErrorContinue)
+		fail       = *newTestHook("hook", composeconfig.HookOnErrorFail)
+		continuing = *newTestHook("hook", composeconfig.HookOnErrorContinue)
 		errBoom    = errors.New("boom")
 	)
 
 	tests := []struct {
 		name    string
-		phase   model.HookPhase
+		phase   composemodel.HookPhase
 		targets []hookTarget
 		// results answer each container's exec, by its id.
 		results map[string]composemodel.ExecResult
 		errs    map[string]error
-		want    []model.FailedHook
+		want    []composemodel.FailedHook
 		wantErr string
 		// wantWarnings are the warnings given, and whether each is marked InResult.
 		wantWarnings []string
@@ -161,19 +161,19 @@ func TestRunHooks(t *testing.T) {
 	}{
 		{
 			name:    "every hook passes",
-			phase:   model.HookPhasePreCapture,
+			phase:   composemodel.HookPhasePreCapture,
 			targets: []hookTarget{{ref: dbReplica1, hook: fail}, {ref: webReplica1, hook: fail}},
 		},
 		{
 			name:    "a failed hook fails, the others run to their end, its last line of stderr quoted",
-			phase:   model.HookPhasePreCapture,
+			phase:   composemodel.HookPhasePreCapture,
 			targets: []hookTarget{{ref: dbReplica1, hook: fail}, {ref: webReplica1, hook: fail}},
 			results: map[string]composemodel.ExecResult{"db1": exitedWith(3, "starting\npsql: connection refused\n\n")},
 			wantErr: "pre-capture hook of db-1 failed: exit 3: psql: connection refused",
 		},
 		{
 			name:    "a failed hook with a blank stderr quotes its stdout, where Docker says why it did not start",
-			phase:   model.HookPhasePreCapture,
+			phase:   composemodel.HookPhasePreCapture,
 			targets: []hookTarget{{ref: dbReplica1, hook: fail}},
 			results: map[string]composemodel.ExecResult{"db1": {
 				ExitCode: 127,
@@ -185,21 +185,21 @@ func TestRunHooks(t *testing.T) {
 		},
 		{
 			name:    "of two failed, the first by the targets is returned, naming the other",
-			phase:   model.HookPhasePostCapture,
+			phase:   composemodel.HookPhasePostCapture,
 			targets: []hookTarget{{ref: dbReplica1, hook: fail}, {ref: webReplica1, hook: fail}},
 			results: map[string]composemodel.ExecResult{"db1": exitedWith(1, ""), "web1": exitedWith(2, "")},
 			wantErr: "post-capture hook of db-1 failed: exit 1; and 1 more hook failed",
 		},
 		{
 			name:    "a pre-capture failure continue lets through is a warning the result repeats, and recorded",
-			phase:   model.HookPhasePreCapture,
+			phase:   composemodel.HookPhasePreCapture,
 			targets: []hookTarget{{ref: dbReplica1, hook: continuing}},
 			results: map[string]composemodel.ExecResult{"db1": exitedWith(3, "boom")},
-			want: []model.FailedHook{{
+			want: []composemodel.FailedHook{{
 				Service:   "db",
 				Replica:   1,
 				Container: "demo-db-1",
-				Hook:      model.HookPhasePreCapture,
+				Hook:      composemodel.HookPhasePreCapture,
 				ExitCode:  new(3),
 				Error:     "exit 3: boom",
 			}},
@@ -208,14 +208,14 @@ func TestRunHooks(t *testing.T) {
 		},
 		{
 			name:    "a post-capture failure continue lets through is a warning the result does not repeat",
-			phase:   model.HookPhasePostCapture,
+			phase:   composemodel.HookPhasePostCapture,
 			targets: []hookTarget{{ref: dbReplica1, hook: continuing}},
 			errs:    map[string]error{"db1": errBoom},
-			want: []model.FailedHook{{
+			want: []composemodel.FailedHook{{
 				Service:   "db",
 				Replica:   1,
 				Container: "demo-db-1",
-				Hook:      model.HookPhasePostCapture,
+				Hook:      composemodel.HookPhasePostCapture,
 				Error:     "boom",
 			}},
 			wantWarnings: []string{"post-capture hook of db-1 failed: boom; continuing"},
@@ -223,7 +223,7 @@ func TestRunHooks(t *testing.T) {
 		},
 		{
 			name:         "a replica not running is skipped with a warning, whatever on-error says",
-			phase:        model.HookPhasePostCapture,
+			phase:        composemodel.HookPhasePostCapture,
 			targets:      []hookTarget{{ref: dbReplica1, hook: fail}},
 			errs:         map[string]error{"db1": composemodel.ErrContainerNotRunning},
 			wantWarnings: []string{"db-1 is not running: post-capture hook skipped"},
@@ -231,7 +231,7 @@ func TestRunHooks(t *testing.T) {
 		},
 		{
 			name:         "a replica not running is skipped under continue too, and recorded nowhere",
-			phase:        model.HookPhasePreCapture,
+			phase:        composemodel.HookPhasePreCapture,
 			targets:      []hookTarget{{ref: dbReplica1, hook: continuing}},
 			errs:         map[string]error{"db1": composemodel.ErrContainerNotRunning},
 			wantWarnings: []string{"db-1 is not running: pre-capture hook skipped"},
@@ -239,7 +239,7 @@ func TestRunHooks(t *testing.T) {
 		},
 		{
 			name:    "the daemon's failure is the hook's",
-			phase:   model.HookPhasePreCapture,
+			phase:   composemodel.HookPhasePreCapture,
 			targets: []hookTarget{{ref: dbReplica1, hook: fail}},
 			errs:    map[string]error{"db1": errBoom},
 			wantErr: "pre-capture hook of db-1 failed: boom",
@@ -276,23 +276,23 @@ func TestRunHooks(t *testing.T) {
 func TestRunHooks_Timeout(t *testing.T) {
 	tests := []struct {
 		name    string
-		onError model.HookOnError
-		want    []model.FailedHook
+		onError composeconfig.HookOnError
+		want    []composemodel.FailedHook
 		wantErr string
 	}{
 		{
 			name:    "fail",
-			onError: model.HookOnErrorFail,
+			onError: composeconfig.HookOnErrorFail,
 			wantErr: "pre-capture hook of db-1 failed: timed out after 1ms",
 		},
 		{
 			name:    "continue records it with no exit code",
-			onError: model.HookOnErrorContinue,
-			want: []model.FailedHook{{
+			onError: composeconfig.HookOnErrorContinue,
+			want: []composemodel.FailedHook{{
 				Service:   "db",
 				Replica:   1,
 				Container: "demo-db-1",
-				Hook:      model.HookPhasePreCapture,
+				Hook:      composemodel.HookPhasePreCapture,
 				Error:     "timed out after 1ms",
 			}},
 		},
@@ -307,7 +307,7 @@ func TestRunHooks_Timeout(t *testing.T) {
 				Return(composemodel.ExecResult{}, context.DeadlineExceeded)
 
 			// Act
-			got, err := runHooks(composetest.NewTestContext(), control, model.HookPhasePreCapture,
+			got, err := runHooks(composetest.NewTestContext(), control, composemodel.HookPhasePreCapture,
 				[]hookTarget{{ref: dbReplica1, hook: hook}})
 
 			// Assert
@@ -327,14 +327,14 @@ func TestRunHooks_Timeout(t *testing.T) {
 func TestRunHooks_Interrupt(t *testing.T) {
 	// Arrange
 	control := &composetest.MockContainerControl{}
-	hook := *newTestHook("hook", model.HookOnErrorContinue)
+	hook := *newTestHook("hook", composeconfig.HookOnErrorContinue)
 	ctx, cancel := context.WithCancel(composetest.NewTestContext())
 	expectExec(control, "db1", "hook").
 		Run(func(mock.Arguments) { cancel() }).
 		Return(composemodel.ExecResult{}, context.Canceled)
 
 	// Act
-	failed, err := runHooks(ctx, control, model.HookPhasePreCapture, []hookTarget{{ref: dbReplica1, hook: hook}})
+	failed, err := runHooks(ctx, control, composemodel.HookPhasePreCapture, []hookTarget{{ref: dbReplica1, hook: hook}})
 
 	// Assert
 	assert.ErrorIs(t, err, context.Canceled)
@@ -347,7 +347,7 @@ func TestRunHooks_Interrupt(t *testing.T) {
 func TestRunHooks_InterruptOutranksAFailure(t *testing.T) {
 	// Arrange
 	control := &composetest.MockContainerControl{}
-	hook := *newTestHook("hook", model.HookOnErrorFail)
+	hook := *newTestHook("hook", composeconfig.HookOnErrorFail)
 	ctx, cancel := context.WithCancel(composetest.NewTestContext())
 	expectExec(control, "db1", "hook").Return(exitedWith(3, "boom"), nil)
 	expectExec(control, "web1", "hook").
@@ -355,7 +355,7 @@ func TestRunHooks_InterruptOutranksAFailure(t *testing.T) {
 		Return(composemodel.ExecResult{}, context.Canceled)
 
 	// Act
-	_, err := runHooks(ctx, control, model.HookPhasePreCapture,
+	_, err := runHooks(ctx, control, composemodel.HookPhasePreCapture,
 		[]hookTarget{{ref: dbReplica1, hook: hook}, {ref: webReplica1, hook: hook}})
 
 	// Assert
@@ -366,7 +366,7 @@ func TestRunHooks_InterruptOutranksAFailure(t *testing.T) {
 
 // A batch per phase with a step per replica; no hook, no batch.
 func TestHookTrigger_beforeCapture(t *testing.T) {
-	hook := *newTestHook("hook", model.HookOnErrorFail)
+	hook := *newTestHook("hook", composeconfig.HookOnErrorFail)
 
 	tests := []struct {
 		name string
@@ -408,8 +408,8 @@ func TestHookTrigger_beforeCapture(t *testing.T) {
 // web paused, each with its hooks.
 func TestTriggers(t *testing.T) {
 	var (
-		fail       = model.HookOnErrorFail
-		continuing = model.HookOnErrorContinue
+		fail       = composeconfig.HookOnErrorFail
+		continuing = composeconfig.HookOnErrorContinue
 		errBoom    = errors.New("boom")
 	)
 	type hooks struct {
@@ -468,11 +468,11 @@ func TestTriggers(t *testing.T) {
 				start := runner.On("Start", mock.Anything, demoSpec, time.Minute).Return(nil).Once()
 				mock.InOrder(pre, stop, pause, unpause, await, start)
 			},
-			wantOutcome: Outcome{FailedHooks: []model.FailedHook{{
+			wantOutcome: Outcome{FailedHooks: []composemodel.FailedHook{{
 				Service:   "db",
 				Replica:   1,
 				Container: "demo-db-1",
-				Hook:      model.HookPhasePreCapture,
+				Hook:      composemodel.HookPhasePreCapture,
 				ExitCode:  new(3),
 				Error:     "exit 3: boom",
 			}}},
@@ -555,9 +555,9 @@ func TestTriggers(t *testing.T) {
 			control := &composetest.MockContainerControl{}
 			tt.expect(runner, control)
 			plan := composemodel.Plan{Project: demoSpec, Services: []composemodel.ServiceHold{
-				{Service: "db", Mode: model.CaptureModeStop, Running: []composemodel.ContainerRef{dbReplica1},
+				{Service: "db", Mode: composeconfig.CaptureModeStop, Running: []composemodel.ContainerRef{dbReplica1},
 					PreCapture: tt.db.pre, PostCapture: tt.db.post},
-				{Service: "web", Mode: model.CaptureModePause, Running: []composemodel.ContainerRef{webReplica1}, Idle: tt.webIdle,
+				{Service: "web", Mode: composeconfig.CaptureModePause, Running: []composemodel.ContainerRef{webReplica1}, Idle: tt.webIdle,
 					PreCapture: tt.web.pre, PostCapture: tt.web.post},
 			}}
 			triggers := NewTriggersByMode(runner, control, plan, time.Minute)

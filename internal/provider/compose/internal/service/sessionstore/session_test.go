@@ -27,6 +27,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
@@ -89,7 +90,13 @@ func TestSession_Workloads(t *testing.T) {
 // A workload's savepoints are the repository of its own compose project's store.
 func TestSession_Savepoints(t *testing.T) {
 	// Arrange
-	savepoints := []model.Savepoint{{ID: "019e843e-1650-7000-8000-000000000001"}}
+	savepoints := []composemodel.Savepoint{
+		{
+			Header: model.Savepoint{
+				ID: "019e843e-1650-7000-8000-000000000001",
+			},
+		},
+	}
 	records := &composetest.MockSavepointRepo{}
 	records.On("ListSavepoints", mock.Anything).Return(savepoints, nil).Once()
 	var openedAt string
@@ -110,7 +117,9 @@ func TestSession_Savepoints(t *testing.T) {
 	// Assert
 	require.NoError(t, listErr)
 	assert.Equal(t, "shop", openedAt)
-	assert.Equal(t, savepoints, listed)
+	require.Len(t, listed, 1)
+	assert.Equal(t, savepoints[0].Header.ID, listed[0].ID)
+	assert.Equal(t, composemodel.ProviderName, listed[0].Provider)
 	records.AssertExpectations(t)
 }
 
@@ -142,7 +151,7 @@ func TestSession_FindGarbage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			dataKinds := []model.GarbageDataKind{model.GarbageDataKindImageLayers}
+			dataKinds := []model.GarbageDataKind{composemodel.GarbageDataKindImageLayers}
 			var (
 				finder = &mockGarbageFinder{}
 				want   []provider.Garbage

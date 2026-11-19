@@ -15,9 +15,7 @@
 package model
 
 import (
-	"fmt"
-	"slices"
-	"strings"
+	"encoding/json"
 	"time"
 )
 
@@ -29,14 +27,9 @@ const (
 	SavepointLabelSafetySnapshotValue = "true"
 )
 
-// SpecFormatComposeYAML is the format of a savepoint's spec artifact: a compose
-// document, loadable by compose's own loader.
-const SpecFormatComposeYAML = "compose-yaml"
-
-// Savepoint is the metadata of one consistent snapshot of every registered
-// stateful volume. The per-volume bookkeeping lives with the SavepointRecord
-// that embeds this type. Its json tags are the wire contract: single-savepoint
-// command payloads marshal this type directly.
+// Savepoint is one savepoint as arcave reads it: the attributes it was taken with, which provider
+// took it, what that provider sums it up as, and the provider's own body, which arcave never
+// decodes. Its json tags are the wire contract: single-savepoint payloads marshal it directly.
 type Savepoint struct {
 	ID          SavepointID       `json:"id"`
 	Name        string            `json:"name"`
@@ -45,20 +38,15 @@ type Savepoint struct {
 	// TakenBeforeRollbackTo is the savepoint the rollback this safety snapshot was taken before went
 	// to, by the name it carried then; nil on any other savepoint. The label, not this field, is what
 	// makes a record a safety snapshot.
-	TakenBeforeRollbackTo *SavepointRef  `json:"taken_before_rollback_to,omitempty"`
-	CreatedAt             time.Time      `json:"created_at"`
-	Stats                 []SnapshotStat `json:"stats,omitempty"` // one per snapshotted volume
-	// WritableLayers is one capture per container whose writable layer was committed;
-	// empty when a capture takes none.
-	WritableLayers []WritableLayer `json:"writable_layers,omitempty"`
-	// Images is one entry per distinct image the compose file named, kept
-	// whether or not a writable layer was captured over it.
-	Images []Image `json:"images,omitempty"`
-	// Spec names the compose spec committed beside this record. A savepoint without
-	// one cannot be rolled back to: the compose project is rebuilt from the spec.
-	Spec *SpecRef `json:"spec,omitempty"`
-	// NotCovered is what this savepoint does not hold; nil when it holds everything.
-	NotCovered *NotCovered `json:"not_covered,omitempty"`
+	TakenBeforeRollbackTo *SavepointRef `json:"taken_before_rollback_to,omitempty"`
+	CreatedAt             time.Time     `json:"created_at"`
+	// Provider names the provider that took the savepoint and alone reads Detail.
+	Provider string `json:"provider"`
+	// Summary is what the provider sums Detail up as, derived on every read; a record on disk
+	// carries none.
+	Summary SavepointSummary `json:"summary,omitzero"`
+	// Detail is the provider's body of the savepoint.
+	Detail json.RawMessage `json:"detail,omitempty"`
 }
 
 // SavepointRef names a savepoint by id and by the name it carried then: the savepoint may since
@@ -76,60 +64,8 @@ func (m SavepointRef) String() string {
 	return m.ID.String()
 }
 
-// SpecRef is the reference to a savepoint's compose spec artifact.
-type SpecRef struct {
-	Format string `json:"format"` // SpecFormatComposeYAML
-}
-
 // IsSafetySnapshot reports whether this record is a rollback's undo rather than
 // a savepoint a user asked for.
 func (m Savepoint) IsSafetySnapshot() bool {
 	return m.Labels[SavepointLabelSafetySnapshot] == SavepointLabelSafetySnapshotValue
-}
-
-// Notices spells out what the savepoint leaves out and every image it names but does not store,
-// the severe first.
-func (m Savepoint) Notices() []Notice {
-	var notices []Notice
-	if m.NotCovered != nil {
-		notices = m.NotCovered.Notices()
-	}
-	for _, image := range m.Images {
-		if image.Stored {
-			continue
-		}
-		notices = append(notices, Notice{
-			Message: fmt.Sprintf("image %s is not stored, only its identity", newImageName(image)),
-			Hint:    "a rollback needs it pullable to rebuild a container on it",
-			Severe:  true,
-		})
-	}
-	return SortSevereFirst(notices)
-}
-
-// SortSevereFirst orders notices severe first, keeping their order otherwise.
-func SortSevereFirst(notices []Notice) []Notice {
-	return slices.SortedStableFunc(slices.Values(notices), func(a, b Notice) int {
-		return compareSevere(a.Severe, b.Severe)
-	})
-}
-
-// newImageName is an image's first reference, else its short id.
-func newImageName(image Image) string {
-	if len(image.Refs) > 0 {
-		return image.Refs[0]
-	}
-	return formatShortID(strings.TrimPrefix(image.ID.String(), "sha256:"))
-}
-
-// compareSevere orders a severe notice before one that only informs.
-func compareSevere(a, b bool) int {
-	switch {
-	case a == b:
-		return 0
-	case a:
-		return -1
-	default:
-		return 1
-	}
 }

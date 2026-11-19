@@ -18,8 +18,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 func TestPlan_NewNotCovered(t *testing.T) {
@@ -29,27 +27,27 @@ func TestPlan_NewNotCovered(t *testing.T) {
 		Service: "db",
 		Replica: 1,
 	}}
-	mounts := []model.SkippedVolume{{Service: "db", Target: "/tmp"}}
+	mounts := []SkippedVolume{{Service: "db", Target: "/tmp"}}
 
 	tests := []struct {
 		name        string
-		notCovered  model.NotCovered
+		notCovered  NotCovered
 		killed      []string
-		failedHooks []model.FailedHook
-		want        *model.NotCovered
+		failedHooks []FailedHook
+		want        *NotCovered
 	}{
 		{
 			name: "nothing left out is nil",
 		},
 		{
 			name:       "what the plan leaves out is kept",
-			notCovered: model.NotCovered{Mounts: mounts},
-			want:       &model.NotCovered{Mounts: mounts},
+			notCovered: NotCovered{Mounts: mounts},
+			want:       &NotCovered{Mounts: mounts},
 		},
 		{
 			name:   "a killed container is named by its replica",
 			killed: []string{"c1"},
-			want: &model.NotCovered{KilledContainers: []model.KilledContainer{{
+			want: &NotCovered{KilledContainers: []KilledContainer{{
 				Service:   "db",
 				Replica:   1,
 				Container: "demo-db-1",
@@ -58,12 +56,12 @@ func TestPlan_NewNotCovered(t *testing.T) {
 		{
 			name:   "an unknown id is kept as is",
 			killed: []string{"gone"},
-			want:   &model.NotCovered{KilledContainers: []model.KilledContainer{{Container: "gone"}}},
+			want:   &NotCovered{KilledContainers: []KilledContainer{{Container: "gone"}}},
 		},
 		{
 			name:        "a failed hook alone leaves something out",
-			failedHooks: []model.FailedHook{{Service: "db", Replica: 1, Hook: model.HookPhasePreCapture}},
-			want:        &model.NotCovered{FailedHooks: []model.FailedHook{{Service: "db", Replica: 1, Hook: model.HookPhasePreCapture}}},
+			failedHooks: []FailedHook{{Service: "db", Replica: 1, Hook: HookPhasePreCapture}},
+			want:        &NotCovered{FailedHooks: []FailedHook{{Service: "db", Replica: 1, Hook: HookPhasePreCapture}}},
 		},
 	}
 	for _, tt := range tests {

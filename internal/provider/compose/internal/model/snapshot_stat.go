@@ -14,6 +14,10 @@
 
 package model
 
+import (
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+)
+
 // SnapshotStat is the result of snapshotting one volume. Payload is the
 // backend's own addressing — cdc's snapshot id, fullcopy's archive format.
 //
@@ -21,8 +25,8 @@ package model
 // archive from the Volume here. Payload decodes back as a map[string]any, which
 // costs nothing while no reader outside its own backend interprets one.
 type SnapshotStat struct {
-	Volume Volume              `json:"volume"`
-	Type   SnapshotBackendKind `json:"type"`
+	Volume Volume                            `json:"volume"`
+	Type   composeconfig.SnapshotBackendKind `json:"type"`
 	// SizeBytes is the backend's measure of the volume: fullcopy's tar stream,
 	// the bytes cdc read.
 	SizeBytes int64 `json:"size_bytes"`

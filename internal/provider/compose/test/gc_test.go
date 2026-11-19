@@ -32,6 +32,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	dockerclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	sprepo "github.com/greenmaskio/arcave/internal/provider/compose/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/collector/resticrepo"
@@ -86,7 +87,7 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	// Each image and blob op names a file the store holds, at its size.
 	preview, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
 	require.NoError(t, err)
-	for _, kind := range []model.GarbageDataKind{model.GarbageDataKindImageLayers, model.GarbageDataKindUpstreamImages} {
+	for _, kind := range []model.GarbageDataKind{composemodel.GarbageDataKindImageLayers, composemodel.GarbageDataKindUpstreamImages} {
 		for _, op := range opsByKind(preview)[kind] {
 			info, err := os.Stat(filepath.Join(composeDir, filepath.FromSlash(op.Target)))
 			require.NoError(t, err, "%s names an object the store holds", op.Target)
@@ -104,13 +105,13 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.DryRun)
 	ops := opsByKind(result)
-	assert.ElementsMatch(t, []string{deadTree.String(), staleTree.String()}, targetsOf(ops[model.GarbageDataKindSavepointData]),
+	assert.ElementsMatch(t, []string{deadTree.String(), staleTree.String()}, targetsOf(ops[composemodel.GarbageDataKindSavepointData]),
 		"a dead tree goes however young, whatever its heartbeat says")
-	assert.Contains(t, targetsOf(ops[model.GarbageDataKindUpstreamImages]), orphanImage)
+	assert.Contains(t, targetsOf(ops[composemodel.GarbageDataKindUpstreamImages]), orphanImage)
 	assert.Equal(t, []string{olderUndo.SafetySnapshot.String()}, targetsOf(ops[model.GarbageDataKindSafetySnapshots]),
 		"the older of the two rollbacks' safety snapshots goes")
-	assert.NotContains(t, targetsOf(ops[model.GarbageDataKindImageLayers]), orphanBlob, "an unreferenced image's blob waits for its manifest to go")
-	tags := targetsOf(ops[model.GarbageDataKindRestoredLayers])
+	assert.NotContains(t, targetsOf(ops[composemodel.GarbageDataKindImageLayers]), orphanBlob, "an unreferenced image's blob waits for its manifest to go")
+	tags := targetsOf(ops[composemodel.GarbageDataKindRestoredLayers])
 	assert.Contains(t, strings.Join(tags, ","), ":sp-"+first.ID.String(), "the first rollback's tag is unused")
 	assert.NotContains(t, strings.Join(tags, ","), ":sp-"+second.ID.String(), "the running container's tag is in use")
 
@@ -121,7 +122,7 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	)
 	for _, report := range result.Reports {
 		switch report.DataKind {
-		case model.GarbageDataKindRestoredLayers:
+		case composemodel.GarbageDataKindRestoredLayers:
 			require.NotNil(t, report.Deletion)
 			assert.Empty(t, report.Deletion.Failed)
 			assert.Len(t, report.Deletion.Deleted, report.Summary.Found)
@@ -138,7 +139,7 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 			for _, op := range report.Detail.Findings().Ops {
 				retired = append(retired, op.Target)
 			}
-		case model.GarbageDataKindDeduplicatedVolumes:
+		case composemodel.GarbageDataKindDeduplicatedVolumes:
 			require.Empty(t, report.Detail.Findings().Ops, "no savepoint here is cdc's")
 			assert.Equal(t, &model.GarbageDeletion{}, report.Deletion, "a report that found nothing has nothing left to delete")
 		default:
@@ -166,10 +167,10 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	secondRun, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{})
 	require.NoError(t, err)
 	secondOps := opsByKind(secondRun)
-	assert.Contains(t, targetsOf(secondOps[model.GarbageDataKindImageLayers]), orphanBlob)
+	assert.Contains(t, targetsOf(secondOps[composemodel.GarbageDataKindImageLayers]), orphanBlob)
 	assert.Empty(t, secondOps[model.GarbageDataKindSafetySnapshots], "the newest stays")
-	assert.Empty(t, secondOps[model.GarbageDataKindSavepointData])
-	assert.Empty(t, secondOps[model.GarbageDataKindUpstreamImages])
+	assert.Empty(t, secondOps[composemodel.GarbageDataKindSavepointData])
+	assert.Empty(t, secondOps[composemodel.GarbageDataKindUpstreamImages])
 	assert.NoFileExists(t, filepath.Join(composeDir, filepath.FromSlash(orphanBlob)))
 
 	// And the one after that finds nothing left in the store, and changes nothing.
@@ -179,7 +180,7 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	assert.Equal(t, beforeThird, fileSizes(t, env.storeDir()), "a dry run changes nothing")
 	thirdOps := opsByKind(thirdRun)
 	for _, kind := range []model.GarbageDataKind{
-		model.GarbageDataKindSavepointData, model.GarbageDataKindUpstreamImages, model.GarbageDataKindImageLayers,
+		composemodel.GarbageDataKindSavepointData, composemodel.GarbageDataKindUpstreamImages, composemodel.GarbageDataKindImageLayers,
 	} {
 		assert.Empty(t, thirdOps[kind], kind)
 	}
@@ -205,7 +206,7 @@ func plantUnreferencedImage(t *testing.T, composeDir string) (image, blob string
 	imageHex, blobHex := strings.Repeat("e", 64), strings.Repeat("f", 64)
 	image, blob = "shared/oci/images/sha256/"+imageHex, "shared/oci/blobs/sha256/"+blobHex
 	manifest, err := json.Marshal(imagebackend.Manifest{
-		ImageID: model.ImageDigestID("sha256:" + imageHex),
+		ImageID: composemodel.ImageDigestID("sha256:" + imageHex),
 		Format:  imagebackend.FormatBlobs,
 		Members: []imagebackend.Member{{Name: "blobs/sha256/" + blobHex, Kind: imagebackend.KindBlob, Digest: blobHex}},
 	})
@@ -256,7 +257,7 @@ func TestGC_DryRun_StaysInItsSession(t *testing.T) {
 	// Act
 	request := model.GarbageCollectRequest{
 		DryRun:    true,
-		DataKinds: []model.GarbageDataKind{model.GarbageDataKindSavepointData},
+		DataKinds: []model.GarbageDataKind{composemodel.GarbageDataKindSavepointData},
 	}
 	baseline, baselineErr := baselineSvc.GarbageCollect(env.ctx, request)
 	inFeat, featErr := featSvc.GarbageCollect(env.ctx, request)
@@ -266,7 +267,7 @@ func TestGC_DryRun_StaysInItsSession(t *testing.T) {
 	require.NoError(t, featErr)
 	assert.Equal(t, model.DefaultSession, baseline.Session)
 	assert.Zero(t, baseline.Total.Found, "feat's dead tree is not baseline's")
-	assert.Equal(t, []string{deadTree.String()}, targetsOf(opsByKind(inFeat)[model.GarbageDataKindSavepointData]))
+	assert.Equal(t, []string{deadTree.String()}, targetsOf(opsByKind(inFeat)[composemodel.GarbageDataKindSavepointData]))
 }
 
 // newGarbageCollector wires a gc over session the way openGCService does; without engine it
@@ -337,11 +338,11 @@ func TestGC_DryRun_ForgetsTheSnapshotsOfADeadSavepoint(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	require.Len(t, result.Reports, 1)
-	stat, ok := result.Reports[0].Detail.(model.ResticRepositoryStat)
+	stat, ok := result.Reports[0].Detail.(composemodel.ResticRepositoryStat)
 	require.True(t, ok)
 	assert.Len(t, stat.Ops, len(env.volumes), "one snapshot of the dead savepoint per volume")
 	for _, op := range stat.Ops {
-		assert.Equal(t, model.GarbageActionForget, op.Action)
+		assert.Equal(t, composemodel.GarbageActionForget, op.Action)
 		assert.Equal(t, first.ID, op.Savepoint)
 	}
 	assert.Equal(t, len(env.volumes), stat.LiveSnapshots, "the second savepoint's snapshots are live")
@@ -389,7 +390,7 @@ func TestGC_ForgetsTheSnapshotsOfARemovedSavepoint(t *testing.T) {
 			_, err = env.svc.RemoveSavepoints(env.ctx, model.RemoveRequest{Refs: []string{first.ID.String()}})
 			require.NoError(t, err)
 			require.Equal(t, beforeRemove, repoBytes(t, env), "a remove frees nothing in the repositories")
-			for _, stat := range first.Stats {
+			for _, stat := range detailOf(t, first).Stats {
 				exists, err := env.composeProjectStore.Exists(env.ctx,
 					cdc.NewSnapshotKey(stat.Volume.ObjectID, resticPayload(t, stat).SnapshotObjectID))
 				require.NoError(t, err)
@@ -413,7 +414,7 @@ func TestGC_ForgetsTheSnapshotsOfARemovedSavepoint(t *testing.T) {
 			require.NotNil(t, freed, "restic reports what every prune freed")
 			assert.Positive(t, *freed, "the mutated volume's old chunks were the first savepoint's alone")
 			assert.Less(t, repoBytes(t, env), before, "the prune shrank the repositories")
-			for _, stat := range first.Stats {
+			for _, stat := range detailOf(t, first).Stats {
 				exists, err := env.composeProjectStore.Exists(env.ctx,
 					cdc.NewSnapshotKey(stat.Volume.ObjectID, resticPayload(t, stat).SnapshotObjectID))
 				require.NoError(t, err)
@@ -426,7 +427,7 @@ func TestGC_ForgetsTheSnapshotsOfARemovedSavepoint(t *testing.T) {
 				DataKinds: resticKinds,
 			})
 			require.NoError(t, err)
-			stat, ok := again.Reports[0].Detail.(model.ResticRepositoryStat)
+			stat, ok := again.Reports[0].Detail.(composemodel.ResticRepositoryStat)
 			require.True(t, ok)
 			assert.Empty(t, stat.Ops)
 			assert.Equal(t, len(env.volumes), stat.LiveSnapshots)
@@ -441,7 +442,7 @@ func TestGC_ForgetsTheSnapshotsOfARemovedSavepoint(t *testing.T) {
 }
 
 // resticKinds asks a gc for the restic snapshots alone.
-var resticKinds = []model.GarbageDataKind{model.GarbageDataKindDeduplicatedVolumes}
+var resticKinds = []model.GarbageDataKind{composemodel.GarbageDataKindDeduplicatedVolumes}
 
 // newCDCGarbageCollector is a gc over env's default session, judging and deleting its restic
 // snapshots only.
@@ -614,17 +615,17 @@ func opsByKind(result model.GarbageCollectResult) map[model.GarbageDataKind][]mo
 			continue
 		}
 		switch stat := report.Detail.(type) {
-		case model.SavepointDirectoryStat:
+		case composemodel.SavepointDirectoryStat:
 			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
 		case model.SafetySnapshotStat:
 			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
-		case model.OCIImageStat:
+		case composemodel.OCIImageStat:
 			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
-		case model.OCIBlobStat:
+		case composemodel.OCIBlobStat:
 			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
-		case model.ResticRepositoryStat:
+		case composemodel.ResticRepositoryStat:
 			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
-		case model.DockerLayerTagStat:
+		case composemodel.DockerLayerTagStat:
 			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
 		}
 	}

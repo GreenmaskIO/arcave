@@ -19,15 +19,14 @@ package docker
 import (
 	"context"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strconv"
 	"time"
 
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // composeProjectLabel and composeServiceLabel are set by Docker Compose on
@@ -135,11 +134,11 @@ func (e *Engine) RunOneShot(ctx context.Context, spec composemodel.OneShotSpec) 
 // A named volume that does not exist is an error here, before anything creates
 // it: `docker create -v name:/x` would create the volume itself, so an empty
 // capture would silently replace live data at the next rollback.
-func (e *Engine) ResolveMountSource(ctx context.Context, volume model.Volume) (model.MountSource, error) {
+func (e *Engine) ResolveMountSource(ctx context.Context, volume composemodel.Volume) (composemodel.MountSource, error) {
 	if src, ok := volume.MountSource(); ok {
-		if src.Type == model.MountSourceVolume {
+		if src.Type == composemodel.MountSourceVolume {
 			if _, err := e.api.VolumeInspect(ctx, src.Source, client.VolumeInspectOptions{}); err != nil {
-				return model.MountSource{}, fmt.Errorf(
+				return composemodel.MountSource{}, fmt.Errorf(
 					"docker volume %q does not exist (bring the project up once to create it): %w", src.Source, err)
 			}
 		}
@@ -148,14 +147,14 @@ func (e *Engine) ResolveMountSource(ctx context.Context, volume model.Volume) (m
 
 	service, replica, target, ok := volume.LookupMount()
 	if !ok {
-		return model.MountSource{}, fmt.Errorf(
+		return composemodel.MountSource{}, fmt.Errorf(
 			"volume %s of type %s carries no way to reach its data", volume.ObjectID, volume.Type)
 	}
 	// An anonymous volume exists only as long as the container it was created
 	// for, so this is the one case a missing container is fatal.
 	mount, err := findServiceMount(ctx, e.api, volume.ComposeProject, service, replica, target)
 	if err != nil {
-		return model.MountSource{}, err
+		return composemodel.MountSource{}, err
 	}
 	return mountSourceOf(mount)
 }
@@ -167,7 +166,7 @@ func (e *Engine) ResolveMountSource(ctx context.Context, volume model.Volume) (m
 //
 // The caller owns the returned stream: closing it removes the container, which
 // therefore outlives this call.
-func (e *Engine) OpenVolume(ctx context.Context, src model.MountSource) (io.ReadCloser, error) {
+func (e *Engine) OpenVolume(ctx context.Context, src composemodel.MountSource) (io.ReadCloser, error) {
 	id, err := startVolumeHolder(ctx, e.api, src)
 	if err != nil {
 		return nil, err
@@ -187,7 +186,7 @@ func (e *Engine) OpenVolume(ctx context.Context, src model.MountSource) (io.Read
 
 // WriteVolume clears the volume and extracts the tar back into it, the mirror of
 // OpenVolume: members are relative to the mount and are extracted into it.
-func (e *Engine) WriteVolume(ctx context.Context, src model.MountSource, r io.Reader) error {
+func (e *Engine) WriteVolume(ctx context.Context, src composemodel.MountSource, r io.Reader) error {
 	if err := e.WipeVolume(ctx, src); err != nil {
 		return fmt.Errorf("clear volume %s before restore: %w", src.Source, err)
 	}
@@ -207,7 +206,7 @@ func (e *Engine) WriteVolume(ctx context.Context, src model.MountSource, r io.Re
 
 // WipeVolume clears the volume's contents — WriteVolume's first half on its own,
 // for a backend that writes the data back itself.
-func (e *Engine) WipeVolume(ctx context.Context, src model.MountSource) error {
+func (e *Engine) WipeVolume(ctx context.Context, src composemodel.MountSource) error {
 	if src.Source == "" {
 		return fmt.Errorf("cannot clear a %q volume with no source", src.Type)
 	}
@@ -291,7 +290,7 @@ func matchMount(containers []container.Summary, replica int, target string) (mou
 //
 // It is the wipe *policy* — which image, which command, which bind — over the
 // reusable one-shot container mechanism in oneshot.go, and exchanges no stdio.
-func wipeVolume(ctx context.Context, api dockerAPI, src model.MountSource) error {
+func wipeVolume(ctx context.Context, api dockerAPI, src composemodel.MountSource) error {
 	return runOneShotContainer(ctx, api, composemodel.OneShotSpec{
 		Image: VolumeToolsImage,
 		// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
@@ -306,18 +305,18 @@ func wipeVolume(ctx context.Context, api dockerAPI, src model.MountSource) error
 // volume name, bind mounts by host path. The one place a daemon-side mount
 // becomes a MountSource, so what a lookup answers cannot disagree with what the
 // compose project answers directly.
-func mountSourceOf(mount mountInfo) (model.MountSource, error) {
-	var src model.MountSource
+func mountSourceOf(mount mountInfo) (composemodel.MountSource, error) {
+	var src composemodel.MountSource
 	switch mount.Type {
 	case "volume":
-		src = model.MountSource{Type: model.MountSourceVolume, Source: mount.Name}
+		src = composemodel.MountSource{Type: composemodel.MountSourceVolume, Source: mount.Name}
 	case "bind":
-		src = model.MountSource{Type: model.MountSourceBind, Source: mount.Source}
+		src = composemodel.MountSource{Type: composemodel.MountSourceBind, Source: mount.Source}
 	default:
-		return model.MountSource{}, fmt.Errorf("unsupported mount type %q", mount.Type)
+		return composemodel.MountSource{}, fmt.Errorf("unsupported mount type %q", mount.Type)
 	}
 	if src.Source == "" {
-		return model.MountSource{}, fmt.Errorf("cannot resolve backing storage for %q mount", mount.Type)
+		return composemodel.MountSource{}, fmt.Errorf("cannot resolve backing storage for %q mount", mount.Type)
 	}
 	return src, nil
 }

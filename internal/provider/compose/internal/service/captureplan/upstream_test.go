@@ -16,8 +16,9 @@ package captureplan
 
 import (
 	"context"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/moby/api/types/container"
@@ -27,23 +28,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
 // layerID and layerRef are a layer a rollback restored, which the container now runs on.
 const (
-	layerID  = model.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+	layerID  = composemodel.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
 	layerRef = "arcave/demo-db-1-postgres-16:sp-019e7044-8fd0-7000-8000-000000000000"
 )
 
 func TestNewContainerRefs(t *testing.T) {
 	tests := []struct {
 		name   string
-		image  model.ImageDigestID
+		image  composemodel.ImageDigestID
 		ref    string
 		labels map[string]string
-		wantID model.ImageDigestID
+		wantID composemodel.ImageDigestID
 		want   string
 	}{
 		{
@@ -54,13 +54,13 @@ func TestNewContainerRefs(t *testing.T) {
 		{
 			name:  "a layer naming its upstream by label",
 			image: layerID, ref: layerRef,
-			labels: map[string]string{string(model.SystemLabelBaseImageID): composetest.DemoUpstreamID.String(), string(model.SystemLabelBaseImageRef): composetest.DemoBaseImage},
+			labels: map[string]string{string(composemodel.SystemLabelBaseImageID): composetest.DemoUpstreamID.String(), string(composemodel.SystemLabelBaseImageRef): composetest.DemoBaseImage},
 			wantID: composetest.DemoUpstreamID, want: composetest.DemoBaseImage,
 		},
 		{
 			name:  "a layer whose label is no digest",
 			image: layerID, ref: layerRef,
-			labels: map[string]string{string(model.SystemLabelBaseImageID): "postgres:16"},
+			labels: map[string]string{string(composemodel.SystemLabelBaseImageID): "postgres:16"},
 		},
 		{
 			name:  "a layer carrying no labels",
@@ -79,7 +79,7 @@ func TestNewContainerRefs(t *testing.T) {
 					Config: &container.Config{Image: tt.ref},
 				},
 			}}}}
-			introspection.Images = map[model.ImageDigestID]image.InspectResponse{
+			introspection.Images = map[composemodel.ImageDigestID]image.InspectResponse{
 				tt.image: {
 					ID:     tt.image.String(),
 					Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Labels: tt.labels}},
@@ -111,7 +111,7 @@ func TestNewUnresolvedImages(t *testing.T) {
 
 	// Assert
 	assert.Nil(t, none)
-	assert.Equal(t, []model.UnresolvedImage{{
+	assert.Equal(t, []composemodel.UnresolvedImage{{
 		Service: composetest.DemoService, Replica: 1, Container: composetest.DemoContainerName(1), Image: composetest.DemoBaseImage,
 	}}, got)
 }
@@ -119,7 +119,7 @@ func TestNewUnresolvedImages(t *testing.T) {
 func TestNewImageCaptures(t *testing.T) {
 	// Arrange: two replicas on one upstream, one on an upstream gone from the daemon,
 	// one that cannot be traced.
-	goneID := model.ImageDigestID("sha256:9999999999999999999999999999999999999999999999999999999999999999")
+	goneID := composemodel.ImageDigestID("sha256:9999999999999999999999999999999999999999999999999999999999999999")
 	introspection := composetest.DemoIntrospectionWithContainers()
 	containers := []composemodel.ContainerRef{
 		{Service: composetest.DemoService, Replica: 1, UpstreamImageID: composetest.DemoUpstreamID, UpstreamImageRef: composetest.DemoBaseImage},
@@ -134,13 +134,13 @@ func TestNewImageCaptures(t *testing.T) {
 	// Assert
 	assert.Equal(t, []composemodel.ImageCaptureRequest{
 		composetest.DemoImageCaptureRequest(),
-		{Image: model.Image{ID: goneID, Refs: []string{"redis:7"}}},
+		{Image: composemodel.Image{ID: goneID, Refs: []string{"redis:7"}}},
 	}, got)
 }
 
 func TestWarnOnComposeImageMismatch(t *testing.T) {
 	const (
-		runningID = model.ImageDigestID("sha256:1111111111111111111111111111111111111111111111111111111111111111")
+		runningID = composemodel.ImageDigestID("sha256:1111111111111111111111111111111111111111111111111111111111111111")
 		otherID   = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
 	)
 	tests := []struct {
@@ -168,7 +168,7 @@ func TestWarnOnComposeImageMismatch(t *testing.T) {
 			if tt.mediaType != "" {
 				inspect.Descriptor = &ocispec.Descriptor{MediaType: tt.mediaType}
 			}
-			introspection := composemodel.IntrospectionResult{Images: map[model.ImageDigestID]image.InspectResponse{runningID: inspect}}
+			introspection := composemodel.IntrospectionResult{Images: map[composemodel.ImageDigestID]image.InspectResponse{runningID: inspect}}
 			logs := &composetest.SyncBuffer{}
 			ctx := zerolog.New(logs).WithContext(context.Background())
 

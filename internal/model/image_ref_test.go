@@ -20,38 +20,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// layerRef is a restored layer tag.
-const layerRef = "arcave/demo-db-1-postgres-16:sp-019e7044-8fd0-7000-8000-000000000000"
-
-func TestImageRef_RestoredLayerSavepoint(t *testing.T) {
-	tests := []struct {
-		ref  ImageRef
-		want SavepointID
-	}{
-		{ref: layerRef, want: "019e7044-8fd0-7000-8000-000000000000"},
-		{ref: "arcave/demo-db-1:sp-019e7044-8be8-7000-8000-000000000000", want: "019e7044-8be8-7000-8000-000000000000"},
-		{ref: "docker.io/arcave/demo-db-1:sp-019e7044-8be8-7000-8000-000000000000", want: "019e7044-8be8-7000-8000-000000000000"},
-		{ref: "postgres:16"},
-		{ref: "docker.io/library/postgres:16"},
-		{ref: "arcave/demo-db-1:latest"},
-		{ref: "arcave/demo-db-1:sp-abc"},
-		{ref: "arcave/demo-db-1:sp-019e7044-8be8-7000-8000-000000000000-019e8440-0000-7000-8000-000000000000"},
-		{ref: "registry:5000/arcave/x:sp-019e7044-8be8-7000-8000-000000000000"},
-	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.ref), func(t *testing.T) {
-			// Act
-			got, ok := tt.ref.RestoredLayerSavepoint()
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-			assert.Equal(t, tt.want != "", ok)
-			assert.Equal(t, ok, tt.ref.IsRestoredLayerTag())
-		})
-	}
-}
-
 func TestImageRef_Familiar(t *testing.T) {
 	tests := []struct {
 		ref  ImageRef

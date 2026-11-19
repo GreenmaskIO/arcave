@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
@@ -67,17 +67,17 @@ func TestNewServiceHolds(t *testing.T) {
 				{Name: "worker", Containers: []composemodel.Container{newStateReplica("worker", 1, running)}},
 			},
 			policy: composemodel.CapturePolicy{
-				Mode: model.CaptureModeLive,
+				Mode: composeconfig.CaptureModeLive,
 				Services: map[string]composemodel.ServiceDecision{
-					"db":  {Mode: model.CaptureModeStop},
-					"web": {Mode: model.CaptureModePause},
+					"db":  {Mode: composeconfig.CaptureModeStop},
+					"web": {Mode: composeconfig.CaptureModePause},
 				},
 			},
 			want: func(services []composemodel.Service) []composemodel.ServiceHold {
 				return []composemodel.ServiceHold{
-					{Service: "db", Mode: model.CaptureModeStop, Running: []composemodel.ContainerRef{refOf(services[0].Containers[0], "db")}},
-					{Service: "web", Mode: model.CaptureModePause, Running: []composemodel.ContainerRef{refOf(services[1].Containers[0], "web")}},
-					{Service: "worker", Mode: model.CaptureModeLive, Running: []composemodel.ContainerRef{refOf(services[2].Containers[0], "worker")}},
+					{Service: "db", Mode: composeconfig.CaptureModeStop, Running: []composemodel.ContainerRef{refOf(services[0].Containers[0], "db")}},
+					{Service: "web", Mode: composeconfig.CaptureModePause, Running: []composemodel.ContainerRef{refOf(services[1].Containers[0], "web")}},
+					{Service: "worker", Mode: composeconfig.CaptureModeLive, Running: []composemodel.ContainerRef{refOf(services[2].Containers[0], "worker")}},
 				}
 			},
 		},
@@ -92,7 +92,7 @@ func TestNewServiceHolds(t *testing.T) {
 			want: func(services []composemodel.Service) []composemodel.ServiceHold {
 				return []composemodel.ServiceHold{{
 					Service:     "db",
-					Mode:        model.CaptureModeStop,
+					Mode:        composeconfig.CaptureModeStop,
 					Running:     []composemodel.ContainerRef{refOf(services[0].Containers[0], "db")},
 					PreCapture:  &composemodel.Hook{Command: []string{"pre"}},
 					PostCapture: &composemodel.Hook{Command: []string{"post"}},
@@ -112,7 +112,7 @@ func TestNewServiceHolds(t *testing.T) {
 				replicas := services[0].Containers
 				return []composemodel.ServiceHold{{
 					Service: "db",
-					Mode:    model.CaptureModeStop,
+					Mode:    composeconfig.CaptureModeStop,
 					Running: []composemodel.ContainerRef{refOf(replicas[4], "db")},
 					Idle: []composemodel.IdleReplica{
 						{Ref: refOf(replicas[0], "db"), State: "paused"},
@@ -144,12 +144,12 @@ func TestPlanner_newReplacementPolicy_StopsEveryService(t *testing.T) {
 	tests := []struct {
 		name   string
 		labels map[string]string
-		mode   model.CaptureMode
+		mode   composeconfig.CaptureMode
 	}{
-		{name: "a pause label", labels: map[string]string{string(model.CaptureLabelCaptureMode): "pause"}},
-		{name: "a live label", labels: map[string]string{string(model.CaptureLabelCaptureMode): "live"}},
-		{name: "a pause config", mode: model.CaptureModePause},
-		{name: "past a bad label, a pause config", labels: map[string]string{"arcave.captur": "false"}, mode: model.CaptureModePause},
+		{name: "a pause label", labels: map[string]string{string(composemodel.CaptureLabelCaptureMode): "pause"}},
+		{name: "a live label", labels: map[string]string{string(composemodel.CaptureLabelCaptureMode): "live"}},
+		{name: "a pause config", mode: composeconfig.CaptureModePause},
+		{name: "past a bad label, a pause config", labels: map[string]string{"arcave.captur": "false"}, mode: composeconfig.CaptureModePause},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -163,9 +163,9 @@ func TestPlanner_newReplacementPolicy_StopsEveryService(t *testing.T) {
 			policy, _ := svc.newReplacementPolicy(ctx, composetest.LabelledIntrospection(tt.labels), composetest.DemoRecord())
 
 			// Assert
-			assert.Equal(t, model.CaptureModeStop, policy.Mode)
-			assert.Equal(t, model.CaptureModeStop, policy.DecideService(composetest.DemoService).Mode)
-			assert.Equal(t, model.CaptureModeStop, policy.DecideService("unlabelled").Mode)
+			assert.Equal(t, composeconfig.CaptureModeStop, policy.Mode)
+			assert.Equal(t, composeconfig.CaptureModeStop, policy.DecideService(composetest.DemoService).Mode)
+			assert.Equal(t, composeconfig.CaptureModeStop, policy.DecideService("unlabelled").Mode)
 		})
 	}
 }
@@ -175,12 +175,12 @@ func TestPlanner_newReplacementPolicy_RunsNoHook(t *testing.T) {
 	// Arrange
 	defaults := composetest.DemoCaptureDefaults
 	defaults.HookTimeout = time.Minute
-	defaults.HookOnError = model.HookOnErrorFail
+	defaults.HookOnError = composeconfig.HookOnErrorFail
 	svc := New(Deps{CaptureDefaults: defaults})
 	ctx := zerolog.Nop().WithContext(context.Background())
 	labels := map[string]string{
-		string(model.CaptureLabelHookPreCapture):  "pre",
-		string(model.CaptureLabelHookPostCapture): "post",
+		string(composemodel.CaptureLabelHookPreCapture):  "pre",
+		string(composemodel.CaptureLabelHookPostCapture): "post",
 	}
 
 	// Act
@@ -197,12 +197,12 @@ func TestPlanner_Plan_HoldsEachServiceByItsMode(t *testing.T) {
 	tests := []struct {
 		name       string
 		labels     map[string]string
-		configMode model.CaptureMode
-		wantMode   model.CaptureMode
+		configMode composeconfig.CaptureMode
+		wantMode   composeconfig.CaptureMode
 	}{
-		{name: "the label", labels: map[string]string{string(model.CaptureLabelCaptureMode): "pause"}, wantMode: model.CaptureModePause},
-		{name: "the config", configMode: model.CaptureModeLive, wantMode: model.CaptureModeLive},
-		{name: "neither: stop", wantMode: model.CaptureModeStop},
+		{name: "the label", labels: map[string]string{string(composemodel.CaptureLabelCaptureMode): "pause"}, wantMode: composeconfig.CaptureModePause},
+		{name: "the config", configMode: composeconfig.CaptureModeLive, wantMode: composeconfig.CaptureModeLive},
+		{name: "neither: stop", wantMode: composeconfig.CaptureModeStop},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

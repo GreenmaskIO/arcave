@@ -19,11 +19,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 )
@@ -45,7 +45,7 @@ func WriteManifest(ctx context.Context, imageStore storages.Writer, manifest Man
 // manifest that decodes, names that image and lists members. Written last, it
 // vouches for everything before it; a torn one does not, and the capture is
 // written again.
-func intactManifest(ctx context.Context, imageStore storages.Reader, imageID model.ImageDigestID) (bool, error) {
+func intactManifest(ctx context.Context, imageStore storages.Reader, imageID composemodel.ImageDigestID) (bool, error) {
 	src, err := imageStore.GetObject(ctx, manifestName)
 	if errors.Is(err, storages.ErrFileNotFound) {
 		return false, nil
@@ -68,7 +68,7 @@ func intactManifest(ctx context.Context, imageStore storages.Reader, imageID mod
 
 // parseIntactManifest decodes a stored manifest as a capture judges it: intact when it decodes,
 // names imageID and lists members. A gc reads by the same rule what a capture would reuse.
-func parseIntactManifest(r io.Reader, imageID model.ImageDigestID) (Manifest, bool, error) {
+func parseIntactManifest(r io.Reader, imageID composemodel.ImageDigestID) (Manifest, bool, error) {
 	var manifest Manifest
 	if err := json.NewDecoder(r).Decode(&manifest); err != nil {
 		return Manifest{}, false, fmt.Errorf("decode %s: %w", manifestName, err)

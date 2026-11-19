@@ -52,7 +52,7 @@ func Owner(
 	)
 	for _, service := range resources.Replicas {
 		for _, replica := range service.Containers {
-			deployment, ok, err := model.ParseSavepointDeployment(replica.Labels)
+			deployment, ok, err := composemodel.ParseDeploymentLabels(replica.Labels)
 			switch {
 			case err != nil || !ok:
 				unlabelled = append(unlabelled, fmt.Sprintf("%s-%d", service.Name, replica.Number))
@@ -71,11 +71,11 @@ func Owner(
 	}
 	switch {
 	case len(unlabelled) > 0:
-		return read, &model.NotDeployedByArcaveError{Replicas: unlabelled}
+		return read, &composemodel.NotDeployedByArcaveError{Replicas: unlabelled}
 	case elsewhere != nil:
 		return read, &model.DeployedElsewhereError{ArcaveProject: arcaveProject, Deployment: *elsewhere}
 	case len(resources.Replicas) == 0 && !resources.IsEmpty():
-		return nil, &model.NotDeployedByArcaveError{
+		return nil, &composemodel.NotDeployedByArcaveError{
 			Containers: resources.Containers,
 			Volumes:    resources.Volumes,
 			Networks:   resources.Networks,
@@ -136,7 +136,7 @@ func (s *Deployer) Drop(ctx context.Context, before composemodel.ComposeProjectR
 		return nil, err
 	}
 	if len(left.Containers) > 0 || len(left.Volumes) > 0 {
-		return nil, &model.ComposeProjectLeftError{
+		return nil, &composemodel.ComposeProjectLeftError{
 			Containers: left.Containers,
 			Volumes:    left.Volumes,
 			Cause:      errors.Join(refusals...),

@@ -34,17 +34,6 @@ const (
 	VolumeTypeUnknown VolumeType = "unknown"
 )
 
-// SnapshotBackendKind names the mechanism that captures a volume. Assigned where
-// a savepoint's units are decided, never by introspection. Kind is not noise: it
-// is what keeps this apart from VolumeSnapshotBackend, the instance itself.
-type SnapshotBackendKind string
-
-const (
-	SnapshotBackendCDC      SnapshotBackendKind = "cdc"
-	SnapshotBackendFullCopy SnapshotBackendKind = "fullcopy"
-	SnapshotBackendUnknown  SnapshotBackendKind = "unknown"
-)
-
 // ServiceReference is one mount of a named volume by one service: who to stop,
 // and where the volume shows up inside that service.
 //

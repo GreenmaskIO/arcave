@@ -315,8 +315,8 @@ func newDeploymentStatus(
 	if view.savepoint != nil {
 		description = view.savepoint.Description
 		restored = &model.RestoredCounts{
-			Volumes:        len(view.savepoint.Stats),
-			WritableLayers: len(view.savepoint.WritableLayers),
+			Volumes:        view.savepoint.Summary.Unit(model.UnitKindVolumes).Count,
+			WritableLayers: view.savepoint.Summary.Unit(model.UnitKindLayers).Count,
 		}
 	}
 	return &model.DeploymentStatus{

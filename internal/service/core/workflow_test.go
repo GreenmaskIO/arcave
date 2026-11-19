@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 )
 
@@ -50,14 +49,14 @@ func TestService_prepare(t *testing.T) {
 func TestService_prepare_AnInspectionFailurePlansNothing(t *testing.T) {
 	// Arrange
 	stages := newMockStages(false)
-	stages.expectInspect(model.ErrUnsupportedDaemon)
+	stages.expectInspect(errUnsupportedDaemon)
 	svc := newStagedService(t, stages, &mockSavepoints{}, &mockLocker{}, &fakeInflight{})
 
 	// Act
 	plan, err := svc.prepare(zerolog.Nop().WithContext(context.Background()))
 
 	// Assert
-	require.ErrorIs(t, err, model.ErrUnsupportedDaemon)
+	require.ErrorIs(t, err, errUnsupportedDaemon)
 	assert.Nil(t, plan)
 	stages.AssertExpectations(t)
 }

@@ -19,6 +19,7 @@ import (
 	"context"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
@@ -30,11 +31,11 @@ type Collector struct{}
 func New() *Collector { return &Collector{} }
 
 func (s *Collector) Kind() model.GarbageCollectorKind {
-	return model.GarbageCollectorKindSavepointDirectory
+	return composemodel.GarbageCollectorKindSavepointDirectory
 }
 
 func (s *Collector) DataKind() model.GarbageDataKind {
-	return model.GarbageDataKindSavepointData
+	return composemodel.GarbageDataKindSavepointData
 }
 
 // Find names every dead tree.
@@ -46,15 +47,15 @@ func (s *Collector) Find(_ context.Context, scope garbage.ComposeProjectScope) (
 	for _, id := range scope.Dead {
 		bytes, lastModified := utils.MeasureObjects(filesBySavepoint[id])
 		ops = append(ops, model.GarbageOp{
-			Action:       model.GarbageActionDeleteTree,
+			Action:       composemodel.GarbageActionDeleteTree,
 			Target:       id.String(),
 			Bytes:        utils.New(bytes),
-			Reason:       model.GarbageReasonDeadCapture,
+			Reason:       composemodel.GarbageReasonDeadCapture,
 			LastModified: lastModified,
 			Savepoint:    id,
 		})
 	}
-	return model.SavepointDirectoryStat{
+	return composemodel.SavepointDirectoryStat{
 		GarbageFindings: model.GarbageFindings{Ops: ops},
 		Committed:       len(scope.Savepoints),
 	}, nil

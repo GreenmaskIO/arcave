@@ -25,6 +25,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/hold"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
@@ -87,12 +88,12 @@ func TestCapturePlan_Hold_CarriesFailedHooks(t *testing.T) {
 	svc := newComposeWorkload(Deps{ComposeRunner: runner, ContainerControl: control})
 	plan := composemodel.Plan{Project: composetest.DemoSpec, Services: []composemodel.ServiceHold{{
 		Service: composetest.DemoService,
-		Mode:    model.CaptureModeStop,
+		Mode:    composeconfig.CaptureModeStop,
 		Running: []composemodel.ContainerRef{composetest.DemoContainerRef()},
 		PreCapture: &composemodel.Hook{
 			Command: []string{"pre"},
 			Timeout: time.Minute,
-			OnError: model.HookOnErrorContinue,
+			OnError: composeconfig.HookOnErrorContinue,
 		},
 	}}}
 
@@ -156,10 +157,10 @@ func TestCapturePlan_Release(t *testing.T) {
 func TestCapturePlan_HoldCaptureRelease(t *testing.T) {
 	errBoom := errors.New("boom")
 	services := []composemodel.ServiceHold{
-		{Service: "db", Mode: model.CaptureModeStop, Running: []composemodel.ContainerRef{dbReplica1}},
-		{Service: "web", Mode: model.CaptureModePause, Running: []composemodel.ContainerRef{webReplica1},
+		{Service: "db", Mode: composeconfig.CaptureModeStop, Running: []composemodel.ContainerRef{dbReplica1}},
+		{Service: "web", Mode: composeconfig.CaptureModePause, Running: []composemodel.ContainerRef{webReplica1},
 			Idle: []composemodel.IdleReplica{{Ref: webReplica2, State: "paused"}}},
-		{Service: "worker", Mode: model.CaptureModeLive, Idle: []composemodel.IdleReplica{{Ref: workerReplica1, State: "paused"}}},
+		{Service: "worker", Mode: composeconfig.CaptureModeLive, Idle: []composemodel.IdleReplica{{Ref: workerReplica1, State: "paused"}}},
 	}
 
 	tests := []struct {
@@ -251,6 +252,6 @@ var (
 // stopServices is a plan's services, every one held by stop and running.
 var stopServices = []composemodel.ServiceHold{{
 	Service: "db",
-	Mode:    model.CaptureModeStop,
+	Mode:    composeconfig.CaptureModeStop,
 	Running: []composemodel.ContainerRef{dbReplica1},
 }}

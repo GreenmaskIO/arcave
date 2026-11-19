@@ -28,22 +28,27 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/hold"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
-// captureAndCommit captures plan as held, killed being what the hold killed, and commits it; a
-// request with no id is given a fresh one.
+// captureAndCommit captures plan as held, killed being what the hold killed, and commits it,
+// reading back the provider's body; a request with no id is given a fresh one.
 func captureAndCommit(
 	ctx context.Context, svc *Capturer, plan composemodel.Plan, killed []string, req provider.CaptureRequest,
-) (model.Savepoint, error) {
+) (composemodel.Savepoint, error) {
 	req.ID = cmp.Or(req.ID, model.NewSavepointID())
 	captured, err := svc.Capture(ctx, plan, hold.Outcome{Killed: killed}, req)
 	if err != nil {
-		return model.Savepoint{}, err
+		return composemodel.Savepoint{}, err
 	}
-	return captured.Commit(ctx)
+	committed, err := captured.Commit(ctx)
+	if err != nil {
+		return composemodel.Savepoint{}, err
+	}
+	return composemodel.ParseSavepoint(committed)
 }
 
 // Commit writes the record; a Commit whose write fails returns the zero savepoint.
@@ -67,16 +72,16 @@ func TestCaptured_Commit(t *testing.T) {
 			// Arrange
 			id := model.NewSavepointID()
 			backend := composetest.NewMockBackend(demoVolume())
-			snapshot := backend.On("Snapshot", mock.Anything, mock.MatchedBy(func(req model.BackendSnapshotRequest) bool {
+			snapshot := backend.On("Snapshot", mock.Anything, mock.MatchedBy(func(req composemodel.BackendSnapshotRequest) bool {
 				return req.SnapshotID == id
-			})).Return(model.SnapshotStat{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy}, nil).Once()
+			})).Return(composemodel.SnapshotStat{Volume: demoVolume(), Type: composeconfig.SnapshotBackendFullCopy}, nil).Once()
 			repo := &composetest.MockSavepointRepo{}
-			commit := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint model.Savepoint) bool {
-				return savepoint.ID == id && savepoint.Name == "sp"
+			commit := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint composemodel.Savepoint) bool {
+				return savepoint.Header.ID == id && savepoint.Header.Name == "sp"
 			})).Return(tt.commitErr).Once()
 			mock.InOrder(snapshot, expectSpecCommit(repo), commit)
 			svc := New(Deps{SavepointRepo: repo})
-			plan := composemodel.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
+			plan := composemodel.Plan{Volumes: []composemodel.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
 			ctx := composetest.NewTestContext()
 			captured, err := svc.Capture(ctx, plan, hold.Outcome{}, provider.CaptureRequest{ID: id, Name: "sp"})
 			require.NoError(t, err)
@@ -111,8 +116,8 @@ func TestCapturer_Capture_RecordsTheRequest(t *testing.T) {
 	}
 	repo := &composetest.MockSavepointRepo{}
 	spec := expectSpecCommit(repo)
-	commit := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint model.Savepoint) bool {
-		return savepoint.ID == req.ID
+	commit := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint composemodel.Savepoint) bool {
+		return savepoint.Header.ID == req.ID
 	})).Return(nil).Once()
 	mock.InOrder(spec, commit)
 	svc := New(Deps{SavepointRepo: repo})
@@ -122,12 +127,41 @@ func TestCapturer_Capture_RecordsTheRequest(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, req.ID, savepoint.ID)
-	assert.Equal(t, req.Name, savepoint.Name)
-	assert.Equal(t, req.Description, savepoint.Description)
-	assert.Equal(t, req.Labels, savepoint.Labels)
-	assert.Equal(t, req.TakenBefore, savepoint.TakenBeforeRollbackTo)
-	assert.Equal(t, &model.SpecRef{Format: model.SpecFormatComposeYAML}, savepoint.Spec)
+	assert.Equal(t, req.ID, savepoint.Header.ID)
+	assert.Equal(t, req.Name, savepoint.Header.Name)
+	assert.Equal(t, req.Description, savepoint.Header.Description)
+	assert.Equal(t, req.Labels, savepoint.Header.Labels)
+	assert.Equal(t, req.TakenBefore, savepoint.Header.TakenBeforeRollbackTo)
+	assert.Equal(t, &composemodel.SpecRef{Format: composemodel.SpecFormatComposeYAML}, savepoint.Detail.Spec)
+	repo.AssertExpectations(t)
+}
+
+// Commit hands core the savepoint as arcave reads it: the provider named, the body summed up.
+func TestCapturedSavepoint_Commit(t *testing.T) {
+	// Arrange
+	backend := composetest.NewMockBackend(demoVolume())
+	backend.On("Snapshot", mock.Anything, composetest.MatchValidSnapshotID()).
+		Return(composemodel.SnapshotStat{Volume: demoVolume(), SizeBytes: 10, StoredBytes: 4}, nil).Once()
+	repo := &composetest.MockSavepointRepo{}
+	spec := expectSpecCommit(repo)
+	commit := repo.On("SaveSavepoint", mock.Anything, mock.Anything).Return(nil).Once()
+	mock.InOrder(spec, commit)
+	svc := New(Deps{SavepointRepo: repo})
+	plan := composemodel.Plan{Volumes: []composemodel.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
+	captured, err := svc.Capture(composetest.NewTestContext(), plan, hold.Outcome{},
+		provider.CaptureRequest{ID: model.NewSavepointID(), Name: "sp"})
+	require.NoError(t, err)
+
+	// Act
+	savepoint, err := captured.Commit(composetest.NewTestContext())
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, composemodel.ProviderName, savepoint.Provider)
+	assert.Equal(t, []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: 10, StoredBytes: 4}},
+		savepoint.Summary.Units)
+	assert.NotEmpty(t, savepoint.Detail)
+	backend.AssertExpectations(t)
 	repo.AssertExpectations(t)
 }
 
@@ -137,10 +171,10 @@ func TestCapturer_Capture_UncommittedOnFailure(t *testing.T) {
 	// Arrange
 	backend := composetest.NewMockBackend(demoVolume())
 	backend.On("Snapshot", mock.Anything, composetest.MatchValidSnapshotID()).
-		Return(model.SnapshotStat{}, errors.New("capture boom")).Once()
+		Return(composemodel.SnapshotStat{}, errors.New("capture boom")).Once()
 	repo := &composetest.MockSavepointRepo{}
 	svc := New(Deps{SavepointRepo: repo})
-	plan := composemodel.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
+	plan := composemodel.Plan{Volumes: []composemodel.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
 
 	// Act
 	savepoint, err := captureAndCommit(composetest.NewTestContext(), svc, plan, nil, provider.CaptureRequest{Name: "sp"})
@@ -164,14 +198,14 @@ func TestCapturer_Capture_RetainsWhatAPartialCaptureWrote(t *testing.T) {
 			key := id.String() + "/" + demoVolume().ObjectID + "/data.tar"
 			require.NoError(t, store.PutObject(context.Background(), key, strings.NewReader("pgdata bytes")))
 		}).
-		Return(model.SnapshotStat{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy}, nil).Once()
-	failed := composetest.NewMockBackend(model.Volume{ObjectID: "volume-service-app-etc-cfg"})
+		Return(composemodel.SnapshotStat{Volume: demoVolume(), Type: composeconfig.SnapshotBackendFullCopy}, nil).Once()
+	failed := composetest.NewMockBackend(composemodel.Volume{ObjectID: "volume-service-app-etc-cfg"})
 	failed.On("Snapshot", mock.Anything, composetest.MatchValidSnapshotID()).
-		Return(model.SnapshotStat{}, errors.New("capture boom")).Once()
+		Return(composemodel.SnapshotStat{}, errors.New("capture boom")).Once()
 	repo := &composetest.MockSavepointRepo{}
 	// One at a time, so the failure comes after the first volume is written.
 	svc := New(Deps{SavepointRepo: repo, Concurrency: 1})
-	plan := composemodel.Plan{Volumes: []model.VolumeSnapshotBackend{written, failed}, Spec: demoSpecBytes}
+	plan := composemodel.Plan{Volumes: []composemodel.VolumeSnapshotBackend{written, failed}, Spec: demoSpecBytes}
 
 	// Act
 	savepoint, err := captureAndCommit(composetest.NewTestContext(), svc, plan, nil,
@@ -194,8 +228,8 @@ func TestCapturer_Capture_WritesUnderTheRequestedID(t *testing.T) {
 	var volumeID, layerID, specID model.SavepointID
 	backend := composetest.NewMockBackend(demoVolume())
 	backend.On("Snapshot", mock.Anything, composetest.MatchValidSnapshotID()).
-		Run(func(args mock.Arguments) { volumeID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
-		Return(model.SnapshotStat{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy}, nil).Once()
+		Run(func(args mock.Arguments) { volumeID = args.Get(1).(composemodel.BackendSnapshotRequest).SnapshotID }).
+		Return(composemodel.SnapshotStat{Volume: demoVolume(), Type: composeconfig.SnapshotBackendFullCopy}, nil).Once()
 	images := &composetest.MockImageBackend{}
 	images.On("CaptureWritableLayer", mock.Anything, mock.MatchedBy(func(req composemodel.WritableLayerCaptureRequest) bool {
 		return req.Container == composetest.DemoContainerRef()
@@ -206,13 +240,13 @@ func TestCapturer_Capture_WritesUnderTheRequestedID(t *testing.T) {
 	repo.On("SaveSpec", mock.Anything, mock.MatchedBy(func(id model.SavepointID) bool { return id.Validate() == nil }), demoSpecBytes).
 		Run(func(args mock.Arguments) { specID = args.Get(1).(model.SavepointID) }).
 		Return(nil).Once()
-	repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint model.Savepoint) bool {
-		return savepoint.ID == id
+	repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint composemodel.Savepoint) bool {
+		return savepoint.Header.ID == id
 	})).Return(nil).Once()
 	svc := New(Deps{SavepointRepo: repo, ImageBackend: images})
 	plan := composemodel.Plan{
 		Spec:           demoSpecBytes,
-		Volumes:        []model.VolumeSnapshotBackend{backend},
+		Volumes:        []composemodel.VolumeSnapshotBackend{backend},
 		WritableLayers: []composemodel.WritableLayerCaptureRequest{{Container: composetest.DemoContainerRef()}},
 	}
 
@@ -222,8 +256,8 @@ func TestCapturer_Capture_WritesUnderTheRequestedID(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, id, savepoint.ID)
-	assert.WithinDuration(t, time.Now(), savepoint.CreatedAt, time.Minute)
+	assert.Equal(t, id, savepoint.Header.ID)
+	assert.WithinDuration(t, time.Now(), savepoint.Header.CreatedAt, time.Minute)
 	assert.Equal(t, id, volumeID)
 	assert.Equal(t, id, layerID)
 	assert.Equal(t, id, specID)
@@ -238,7 +272,7 @@ func TestCapturer_Capture_RefusesAnInvalidID(t *testing.T) {
 	backend := composetest.NewMockBackend(demoVolume())
 	repo := &composetest.MockSavepointRepo{}
 	svc := New(Deps{SavepointRepo: repo})
-	plan := composemodel.Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
+	plan := composemodel.Plan{Volumes: []composemodel.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
 
 	// Act
 	captured, err := svc.Capture(composetest.NewTestContext(), plan, hold.Outcome{}, provider.CaptureRequest{ID: "..", Name: "sp"})

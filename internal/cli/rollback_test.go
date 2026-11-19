@@ -38,23 +38,7 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 	wantLatest := true
 	wantReq := model.RollbackRequest{Latest: &wantLatest}
 	savepoint := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000"}
-	restored := []model.Volume{
-		{
-			ObjectID: "volume-named-demo_pgdata",
-			Type:     model.VolumeTypeNamed,
-			Backend:  model.SnapshotBackendFullCopy,
-			Named: &model.VolumePropertiesNamed{
-				VolumeName: "demo_pgdata",
-				UsedBy:     []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
-			},
-		},
-		{
-			ObjectID: "volume-anon-cache-1-data",
-			Type:     model.VolumeTypeAnon,
-			Backend:  model.SnapshotBackendFullCopy,
-			Anon:     &model.VolumePropertiesAnon{Service: "cache", Replica: 1, Target: "/data"},
-		},
-	}
+	restored := model.RestoreSummary{Units: []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1}}}
 	svcErr := errors.New("savepoint not found")
 	printErr := errors.New("stdout closed")
 
@@ -85,13 +69,13 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		},
 		{
 			name:       "restores nothing",
-			res:        model.RollbackResult{RolledBackTo: savepoint, Restored: []model.Volume{}},
+			res:        model.RollbackResult{RolledBackTo: savepoint, Restored: model.RestoreSummary{}},
 			svcErr:     nil,
 			printerErr: nil,
 			wantErr:    nil,
 			wantPrinted: []any{model.RollbackResult{
 				RolledBackTo: savepoint,
-				Restored:     []model.Volume{},
+				Restored:     model.RestoreSummary{},
 			}},
 		},
 		{
@@ -106,24 +90,24 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 			name: "the safety snapshot that undoes it is named",
 			res: model.RollbackResult{
 				RolledBackTo:   savepoint,
-				Restored:       []model.Volume{},
+				Restored:       model.RestoreSummary{},
 				SafetySnapshot: "019e843e-1650-7000-8000-0000000000bb",
 			},
 			wantPrinted: []any{model.RollbackResult{
 				RolledBackTo:   savepoint,
-				Restored:       []model.Volume{},
+				Restored:       model.RestoreSummary{},
 				SafetySnapshot: "019e843e-1650-7000-8000-0000000000bb",
 			}},
 		},
 		{
 			name:       "printer error surfaces",
-			res:        model.RollbackResult{RolledBackTo: savepoint, Restored: []model.Volume{}},
+			res:        model.RollbackResult{RolledBackTo: savepoint, Restored: model.RestoreSummary{}},
 			svcErr:     nil,
 			printerErr: printErr,
 			wantErr:    printErr,
 			wantPrinted: []any{model.RollbackResult{
 				RolledBackTo: savepoint,
-				Restored:     []model.Volume{},
+				Restored:     model.RestoreSummary{},
 			}},
 		},
 	}

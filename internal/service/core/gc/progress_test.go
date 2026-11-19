@@ -54,7 +54,7 @@ func TestGarbageCollector_GarbageCollect_Progress(t *testing.T) {
 		oldest = model.SavepointID("019e843e-1650-7000-8000-00000000000a")
 		newest = model.SavepointID("019e843e-1650-7000-8000-00000000000c")
 		safety = map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue}
-		trees  = newMockGarbage(newReport(model.GarbageDataKindSavepointData, "demo", deadTreeStat))
+		trees  = newMockGarbage(newReport(dataKindSavepointData, "demo", deadTreeStat))
 	)
 	trees.On("Delete", mock.Anything).Return(newDeletedOps(deadTreeOp)).Once()
 	demoSavepoints := &mockSavepoints{}

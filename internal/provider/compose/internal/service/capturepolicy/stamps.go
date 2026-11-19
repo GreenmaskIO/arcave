@@ -15,7 +15,6 @@
 package capturepolicy
 
 import (
-	"github.com/greenmaskio/arcave/internal/model"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
@@ -31,13 +30,13 @@ func Stamps(introspection composemodel.IntrospectionResult, capturePolicy compos
 		stamps := map[string]string{}
 		serviceDecision := capturePolicy.DecideService(svc.Name)
 		writableLayer := serviceDecision.WritableLayer
-		stamps[string(model.SystemLabelWritableLayerStamp)] = stamp(writableLayer.CaptureDecision, string(writableLayer.Backend))
-		stamps[string(model.SystemLabelImageStamp)] = stamp(serviceDecision.Image, "")
+		stamps[string(composemodel.SystemLabelWritableLayerStamp)] = stamp(writableLayer.CaptureDecision, string(writableLayer.Backend))
+		stamps[string(composemodel.SystemLabelImageStamp)] = stamp(serviceDecision.Image, "")
 
 		for _, mount := range svc.Volumes {
 			var decision composemodel.VolumeDecision
 			switch {
-			case mount.Type == model.VolumeTypeNamed && mount.InheritedFrom == "":
+			case mount.Type == composemodel.VolumeTypeNamed && mount.InheritedFrom == "":
 				decision = capturePolicy.DecideNamedVolume(mount.VolumeName)
 			case isMountOwnedByService(mount):
 				decision = capturePolicy.DecideMount(composemodel.MountRef{Service: svc.Name, Replica: mount.Replica, Target: mount.Target})

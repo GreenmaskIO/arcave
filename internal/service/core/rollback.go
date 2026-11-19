@@ -447,8 +447,8 @@ func newRollbackResult(
 ) model.RollbackResult {
 	return model.RollbackResult{
 		RolledBackTo:    savepoint,
-		Restored:        prepared.Volumes,
-		WritableLayers:  prepared.WritableLayers,
+		Restored:        prepared.Restored,
+		Detail:          prepared.Detail,
 		SafetySnapshot:  safetySnapshot,
 		LeftoverVolumes: leftover,
 	}
@@ -533,7 +533,8 @@ func (s *Service) rollbackColdStart(
 		return model.RollbackResult{}, err
 	}
 
-	leftover := prepared.Summary().Overwritten
+	summary := prepared.Summary()
+	leftover := summary.Overwritten
 	if recovery.recovering {
 		// What the project still owns is the interrupted rollback's partial writes, not volumes a
 		// `compose down` left: overwriting them is the recovery, and no leftover to name.
@@ -544,8 +545,8 @@ func (s *Service) rollbackColdStart(
 		}
 		leftover = nil
 	}
-	for _, name := range leftover {
-		progress.Current(ctx).WarnInResult(model.NewLeftoverVolumeNotice(name).Message)
+	for _, warning := range summary.Warnings {
+		progress.Current(ctx).WarnInResult(warning.Message)
 	}
 
 	// No safety snapshot of its own: the marker tells the user how to recover.

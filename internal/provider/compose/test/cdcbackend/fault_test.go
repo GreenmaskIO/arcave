@@ -17,10 +17,11 @@ package cdcbackend
 import (
 	"context"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
-	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 	"testing"
 	"time"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 
 	"github.com/greenmaskio/storages"
 	"github.com/moby/moby/client"
@@ -28,7 +29,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
@@ -71,7 +71,7 @@ func TestSnapshotter_Snapshot_Stdio_KilledMidBackup(t *testing.T) {
 	}()
 
 	// Act
-	_, err := backend.Snapshot(env.ctx, model.BackendSnapshotRequest{SnapshotID: idFirst})
+	_, err := backend.Snapshot(env.ctx, composemodel.BackendSnapshotRequest{SnapshotID: idFirst})
 	stopStrike()
 
 	// Assert
@@ -105,7 +105,7 @@ func TestSnapshotter_Snapshot_Stdio_CancelledMidBackup(t *testing.T) {
 	cancelled := cancelOnRestic(t, ctx, cancel, env.cli, vol)
 
 	// Act
-	_, err := backend.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: idFirst})
+	_, err := backend.Snapshot(ctx, composemodel.BackendSnapshotRequest{SnapshotID: idFirst})
 
 	// Assert
 	assertCancelledPromptly(t, cancelled, err)
@@ -126,7 +126,7 @@ func TestSnapshotter_Restore_Stdio_CancelledMidRestore(t *testing.T) {
 	cancelled := cancelOnRestic(t, ctx, cancel, env.cli, vol)
 
 	// Act
-	err := backend.Restore(ctx, model.BackendRestoreRequest{SnapshotID: idFirst, Payload: payload})
+	err := backend.Restore(ctx, composemodel.BackendRestoreRequest{SnapshotID: idFirst, Payload: payload})
 
 	// Assert
 	assertCancelledPromptly(t, cancelled, err)
@@ -140,7 +140,7 @@ func TestSnapshotter_Snapshot_Stdio_Concurrent(t *testing.T) {
 	// Arrange
 	const volumes = 5
 	env := newEnv(t, wipeOptions())
-	vols := make([]model.Volume, volumes)
+	vols := make([]composemodel.Volume, volumes)
 	for i := range vols {
 		vols[i] = env.newVolume(t, fmt.Sprintf("db%d", i), "/var/lib/postgresql/data")
 	}
@@ -150,7 +150,7 @@ func TestSnapshotter_Snapshot_Stdio_Concurrent(t *testing.T) {
 	for _, vol := range vols {
 		backend := env.backend(t, vol)
 		eg.Go(func() error {
-			_, err := backend.Snapshot(env.ctx, model.BackendSnapshotRequest{SnapshotID: idFirst})
+			_, err := backend.Snapshot(env.ctx, composemodel.BackendSnapshotRequest{SnapshotID: idFirst})
 			return err
 		})
 	}
@@ -164,20 +164,20 @@ func TestSnapshotter_Snapshot_Stdio_Concurrent(t *testing.T) {
 }
 
 // newSlowVolume is a named volume holding slowKiB of incompressible data.
-func (e *env) newSlowVolume(t *testing.T, service string) model.Volume {
+func (e *env) newSlowVolume(t *testing.T, service string) composemodel.Volume {
 	t.Helper()
 
 	name := itProject + "-" + service + "-" + daemontest.RandomSuffix(t)
 	createVolume(t, e.cli, name)
 	composetest.Busybox(t, e.engine, name, fmt.Sprintf("dd if=/dev/urandom of=/data/blob bs=1k count=%d 2>/dev/null", slowKiB))
-	return namedVolume(name, model.ServiceReference{Service: "db", Target: "/data"})
+	return namedVolume(name, composemodel.ServiceReference{Service: "db", Target: "/data"})
 }
 
 // cancelOnRestic cancels once a restic container mounting vol runs with its bridge
 // exec started, so the cancel always meets a live stream, and delivers when it
 // did; a run that never got there fails the test.
 func cancelOnRestic(
-	t *testing.T, ctx context.Context, cancel context.CancelFunc, cli *client.Client, vol model.Volume,
+	t *testing.T, ctx context.Context, cancel context.CancelFunc, cli *client.Client, vol composemodel.Volume,
 ) <-chan time.Time {
 	t.Helper()
 
@@ -212,7 +212,7 @@ func assertCancelledPromptly(t *testing.T, cancelled <-chan time.Time, err error
 
 // waitForRestic returns the running restic container mounting vol — a backup or
 // a restore, since init mounts nothing and a wipe runs busybox.
-func waitForRestic(ctx context.Context, cli *client.Client, vol model.Volume) (string, error) {
+func waitForRestic(ctx context.Context, cli *client.Client, vol composemodel.Volume) (string, error) {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -278,7 +278,7 @@ func waitForPacks(ctx context.Context, repoStore storages.Storager) error {
 }
 
 // oneShotsOn lists every one-shot container, running or not, mounting vol.
-func oneShotsOn(t *testing.T, cli *client.Client, vol model.Volume) []string {
+func oneShotsOn(t *testing.T, cli *client.Client, vol composemodel.Volume) []string {
 	t.Helper()
 
 	containers, err := cli.ContainerList(context.Background(), client.ContainerListOptions{

@@ -25,7 +25,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -67,7 +67,7 @@ type ContainerControl interface {
 // the pre-capture hooks that failed and were let through.
 type Outcome struct {
 	Killed      []string
-	FailedHooks []model.FailedHook
+	FailedHooks []composemodel.FailedHook
 }
 
 // trigger is what fires on a group of services before a capture, and back after it.
@@ -87,9 +87,9 @@ type Triggers []trigger
 func NewTriggersByMode(
 	composeRunner ComposeRunner, control ContainerControl, plan composemodel.Plan, waitTimeout time.Duration,
 ) Triggers {
-	stopped := plan.ServicesHeldBy(model.CaptureModeStop)
-	paused := plan.ServicesHeldBy(model.CaptureModePause)
-	live := plan.ServicesHeldBy(model.CaptureModeLive)
+	stopped := plan.ServicesHeldBy(composeconfig.CaptureModeStop)
+	paused := plan.ServicesHeldBy(composeconfig.CaptureModePause)
+	live := plan.ServicesHeldBy(composeconfig.CaptureModeLive)
 	return Triggers{
 		newHookTrigger(control, plan.Services),
 		stopTrigger{
@@ -123,7 +123,7 @@ func NewTriggersByMode(
 func (t Triggers) BeforeCapture(ctx context.Context) (Outcome, error) {
 	var (
 		killed      []string
-		failedHooks []model.FailedHook
+		failedHooks []composemodel.FailedHook
 	)
 	for _, trigger := range t {
 		outcome, err := trigger.beforeCapture(ctx)

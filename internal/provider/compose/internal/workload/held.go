@@ -52,7 +52,7 @@ func (h heldWorkload) PrepareSavepoint(
 	if err != nil {
 		return nil, err
 	}
-	return preparedSavepoint{Target: target}, nil
+	return newPreparedSavepoint(target, false)
 }
 
 // Teardown runs `compose down` of the held project.

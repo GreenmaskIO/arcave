@@ -23,6 +23,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 )
@@ -55,7 +56,7 @@ func NewForgetEraser(opener PrunerOpener, concurrency int) ForgetEraser {
 	}
 }
 
-func (s ForgetEraser) Action() model.GarbageAction { return model.GarbageActionForget }
+func (s ForgetEraser) Action() model.GarbageAction { return composemodel.GarbageActionForget }
 
 // Erase forgets the snapshots ops name, at most s.concurrency repositories at once, pruning what
 // they alone held; an op naming a repository prunes it alone. A repository that fails fails each

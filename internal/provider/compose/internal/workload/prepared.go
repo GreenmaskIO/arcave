@@ -15,7 +15,9 @@
 package workload
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
@@ -27,15 +29,39 @@ var errForeignPrepared = errors.New("the savepoint was prepared by another provi
 // preparedSavepoint is a savepoint ready to build, as this provider hands it to core.
 type preparedSavepoint struct {
 	composemodel.Target
+	summary provider.PreparedSummary
+}
+
+// newPreparedSavepoint is target ready to build, summed up; a recovery warns of no leftover volume.
+func newPreparedSavepoint(target composemodel.Target, recovering bool) (preparedSavepoint, error) {
+	var (
+		detail = composemodel.RestoreDetail{
+			Volumes:        composemodel.VolumesOf(target.Savepoint),
+			WritableLayers: target.Restored,
+		}
+		leftover []string
+	)
+	if !recovering {
+		leftover = target.Overwritten
+	}
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		return preparedSavepoint{}, fmt.Errorf("encode what savepoint %s restores: %w", target.Savepoint.Header.ID, err)
+	}
+	return preparedSavepoint{
+		Target: target,
+		summary: provider.PreparedSummary{
+			Restored:    composemodel.NewRestoreSummary(detail, leftover),
+			Detail:      encoded,
+			Overwritten: target.Overwritten,
+			Warnings:    composemodel.NewLeftoverVolumeNotices(leftover),
+		},
+	}, nil
 }
 
 // Summary is what building the prepared savepoint restores, and the volumes it overwrites.
 func (p preparedSavepoint) Summary() provider.PreparedSummary {
-	return provider.PreparedSummary{
-		Volumes:        composemodel.VolumesOf(p.Savepoint),
-		WritableLayers: p.Restored,
-		Overwritten:    p.Overwritten,
-	}
+	return p.summary
 }
 
 // toPreparedSavepoint is prepared as this provider prepared it.

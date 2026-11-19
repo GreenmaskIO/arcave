@@ -33,9 +33,9 @@ const volumeRestoreOpName = "restore"
 // RestoreVolumes writes every volume back concurrently, each carrying the payload its own
 // capture reported; stats index alike with backends.
 func (s *Deployer) RestoreVolumes(
-	ctx context.Context, savepoint model.Savepoint, backends []model.VolumeSnapshotBackend,
+	ctx context.Context, savepoint composemodel.Savepoint, backends []composemodel.VolumeSnapshotBackend,
 ) error {
-	if err := savepoint.ID.Validate(); err != nil {
+	if err := savepoint.Header.ID.Validate(); err != nil {
 		return fmt.Errorf("validate savepoint id: %w", err)
 	}
 	if len(backends) == 0 {
@@ -48,7 +48,7 @@ func (s *Deployer) RestoreVolumes(
 	eg.SetLimit(s.maxConcurrentOperations)
 	for i, backend := range backends {
 		eg.Go(func() error {
-			opCtx := volumeRestoreContext(egCtx, backend, savepoint.ID)
+			opCtx := volumeRestoreContext(egCtx, backend, savepoint.Header.ID)
 			opCtx, step := progress.Run(opCtx, progress.Step{
 				Kind: kindVolume,
 				ID:   backend.Volume().ObjectID,
@@ -57,16 +57,16 @@ func (s *Deployer) RestoreVolumes(
 
 			started := time.Now()
 			log.Debug().Msg("volume operation started")
-			if err := backend.Restore(opCtx, model.BackendRestoreRequest{
-				SnapshotID: savepoint.ID,
-				Payload:    savepoint.Stats[i].Payload,
-				SizeBytes:  savepoint.Stats[i].SizeBytes,
+			if err := backend.Restore(opCtx, composemodel.BackendRestoreRequest{
+				SnapshotID: savepoint.Header.ID,
+				Payload:    savepoint.Detail.Stats[i].Payload,
+				SizeBytes:  savepoint.Detail.Stats[i].SizeBytes,
 			}); err != nil {
 				err = fmt.Errorf("%s %s: restore capture: %w", volumeRestoreOpName, backend.Volume().ObjectID, err)
 				step.End(err)
 				return err
 			}
-			step.Done(composemodel.NewRestoreSample(savepoint.Stats[i].SizeBytes))
+			step.Done(composemodel.NewRestoreSample(savepoint.Detail.Stats[i].SizeBytes))
 			step.End(nil)
 			log.Debug().Dur("duration", time.Since(started)).Msg("volume operation finished")
 			return nil
@@ -78,7 +78,7 @@ func (s *Deployer) RestoreVolumes(
 }
 
 // volumeRestoreContext attributes every line the restore logs.
-func volumeRestoreContext(ctx context.Context, backend model.VolumeSnapshotBackend, id model.SavepointID) context.Context {
+func volumeRestoreContext(ctx context.Context, backend composemodel.VolumeSnapshotBackend, id model.SavepointID) context.Context {
 	volume := backend.Volume()
 	return zerolog.Ctx(ctx).With().
 		Str("volume", volume.ObjectID).

@@ -14,14 +14,15 @@
 
 package model
 
-import "fmt"
+import "encoding/json"
 
-// RollbackResult is what a rollback did, and the JSON 'arcave rollback' prints. Restored names each
-// unit by the same object id the storage layout is keyed by.
+// RollbackResult is what a rollback did, and the JSON 'arcave rollback' prints.
 type RollbackResult struct {
-	RolledBackTo   Savepoint                    `json:"rolled_back_to"`
-	Restored       []Volume                     `json:"restored"`
-	WritableLayers []WritableLayerRestoreResult `json:"writable_layers,omitempty"`
+	RolledBackTo Savepoint `json:"rolled_back_to"`
+	// Restored is what the provider sums the build up as: its units and what to say of it.
+	Restored RestoreSummary `json:"restored"`
+	// Detail is the provider's body of what the build restored.
+	Detail json.RawMessage `json:"detail,omitempty"`
 	// SafetySnapshot undoes the rollback: roll back to it by id, a committed savepoint a gc retires.
 	// Omitted when none was taken.
 	SafetySnapshot SavepointID `json:"safety_snapshot,omitempty"`
@@ -31,28 +32,10 @@ type RollbackResult struct {
 	LeftoverVolumes []string `json:"leftover_volumes,omitempty"`
 }
 
-// Notices spells out what the rollback warns of: every overwritten leftover volume, then the
-// containers running on the savepoint's writable layers. Nil when there is nothing to say.
-func (m RollbackResult) Notices() []Notice {
-	var notices []Notice
-	for _, name := range m.LeftoverVolumes {
-		notices = append(notices, NewLeftoverVolumeNotice(name))
-	}
-	if len(m.WritableLayers) > 0 {
-		notices = append(notices, Notice{
-			Message: "the containers run on the savepoint's writable layers",
-			Hint:    "`docker compose up` of your compose file recreates them on its images and drops those layers",
-		})
-	}
-	return notices
-}
-
-// NewLeftoverVolumeNotice says that a rollback overwrote a volume no safety snapshot holds.
-func NewLeftoverVolumeNotice(name string) Notice {
-	return Notice{
-		Message: fmt.Sprintf("volume %s outlived the compose project's containers and was overwritten: "+
-			"no safety snapshot holds what it held", name),
-		Hint:   "compose.leftover_volumes: refuse refuses such a rollback before anything is written",
-		Severe: true,
-	}
+// RestoreSummary is what a provider sums a build of a savepoint up as.
+type RestoreSummary struct {
+	// Units count what the build restored by kind, in the order to print them.
+	Units []UnitTally `json:"units"`
+	// Notices say what the build warns of, the severe first.
+	Notices []Notice `json:"notices,omitempty"`
 }

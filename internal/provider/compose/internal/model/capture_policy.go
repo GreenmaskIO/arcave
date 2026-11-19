@@ -19,7 +19,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 // The parts of a stamp label's value: fields after its leading true or false, each
@@ -101,14 +101,14 @@ type CaptureDecision struct {
 // VolumeDecision is a volume's capture decision and the backend it is captured by.
 type VolumeDecision struct {
 	CaptureDecision
-	Backend model.SnapshotBackendKind
+	Backend composeconfig.SnapshotBackendKind
 }
 
 // WritableLayerDecision is a service's writable layer capture decision and the layout
 // its replicas' writable layers are stored in.
 type WritableLayerDecision struct {
 	CaptureDecision
-	Backend model.ImageBackendKind
+	Backend composeconfig.ImageBackendKind
 }
 
 // ServiceDecision is what a savepoint takes of one service's writable layers and image, and
@@ -117,7 +117,7 @@ type ServiceDecision struct {
 	WritableLayer WritableLayerDecision
 	Image         CaptureDecision
 	// Mode is empty for CaptureModeStop.
-	Mode model.CaptureMode
+	Mode composeconfig.CaptureMode
 	// PreCapture and PostCapture run in its replicas around the capture; nil is no hook.
 	PreCapture  *Hook
 	PostCapture *Hook
@@ -135,10 +135,10 @@ type MountRef struct {
 // resolved from its labels. A resource it has no entry for is captured by the
 // defaults, so the zero maps capture everything.
 type CapturePolicy struct {
-	VolumeBackend        model.SnapshotBackendKind
-	WritableLayerBackend model.ImageBackendKind
+	VolumeBackend        composeconfig.SnapshotBackendKind
+	WritableLayerBackend composeconfig.ImageBackendKind
 	// Mode holds a service no label names; empty for CaptureModeStop.
-	Mode     model.CaptureMode
+	Mode     composeconfig.CaptureMode
 	Services map[string]ServiceDecision
 	// NamedVolumes are keyed by docker name.
 	NamedVolumes map[string]VolumeDecision

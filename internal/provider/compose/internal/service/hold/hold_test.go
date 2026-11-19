@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
@@ -57,7 +57,7 @@ func TestTriggers_BeforeCapture(t *testing.T) {
 			errs: []error{nil, nil, nil},
 			wantOutcome: Outcome{
 				Killed:      []string{"c0", "c1", "c2"},
-				FailedHooks: []model.FailedHook{{Service: "s0"}, {Service: "s1"}, {Service: "s2"}},
+				FailedHooks: []composemodel.FailedHook{{Service: "s0"}, {Service: "s1"}, {Service: "s2"}},
 			},
 		},
 		{
@@ -80,7 +80,7 @@ func TestTriggers_BeforeCapture(t *testing.T) {
 			for i, err := range tt.errs {
 				outcome := Outcome{
 					Killed:      []string{"c" + strconv.Itoa(i)},
-					FailedHooks: []model.FailedHook{{Service: "s" + strconv.Itoa(i)}},
+					FailedHooks: []composemodel.FailedHook{{Service: "s" + strconv.Itoa(i)}},
 				}
 				calls = append(calls, mocks[i].On("beforeCapture", mock.Anything).Return(outcome, err).Once())
 				if err != nil {
@@ -513,9 +513,9 @@ func TestNewTriggersByMode(t *testing.T) {
 		{
 			name: "each group its own trigger, stop then pause then live",
 			services: []composemodel.ServiceHold{
-				{Service: "db", Mode: model.CaptureModeStop, Running: []composemodel.ContainerRef{dbReplica1}},
-				{Service: "web", Mode: model.CaptureModePause, Running: []composemodel.ContainerRef{webReplica1}, Idle: []composemodel.IdleReplica{pausedWeb}},
-				{Service: "worker", Mode: model.CaptureModeLive, Idle: []composemodel.IdleReplica{pausedWorker}},
+				{Service: "db", Mode: composeconfig.CaptureModeStop, Running: []composemodel.ContainerRef{dbReplica1}},
+				{Service: "web", Mode: composeconfig.CaptureModePause, Running: []composemodel.ContainerRef{webReplica1}, Idle: []composemodel.IdleReplica{pausedWeb}},
+				{Service: "worker", Mode: composeconfig.CaptureModeLive, Idle: []composemodel.IdleReplica{pausedWorker}},
 			},
 			want: func(runner ComposeRunner, control ContainerControl) Triggers {
 				return Triggers{
@@ -532,7 +532,7 @@ func TestNewTriggersByMode(t *testing.T) {
 		{
 			name: "every service stop, an unknown mode stopped too",
 			services: []composemodel.ServiceHold{
-				{Service: "db", Mode: model.CaptureModeStop, Running: []composemodel.ContainerRef{dbReplica1}},
+				{Service: "db", Mode: composeconfig.CaptureModeStop, Running: []composemodel.ContainerRef{dbReplica1}},
 				{Service: "web", Idle: []composemodel.IdleReplica{exitedWeb, pausedWeb}},
 			},
 			want: func(runner ComposeRunner, control ContainerControl) Triggers {
@@ -548,7 +548,7 @@ func TestNewTriggersByMode(t *testing.T) {
 		{
 			name: "every service live: a stop trigger with no service, to start the project after",
 			services: []composemodel.ServiceHold{
-				{Service: "db", Mode: model.CaptureModeLive, Running: []composemodel.ContainerRef{dbReplica1}},
+				{Service: "db", Mode: composeconfig.CaptureModeLive, Running: []composemodel.ContainerRef{dbReplica1}},
 			},
 			want: func(runner ComposeRunner, control ContainerControl) Triggers {
 				return Triggers{

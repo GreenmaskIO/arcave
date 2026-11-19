@@ -17,8 +17,9 @@ package deploy
 import (
 	"context"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/rs/zerolog"
@@ -26,7 +27,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
@@ -233,15 +233,19 @@ func imageOf(replicas []recordedReplica, n int) string {
 // on its service's own image, under the number and name the record keeps for it.
 func TestNewRecordedReplicas(t *testing.T) {
 	// Arrange
-	record := model.Savepoint{NotCovered: &model.NotCovered{WritableLayers: []model.SkippedWritableLayer{
-		{Service: "worker", Replica: 1, Container: "demo-worker-1"},
-		{Service: "worker", Replica: 3, Container: "demo-worker-3"},
-	}}}
+	record := composemodel.Savepoint{
+		Detail: composemodel.SavepointDetail{
+			NotCovered: &composemodel.NotCovered{WritableLayers: []composemodel.SkippedWritableLayer{
+				{Service: "worker", Replica: 1, Container: "demo-worker-1"},
+				{Service: "worker", Replica: 3, Container: "demo-worker-3"},
+			}},
+		},
+	}
 	project := &types.Project{Services: types.Services{
 		"worker": {Name: "worker", Image: "busybox"},
 		"app":    {Name: "app", Image: "app:1"},
 	}}
-	layered := []model.WritableLayerRestoreResult{{Service: "app", Replica: 2, Tag: "arcave/app:sp-1", ContainerName: "demo-app-2"}}
+	layered := []composemodel.WritableLayerRestoreResult{{Service: "app", Replica: 2, Tag: "arcave/app:sp-1", ContainerName: "demo-app-2"}}
 
 	// Act
 	got := newRecordedReplicas(record, project, layered)
@@ -257,22 +261,22 @@ func TestNewRecordedReplicas(t *testing.T) {
 // A rollback lets compose recreate only a named volume it restores: a bind or an anonymous
 // volume has no config to drift, and a named volume the savepoint left out has no copy.
 func TestNewRestoredVolumeNames(t *testing.T) {
-	named := model.Volume{ObjectID: "volume-named-demo_db", Named: &model.VolumePropertiesNamed{VolumeName: "demo_db"}}
-	bind := model.Volume{ObjectID: "volume-service-app-/src", Bind: &model.VolumePropertiesBind{Service: "app", Target: "/src"}}
-	anon := model.Volume{ObjectID: "volume-anon-app-1-/scratch", Anon: &model.VolumePropertiesAnon{Replica: 1}}
+	named := composemodel.Volume{ObjectID: "volume-named-demo_db", Named: &composemodel.VolumePropertiesNamed{VolumeName: "demo_db"}}
+	bind := composemodel.Volume{ObjectID: "volume-service-app-/src", Bind: &composemodel.VolumePropertiesBind{Service: "app", Target: "/src"}}
+	anon := composemodel.Volume{ObjectID: "volume-anon-app-1-/scratch", Anon: &composemodel.VolumePropertiesAnon{Replica: 1}}
 	tests := []struct {
 		name  string
-		stats []model.SnapshotStat
+		stats []composemodel.SnapshotStat
 		want  []string
 	}{
 		{
 			name:  "only the named volume, by its docker name",
-			stats: []model.SnapshotStat{{Volume: bind}, {Volume: named}, {Volume: anon}},
+			stats: []composemodel.SnapshotStat{{Volume: bind}, {Volume: named}, {Volume: anon}},
 			want:  []string{"demo_db"},
 		},
 		{
 			name:  "no named volume restored",
-			stats: []model.SnapshotStat{{Volume: bind}, {Volume: anon}},
+			stats: []composemodel.SnapshotStat{{Volume: bind}, {Volume: anon}},
 		},
 		{
 			name: "nothing restored",
@@ -281,7 +285,11 @@ func TestNewRestoredVolumeNames(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := newRestoredVolumeNames(model.Savepoint{Stats: tt.stats})
+			got := newRestoredVolumeNames(composemodel.Savepoint{
+				Detail: composemodel.SavepointDetail{
+					Stats: tt.stats,
+				},
+			})
 
 			// Assert
 			assert.Equal(t, tt.want, got)

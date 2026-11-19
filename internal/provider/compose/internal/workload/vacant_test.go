@@ -46,7 +46,7 @@ func TestVacant_Build_LabelsTheDeployment(t *testing.T) {
 		Networks: types.Networks{"default": {Name: "demo_default"}},
 	}
 	savepoint := composetest.DemoRecord()
-	savepoint.Stats = nil
+	savepoint.Detail.Stats = nil
 	deployment := composetest.DemoDeployment(savepoint)
 	var created, started *types.Project
 	runner := &composetest.MockComposeRunner{}
@@ -72,15 +72,15 @@ func TestVacant_Build_LabelsTheDeployment(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	require.NotNil(t, created)
-	stamped, ok, err := model.ParseSavepointDeployment(created.Services["db"].Labels)
+	stamped, ok, err := composemodel.ParseDeploymentLabels(created.Services["db"].Labels)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, deployment.ArcaveProject, stamped.ArcaveProject)
 	assert.Equal(t, deployment.Session, stamped.Session)
 	assert.Equal(t, model.DeployedSavepoint{
-		ID:        savepoint.ID,
-		Name:      savepoint.Name,
-		CreatedAt: savepoint.CreatedAt.UTC().Truncate(time.Second),
+		ID:        savepoint.Header.ID,
+		Name:      savepoint.Header.Name,
+		CreatedAt: savepoint.Header.CreatedAt.UTC().Truncate(time.Second),
 	}, stamped.Savepoint)
 	assert.Equal(t, map[string][]int{"db": {1}, "web": {1}}, stamped.ServiceReplicas)
 	assert.False(t, stamped.DeployedAt.Before(before), "dated when it is built")
@@ -95,7 +95,7 @@ func TestVacant_Build_LabelsTheDeployment(t *testing.T) {
 func TestVacant_Build_RebuildsDivergentReplicasBeforeTheRestore(t *testing.T) {
 	// Arrange
 	record := composetest.DemoScaledRecord()
-	restoredLayers := []model.WritableLayerRestoreResult{
+	restoredLayers := []composemodel.WritableLayerRestoreResult{
 		composetest.DemoWritableLayerRestoreResult(),
 		{Service: composetest.DemoService, Replica: 2, ContainerName: composetest.DemoContainerName(2), ImageID: composetest.DemoSecondImageID, Tag: composetest.DemoRestoredTag(2)},
 	}
@@ -121,7 +121,7 @@ func TestVacant_Build_RebuildsDivergentReplicasBeforeTheRestore(t *testing.T) {
 		Savepoint:  record,
 		Project:    project,
 		Restored:   restoredLayers,
-		Backends:   []model.VolumeSnapshotBackend{backend},
+		Backends:   []composemodel.VolumeSnapshotBackend{backend},
 		Deployment: composetest.DemoDeployment(record),
 	}}
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -155,7 +155,7 @@ func TestVacant_Build_Progress(t *testing.T) {
 	prepared := preparedSavepoint{Target: composemodel.Target{
 		Savepoint:  record,
 		Project:    composetest.DemoTargetSpec,
-		Backends:   []model.VolumeSnapshotBackend{backend},
+		Backends:   []composemodel.VolumeSnapshotBackend{backend},
 		Deployment: composetest.DemoDeployment(record),
 	}}
 	recorder := &composetest.StepRecorder{}

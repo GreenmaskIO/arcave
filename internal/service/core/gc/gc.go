@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/rs/zerolog"
 
@@ -97,7 +98,7 @@ func (s *GarbageCollector) GarbageCollect(
 	// Opened outside the locks, so a lost lock's cause lands on the root.
 	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindGC})
 	defer func() { step.End(err) }()
-	if err := req.Validate(); err != nil {
+	if err := s.validateDataKinds(req.DataKinds); err != nil {
 		return model.GarbageCollectResult{}, err
 	}
 	return workflow.WithWriteUnlock(ctx, s.locker, s.writeAdmission, func() (model.GarbageCollectResult, error) {
@@ -110,6 +111,20 @@ func (s *GarbageCollector) GarbageCollect(
 				return s.collectGarbage(ctx, req, grantedLock)
 			})
 	})
+}
+
+// validateDataKinds refuses a data kind neither the provider nor the retention looks at.
+func (s *GarbageCollector) validateDataKinds(dataKinds []model.GarbageDataKind) error {
+	if len(dataKinds) == 0 {
+		return nil
+	}
+	known := append(s.providerSession.GarbageDataKinds(), model.GarbageDataKindSafetySnapshots)
+	for _, dataKind := range dataKinds {
+		if !slices.Contains(known, dataKind) {
+			return fmt.Errorf("%w: unknown kind %q", model.ErrInvalidGarbageCollectRequest, string(dataKind))
+		}
+	}
+	return nil
 }
 
 // collectGarbage reports what is found or, past a dry run, deletes it.

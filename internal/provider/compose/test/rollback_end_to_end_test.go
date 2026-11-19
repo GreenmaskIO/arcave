@@ -17,11 +17,12 @@ package test
 import (
 	"context"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"slices"
 	"strings"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -127,30 +128,30 @@ func TestRollback_RebuildsEverythingTheSavepointRecorded(t *testing.T) {
 		containers["sidecar-1"].Inspect.HostConfig.NetworkMode, "sidecar joins the new db")
 	assert.Equal(t, container.NetworkMode("bridge"), containers["legacy-1"].Inspect.HostConfig.NetworkMode)
 
-	require.Len(t, second.Images, 2)
+	require.Len(t, detailOf(t, second).Images, 2)
 	var refs []string
-	for _, upstream := range second.Images {
+	for _, upstream := range detailOf(t, second).Images {
 		refs = append(refs, upstream.Refs...)
 	}
 	assertNamesImage(t, refs, "busybox")
 	assertNamesImage(t, refs, "alpine:3.22")
 	for _, ref := range refs {
-		assert.False(t, model.ImageRef(ref).IsRestoredLayerTag(), "%s is an upstream, not arcave's tag", ref)
+		assert.False(t, composemodel.IsRestoredLayerTag(model.ImageRef(ref)), "%s is an upstream, not arcave's tag", ref)
 	}
-	assert.ElementsMatch(t, upstreamIDs(first), env.storedUpstreams(t), "each upstream is stored once")
+	assert.ElementsMatch(t, upstreamIDs(t, first), env.storedUpstreams(t), "each upstream is stored once")
 
 	assert.Equal(t, env.spec(t, first.ID), env.spec(t, second.ID), "sp-2 records the project sp-1 did")
 
-	for _, stat := range second.Stats {
+	for _, stat := range detailOf(t, second).Stats {
 		assert.NotContains(t, stat.Volume.ObjectID, "reader", "reader's mount is data's volume")
 	}
 
 	// reader is covered through data; a SIGKILL stop signal is no deadline kill; a layer
 	// names its upstream by label.
 	for _, sp := range []model.Savepoint{first, second} {
-		require.NotNil(t, sp.NotCovered, sp.Name)
-		assert.Equal(t, model.NotCovered{ServicesWithoutVolumes: []string{"legacy", "quiet", "sidecar"}},
-			sortedNotCovered(*sp.NotCovered), sp.Name)
+		require.NotNil(t, detailOf(t, sp).NotCovered, sp.Name)
+		assert.Equal(t, composemodel.NotCovered{ServicesWithoutVolumes: []string{"legacy", "quiet", "sidecar"}},
+			sortedNotCovered(*detailOf(t, sp).NotCovered), sp.Name)
 	}
 }
 
@@ -216,7 +217,7 @@ func (e *imageRollbackEnv) down(t *testing.T) {
 
 	for _, svc := range res.Project.Services {
 		for _, v := range svc.Volumes {
-			if v.Type == model.VolumeTypeAnon && v.VolumeName != "" && v.InheritedFrom == "" {
+			if v.Type == composemodel.VolumeTypeAnon && v.VolumeName != "" && v.InheritedFrom == "" {
 				_, err := e.daemon.VolumeRemove(e.ctx, v.VolumeName, client.VolumeRemoveOptions{})
 				assert.NoError(t, err, "remove volume %s", v.VolumeName)
 			}
@@ -225,7 +226,7 @@ func (e *imageRollbackEnv) down(t *testing.T) {
 }
 
 // sortedNotCovered orders what the daemon reports in no fixed order.
-func sortedNotCovered(n model.NotCovered) model.NotCovered {
+func sortedNotCovered(n composemodel.NotCovered) composemodel.NotCovered {
 	slices.Sort(n.ServicesWithoutVolumes)
 	return n
 }
@@ -310,16 +311,16 @@ func (e *imageRollbackEnv) stampAll(t *testing.T, content string) {
 }
 
 // storedUpstreams are the image ids shared/oci/images holds.
-func (e *imageRollbackEnv) storedUpstreams(t *testing.T) []model.ImageDigestID {
+func (e *imageRollbackEnv) storedUpstreams(t *testing.T) []composemodel.ImageDigestID {
 	t.Helper()
 
 	images, err := e.store.SubStorage("shared/oci/images/sha256", true)
 	require.NoError(t, err)
 	_, dirs, err := images.ListDir(e.ctx)
 	require.NoError(t, err)
-	ids := make([]model.ImageDigestID, 0, len(dirs))
+	ids := make([]composemodel.ImageDigestID, 0, len(dirs))
 	for _, dir := range dirs {
-		ids = append(ids, model.ImageDigestID("sha256:"+strings.Trim(dir.Dirname(), "/")))
+		ids = append(ids, composemodel.ImageDigestID("sha256:"+strings.Trim(dir.Dirname(), "/")))
 	}
 	return ids
 }
@@ -336,9 +337,9 @@ func (e *imageRollbackEnv) spec(t *testing.T, id model.SavepointID) string {
 	return string(spec)
 }
 
-func upstreamIDs(savepoint model.Savepoint) []model.ImageDigestID {
-	ids := make([]model.ImageDigestID, 0, len(savepoint.Images))
-	for _, upstream := range savepoint.Images {
+func upstreamIDs(t *testing.T, savepoint model.Savepoint) []composemodel.ImageDigestID {
+	ids := make([]composemodel.ImageDigestID, 0, len(detailOf(t, savepoint).Images))
+	for _, upstream := range detailOf(t, savepoint).Images {
 		ids = append(ids, upstream.ID)
 	}
 	return ids

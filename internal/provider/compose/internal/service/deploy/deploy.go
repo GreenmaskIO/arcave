@@ -20,8 +20,9 @@ package deploy
 import (
 	"context"
 	"fmt"
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/fanout"
 	"time"
+
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/fanout"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/rs/zerolog"
@@ -157,7 +158,7 @@ func (s *Deployer) Build(ctx context.Context, target composemodel.Target) (*type
 	var (
 		recorded   = newRecordedReplicas(target.Savepoint, target.Project, target.Restored)
 		deployment = newSavepointDeployment(target.Deployment, target.Project, recorded)
-		project    = withDeploymentLabels(target.Project, deployment.Labels())
+		project    = withDeploymentLabels(target.Project, composemodel.NewDeploymentLabels(deployment))
 	)
 	if err := s.composeCreate(ctx, project, newRestoredVolumeNames(target.Savepoint)); err != nil {
 		return nil, err
@@ -184,9 +185,9 @@ func (s *Deployer) Reap(ctx context.Context, anonymousVolumeNames map[string]str
 }
 
 // newRestoredVolumeNames are the docker names of the named volumes savepoint restores.
-func newRestoredVolumeNames(savepoint model.Savepoint) []string {
+func newRestoredVolumeNames(savepoint composemodel.Savepoint) []string {
 	var names []string
-	for _, stat := range savepoint.Stats {
+	for _, stat := range savepoint.Detail.Stats {
 		if stat.Volume.Named != nil {
 			names = append(names, stat.Volume.Named.VolumeName)
 		}
@@ -214,7 +215,7 @@ func (s *Deployer) Start(ctx context.Context, project *types.Project, waitTimeou
 
 // removeOrphanedVolumes removes the anonymous volumes `compose down` left behind whose data restored
 // holds; any other is its own last copy.
-func (s *Deployer) removeOrphanedVolumes(ctx context.Context, anonymousVolumeNames map[string]string, restored []model.Volume) {
+func (s *Deployer) removeOrphanedVolumes(ctx context.Context, anonymousVolumeNames map[string]string, restored []composemodel.Volume) {
 	log := zerolog.Ctx(ctx)
 	for _, volume := range restored {
 		name, ok := anonymousVolumeNames[volume.ObjectID]
@@ -273,7 +274,7 @@ func runComposeActivity(ctx context.Context, kind progress.Kind, fn func(ctx con
 
 // logRestoredLayers says where the restored layers live: only in the containers the rollback
 // built, which compose replaces on its own images at the next `up` of the file.
-func logRestoredLayers(ctx context.Context, restored []model.WritableLayerRestoreResult) {
+func logRestoredLayers(ctx context.Context, restored []composemodel.WritableLayerRestoreResult) {
 	if len(restored) == 0 {
 		return
 	}

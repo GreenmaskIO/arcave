@@ -15,7 +15,7 @@
 package model
 
 // CaptureLabelPrefix opens every label arcave reads as policy. io.arcave.* is not one: those
-// are arcave's own, SystemLabel.
+// are arcave's own, the provider's system labels.
 const CaptureLabelPrefix = "arcave."
 
 // CaptureLabelHookPrefix opens every hook label: arcave.hook.<phase>[.<setting>].

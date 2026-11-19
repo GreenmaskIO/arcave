@@ -22,8 +22,6 @@ import (
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/volume"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // An ObjectID is one path segment: it is the name of a directory in a store and
@@ -61,7 +59,7 @@ func NewAnonymousVolumeNames(introspection IntrospectionResult) map[string]strin
 	names := map[string]string{}
 	for _, svc := range introspection.Project.Services {
 		for _, mount := range svc.Volumes {
-			if mount.Type == model.VolumeTypeAnon && mount.VolumeName != "" {
+			if mount.Type == VolumeTypeAnon && mount.VolumeName != "" {
 				names[mount.ObjectID(svc.Name)] = mount.VolumeName
 			}
 		}
@@ -70,9 +68,9 @@ func NewAnonymousVolumeNames(introspection IntrospectionResult) map[string]strin
 }
 
 // VolumesOf projects a savepoint's stats back to volumes.
-func VolumesOf(savepoint model.Savepoint) []model.Volume {
-	volumes := make([]model.Volume, 0, len(savepoint.Stats))
-	for _, stat := range savepoint.Stats {
+func VolumesOf(savepoint Savepoint) []Volume {
+	volumes := make([]Volume, 0, len(savepoint.Detail.Stats))
+	for _, stat := range savepoint.Detail.Stats {
 		volumes = append(volumes, stat.Volume)
 	}
 	return volumes
@@ -85,7 +83,7 @@ func VolumesOf(savepoint model.Savepoint) []model.Volume {
 // backup for volume data; VolumeName joins the two levels, so a volume three
 // services mount is not captured three times.
 type ServiceVolume struct {
-	Type model.VolumeType
+	Type VolumeType
 	// RawType is the compose mount type verbatim ("volume", "bind", "tmpfs", …).
 	RawType string
 	// Source is the compose "source" verbatim: host path (bind), volume key
@@ -123,11 +121,11 @@ type ServiceVolume struct {
 // a rename, so an old backup must not map onto it.
 func (m ServiceVolume) ObjectID(service string) string {
 	switch m.Type {
-	case model.VolumeTypeNamed:
+	case VolumeTypeNamed:
 		return namedStorageID(m.VolumeName)
-	case model.VolumeTypeBind:
+	case VolumeTypeBind:
 		return serviceStorageID(service, m.Target)
-	case model.VolumeTypeAnon:
+	case VolumeTypeAnon:
 		return anonStorageID(service, m.Replica, m.Target)
 	default:
 		return ""
@@ -198,8 +196,8 @@ type Container struct {
 
 // ImageID is the id of the image the container runs on; empty when the daemon
 // reported none or one that is no digest.
-func (m Container) ImageID() model.ImageDigestID {
-	id, err := model.ParseImageDigestID(m.Inspect.Image)
+func (m Container) ImageID() ImageDigestID {
+	id, err := ParseImageDigestID(m.Inspect.Image)
 	if err != nil {
 		return ""
 	}
@@ -245,7 +243,7 @@ type NamedVolume struct {
 	// declaration order within a tie — who to stop to snapshot it, and where to
 	// reach the data through each. A service mounting it at two paths appears
 	// twice.
-	UsedBy []model.ServiceReference
+	UsedBy []ServiceReference
 	// Labels, Driver and DriverOpts are the volumes: section verbatim — input to
 	// whoever decides what a savepoint captures, interpreted by nobody here.
 	Labels     map[string]string
@@ -273,7 +271,7 @@ type IntrospectionResult struct {
 	Project Project
 	// Images are the images the compose project's containers run on and the base images those name
 	// by SystemLabelBaseImageID, keyed by id, verbatim.
-	Images map[model.ImageDigestID]image.InspectResponse
+	Images map[ImageDigestID]image.InspectResponse
 	// Volumes are the volumes the project owns and every other volume a container mounts,
 	// keyed by docker name, verbatim.
 	Volumes map[string]volume.Volume

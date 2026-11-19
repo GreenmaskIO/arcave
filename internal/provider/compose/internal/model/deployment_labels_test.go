@@ -20,19 +20,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func demoDeployment() SavepointDeployment {
-	return SavepointDeployment{
+func demoDeployment() model.SavepointDeployment {
+	return model.SavepointDeployment{
 		DeployedAt:    time.Date(2026, 11, 7, 14, 2, 11, 0, time.UTC),
 		ArcaveProject: "demo",
-		Session: SessionRef{
-			ID:   DefaultSession,
-			Name: DefaultSessionName,
+		Session: model.SessionRef{
+			ID:   model.DefaultSession,
+			Name: model.DefaultSessionName,
 		},
-		Savepoint: DeployedSavepoint{
+		Savepoint: model.DeployedSavepoint{
 			ID:        "019e843e-1650-7000-8000-000000000000",
 			Name:      "before-migration",
 			CreatedAt: time.Date(2026, 11, 6, 19, 41, 0, 0, time.UTC),
@@ -44,13 +45,13 @@ func demoDeployment() SavepointDeployment {
 	}
 }
 
-func TestSavepointDeployment_Labels(t *testing.T) {
+func TestNewDeploymentLabels(t *testing.T) {
 	safetySnapshot := demoDeployment()
 	safetySnapshot.Savepoint.Name = ""
 	safetySnapshot.Savepoint.IsSafetySnapshot = true
 	tests := []struct {
 		name       string
-		deployment SavepointDeployment
+		deployment model.SavepointDeployment
 		want       map[string]string
 	}{
 		{
@@ -59,8 +60,8 @@ func TestSavepointDeployment_Labels(t *testing.T) {
 			want: map[string]string{
 				"io.arcave.deployment.deployed-at":                  "2026-11-07T14:02:11Z",
 				"io.arcave.deployment.arcave-project":               "demo",
-				"io.arcave.deployment.session-id":                   DefaultSession.String(),
-				"io.arcave.deployment.session-name":                 DefaultSessionName,
+				"io.arcave.deployment.session-id":                   model.DefaultSession.String(),
+				"io.arcave.deployment.session-name":                 model.DefaultSessionName,
 				"io.arcave.deployment.savepoint-id":                 "019e843e-1650-7000-8000-000000000000",
 				"io.arcave.deployment.savepoint-name":               "before-migration",
 				"io.arcave.deployment.savepoint-created-at":         "2026-11-06T19:41:00Z",
@@ -74,8 +75,8 @@ func TestSavepointDeployment_Labels(t *testing.T) {
 			want: map[string]string{
 				"io.arcave.deployment.deployed-at":                  "2026-11-07T14:02:11Z",
 				"io.arcave.deployment.arcave-project":               "demo",
-				"io.arcave.deployment.session-id":                   DefaultSession.String(),
-				"io.arcave.deployment.session-name":                 DefaultSessionName,
+				"io.arcave.deployment.session-id":                   model.DefaultSession.String(),
+				"io.arcave.deployment.session-name":                 model.DefaultSessionName,
 				"io.arcave.deployment.savepoint-id":                 "019e843e-1650-7000-8000-000000000000",
 				"io.arcave.deployment.savepoint-name":               "",
 				"io.arcave.deployment.savepoint-created-at":         "2026-11-06T19:41:00Z",
@@ -85,11 +86,11 @@ func TestSavepointDeployment_Labels(t *testing.T) {
 		},
 		{
 			name: "no names and no replicas",
-			deployment: SavepointDeployment{
+			deployment: model.SavepointDeployment{
 				DeployedAt:    time.Date(2026, 11, 7, 14, 2, 11, 0, time.UTC),
 				ArcaveProject: "demo",
-				Session:       SessionRef{ID: DefaultSession},
-				Savepoint: DeployedSavepoint{
+				Session:       model.SessionRef{ID: model.DefaultSession},
+				Savepoint: model.DeployedSavepoint{
 					ID:        "019e843e-1650-7000-8000-000000000000",
 					CreatedAt: time.Date(2026, 11, 6, 19, 41, 0, 0, time.UTC),
 				},
@@ -97,7 +98,7 @@ func TestSavepointDeployment_Labels(t *testing.T) {
 			want: map[string]string{
 				"io.arcave.deployment.deployed-at":                  "2026-11-07T14:02:11Z",
 				"io.arcave.deployment.arcave-project":               "demo",
-				"io.arcave.deployment.session-id":                   DefaultSession.String(),
+				"io.arcave.deployment.session-id":                   model.DefaultSession.String(),
 				"io.arcave.deployment.session-name":                 "",
 				"io.arcave.deployment.savepoint-id":                 "019e843e-1650-7000-8000-000000000000",
 				"io.arcave.deployment.savepoint-name":               "",
@@ -110,8 +111,8 @@ func TestSavepointDeployment_Labels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			labels := tt.deployment.Labels()
-			parsed, ok, err := ParseSavepointDeployment(labels)
+			labels := NewDeploymentLabels(tt.deployment)
+			parsed, ok, err := ParseDeploymentLabels(labels)
 
 			// Assert
 			assert.Equal(t, tt.want, labels, "every key is written, blank or not")
@@ -122,14 +123,14 @@ func TestSavepointDeployment_Labels(t *testing.T) {
 	}
 }
 
-func TestSavepointDeployment_Labels_SubSecond(t *testing.T) {
+func TestNewDeploymentLabels_SubSecond(t *testing.T) {
 	// Arrange
 	deployment := demoDeployment()
 	deployment.DeployedAt = deployment.DeployedAt.Add(250 * time.Millisecond)
 
 	// Act
-	labels := deployment.Labels()
-	parsed, ok, err := ParseSavepointDeployment(labels)
+	labels := NewDeploymentLabels(deployment)
+	parsed, ok, err := ParseDeploymentLabels(labels)
 
 	// Assert
 	assert.Equal(t, "2026-11-07T14:02:11.25Z", labels[string(SystemLabelDeploymentDeployedAt)])
@@ -141,10 +142,10 @@ func TestSavepointDeployment_Labels_SubSecond(t *testing.T) {
 func TestNewBlankDeploymentLabels(t *testing.T) {
 	// Act
 	labels := NewBlankDeploymentLabels()
-	_, ok, err := ParseSavepointDeployment(labels)
+	_, ok, err := ParseDeploymentLabels(labels)
 
 	// Assert
-	assert.Equal(t, slices.Sorted(maps.Keys(demoDeployment().Labels())), slices.Sorted(maps.Keys(labels)),
+	assert.Equal(t, slices.Sorted(maps.Keys(NewDeploymentLabels(demoDeployment()))), slices.Sorted(maps.Keys(labels)),
 		"every key a deployment writes")
 	for key, value := range labels {
 		assert.Empty(t, value, key)
@@ -153,8 +154,8 @@ func TestNewBlankDeploymentLabels(t *testing.T) {
 	assert.False(t, ok, "blank labels name no deployment")
 }
 
-func TestParseSavepointDeployment(t *testing.T) {
-	blank := demoDeployment().Labels()
+func TestParseDeploymentLabels(t *testing.T) {
+	blank := NewDeploymentLabels(demoDeployment())
 	for key := range blank {
 		blank[key] = ""
 	}
@@ -225,7 +226,7 @@ func TestParseSavepointDeployment(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			_, ok, err := ParseSavepointDeployment(tt.labels)
+			_, ok, err := ParseDeploymentLabels(tt.labels)
 
 			// Assert
 			if tt.wantErr != "" {
@@ -298,7 +299,7 @@ func TestFormatServiceReplicas(t *testing.T) {
 
 // withLabel is demoDeployment's labels with key set to value.
 func withLabel(key SystemLabel, value string) map[string]string {
-	labels := demoDeployment().Labels()
+	labels := NewDeploymentLabels(demoDeployment())
 	labels[string(key)] = value
 	return labels
 }

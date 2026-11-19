@@ -68,8 +68,8 @@ func TestNewObservedReplica(t *testing.T) {
 		},
 		ServiceReplicas: map[string][]int{"db": {1}},
 	}
-	broken := maps.Clone(deployment.Labels())
-	broken[string(model.SystemLabelDeploymentDeployedAt)] = "not-a-time"
+	broken := maps.Clone(composemodel.NewDeploymentLabels(deployment))
+	broken[string(composemodel.SystemLabelDeploymentDeployedAt)] = "not-a-time"
 	tests := []struct {
 		name      string
 		container composemodel.Container
@@ -128,7 +128,7 @@ func TestNewObservedReplica(t *testing.T) {
 		},
 		{
 			name:      "a replica a rollback built carries its deployment",
-			container: composemodel.Container{ID: "c-db-1", Number: 1, Labels: deployment.Labels()},
+			container: composemodel.Container{ID: "c-db-1", Number: 1, Labels: composemodel.NewDeploymentLabels(deployment)},
 			want: provider.ObservedReplica{
 				Number:      1,
 				ContainerID: "c-db-1",
@@ -144,7 +144,7 @@ func TestNewObservedReplica(t *testing.T) {
 				ContainerID: "c-db-1",
 				State:       model.ReplicaStateExited,
 			},
-			wantErr: string(model.SystemLabelDeploymentDeployedAt),
+			wantErr: string(composemodel.SystemLabelDeploymentDeployedAt),
 		},
 	}
 	for _, tt := range tests {

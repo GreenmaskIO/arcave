@@ -23,12 +23,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/gctest"
 )
 
 func TestReadBlobReferences(t *testing.T) {
-	layer := model.WritableLayer{Service: "db", Replica: 1, ImageBackend: model.ImageBackendDedupCopy}
-	layerManifest := func(image model.ImageDigestID, blob string) map[string]any {
+	layer := composemodel.WritableLayer{Service: "db", Replica: 1, ImageBackend: composeconfig.ImageBackendDedupCopy}
+	layerManifest := func(image composemodel.ImageDigestID, blob string) map[string]any {
 		return map[string]any{
 			"image_id": image, "format": "oci-blobs",
 			"members": []map[string]any{
@@ -42,7 +44,7 @@ func TestReadBlobReferences(t *testing.T) {
 	tests := []struct {
 		name       string
 		plant      func(t *testing.T, root string)
-		savepoints []model.Savepoint
+		savepoints []composemodel.Savepoint
 		dead       []model.SavepointID
 		want       blobReferences
 		// wantUnreadable are the unreadable manifests' keys and the savepoints naming them.
@@ -54,11 +56,17 @@ func TestReadBlobReferences(t *testing.T) {
 				gctest.WriteJSON(t, root, layerKey(gctest.LiveSavepoint), layerManifest(gctest.Digest("9"), gctest.LiveBlob), gctest.Old)
 				gctest.WriteJSON(t, root, imageKeyOf(gctest.LiveImage), layerManifest(gctest.LiveImage, gctest.NewBlob), gctest.Old)
 			},
-			savepoints: []model.Savepoint{{
-				ID:             gctest.LiveSavepoint,
-				WritableLayers: []model.WritableLayer{layer},
-				Images:         []model.Image{{ID: gctest.LiveImage, Stored: true}},
-			}},
+			savepoints: []composemodel.Savepoint{
+				{
+					Header: model.Savepoint{
+						ID: gctest.LiveSavepoint,
+					},
+					Detail: composemodel.SavepointDetail{
+						WritableLayers: []composemodel.WritableLayer{layer},
+						Images:         []composemodel.Image{{ID: gctest.LiveImage, Stored: true}},
+					},
+				},
+			},
 			want: blobReferences{bySavepoints: map[string]bool{gctest.LiveBlob: true, gctest.NewBlob: true}},
 		},
 		{
@@ -73,8 +81,17 @@ func TestReadBlobReferences(t *testing.T) {
 			plant: func(t *testing.T, root string) {
 				gctest.WriteJSON(t, root, imageKeyOf(gctest.LiveImage), layerManifest(gctest.LiveImage, gctest.NewBlob), gctest.Old)
 			},
-			savepoints: []model.Savepoint{{ID: gctest.LiveSavepoint, Images: []model.Image{{ID: gctest.LiveImage}}}},
-			want:       blobReferences{byUnnamed: map[string]bool{gctest.NewBlob: true}},
+			savepoints: []composemodel.Savepoint{
+				{
+					Header: model.Savepoint{
+						ID: gctest.LiveSavepoint,
+					},
+					Detail: composemodel.SavepointDetail{
+						Images: []composemodel.Image{{ID: gctest.LiveImage}},
+					},
+				},
+			},
+			want: blobReferences{byUnnamed: map[string]bool{gctest.NewBlob: true}},
 		},
 		{
 			name: "dead trees hold nothing and only attribute what they list, in order",
@@ -93,11 +110,17 @@ func TestReadBlobReferences(t *testing.T) {
 			plant: func(t *testing.T, root string) {
 				gctest.WriteObject(t, root, layerKey(gctest.LiveSavepoint), "{torn", gctest.Old)
 			},
-			savepoints: []model.Savepoint{{
-				ID:             gctest.LiveSavepoint,
-				WritableLayers: []model.WritableLayer{layer},
-				Images:         []model.Image{{ID: gctest.LiveImage, Stored: true}},
-			}},
+			savepoints: []composemodel.Savepoint{
+				{
+					Header: model.Savepoint{
+						ID: gctest.LiveSavepoint,
+					},
+					Detail: composemodel.SavepointDetail{
+						WritableLayers: []composemodel.WritableLayer{layer},
+						Images:         []composemodel.Image{{ID: gctest.LiveImage, Stored: true}},
+					},
+				},
+			},
 			wantUnreadable: map[string]model.SavepointID{
 				layerKey(gctest.LiveSavepoint): gctest.LiveSavepoint,
 				imageKeyOf(gctest.LiveImage):   gctest.LiveSavepoint,
@@ -147,7 +170,7 @@ func TestReadBlobReferences_Cancelled(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-func imageKeyOf(image model.ImageDigestID) string {
+func imageKeyOf(image composemodel.ImageDigestID) string {
 	return "shared/oci/images/sha256/" + strings.TrimPrefix(image.String(), "sha256:") + "/image.json"
 }
 

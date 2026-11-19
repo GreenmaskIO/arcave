@@ -96,18 +96,6 @@ var (
 	// already have taken its tree for a dead one.
 	ErrHeartbeatLost = errors.New("heartbeat lost")
 
-	// ErrInvalidDigestID reports a string that is not a content digest — a tag, a
-	// truncated id, anything the daemon would resolve by name. ParseImageDigestID wraps
-	// it with the offending value.
-	ErrInvalidDigestID = errors.New("invalid image digest id")
-
-	// ErrLeftoverVolumes refuses a rollback into a compose project that is not running
-	// but still owns volumes the rollback would overwrite.
-	ErrLeftoverVolumes = errors.New("compose project is not running but its volumes survive")
-
-	// ErrUnsupportedDaemon reports a Docker daemon older than arcave supports.
-	ErrUnsupportedDaemon = errors.New("unsupported docker daemon")
-
 	// ErrComposeProjectAbsent reports a compose project the daemon holds no container of.
 	ErrComposeProjectAbsent = errors.New("no containers found")
 
@@ -216,7 +204,7 @@ type ComposeProjectPresentError struct {
 }
 
 func (m *ComposeProjectPresentError) Error() string {
-	return fmt.Sprintf("%v: %s", ErrComposeProjectPresent, formatResources(m.Containers, m.Volumes, nil))
+	return fmt.Sprintf("%v: %s", ErrComposeProjectPresent, FormatResources(m.Containers, m.Volumes, nil))
 }
 
 func (m *ComposeProjectPresentError) Unwrap() error { return ErrComposeProjectPresent }
@@ -242,49 +230,8 @@ func (m *DeployedElsewhereError) Error() string {
 
 func (m *DeployedElsewhereError) Unwrap() error { return ErrDeployedElsewhere }
 
-// NotDeployedByArcaveError is what a down cannot put down to a rollback: the replicas with no or
-// unreadable deployment labels, as <service>-<number>, or, with no replica left, the containers,
-// volumes and networks of the compose project. It is ErrNotDeployedByArcave.
-type NotDeployedByArcaveError struct {
-	Replicas   []string
-	Containers []string
-	Volumes    []string
-	Networks   []string
-}
-
-func (m *NotDeployedByArcaveError) Error() string {
-	if len(m.Replicas) > 0 {
-		return fmt.Sprintf("%v: no deployment labels on %s", ErrNotDeployedByArcave, strings.Join(m.Replicas, ", "))
-	}
-	return fmt.Sprintf("%v: no replica is left to name the owner of %s", ErrNotDeployedByArcave,
-		formatResources(m.Containers, m.Volumes, m.Networks))
-}
-
-// ComposeProjectLeftError is what a drop of a compose project could not remove: containers, and
-// volumes something outside the compose project still holds. Cause is the daemon's refusals of
-// those volumes, nil when nothing said why. It is ErrComposeProjectLeft.
-type ComposeProjectLeftError struct {
-	Containers []string
-	Volumes    []string
-	Cause      error
-}
-
-func (m *ComposeProjectLeftError) Error() string {
-	msg := fmt.Sprintf("%v: %s", ErrComposeProjectLeft, formatResources(m.Containers, m.Volumes, nil))
-	if m.Cause != nil {
-		msg += ": " + m.Cause.Error()
-	}
-	return msg
-}
-
-func (m *ComposeProjectLeftError) Unwrap() []error {
-	return []error{ErrComposeProjectLeft, m.Cause}
-}
-
-func (m *NotDeployedByArcaveError) Unwrap() error { return ErrNotDeployedByArcave }
-
-// formatResources lists the containers, volumes and networks of a compose project, each kind named.
-func formatResources(containers, volumes, networks []string) string {
+// FormatResources lists the containers, volumes and networks of a compose project, each kind named.
+func FormatResources(containers, volumes, networks []string) string {
 	var parts []string
 	for _, kind := range []struct {
 		noun  string

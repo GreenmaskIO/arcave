@@ -16,6 +16,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -72,7 +73,7 @@ func TestDeploymentError(t *testing.T) {
 			wantIs: model.ErrDeployedElsewhere, wantHint: "call it with session feat",
 		},
 		{
-			name: "down of compose's own", err: &model.NotDeployedByArcaveError{Replicas: []string{"db-1"}}, hints: cliDeploymentFixHints,
+			name: "down of compose's own", err: fmt.Errorf("%w: no deployment labels on db-1", model.ErrNotDeployedByArcave), hints: cliDeploymentFixHints,
 			wantIs: model.ErrNotDeployedByArcave, wantHint: "pass --force to take it down anyway",
 		},
 		{
@@ -80,7 +81,7 @@ func TestDeploymentError(t *testing.T) {
 			wantIs: model.ErrNoSavepoints, wantHint: "arcave savepoint create",
 		},
 		{
-			name: "a drop held back", err: &model.ComposeProjectLeftError{Volumes: []string{"demo_data"}}, hints: cliDeploymentFixHints,
+			name: "a drop held back", err: fmt.Errorf("%w: volumes demo_data", model.ErrComposeProjectLeft), hints: cliDeploymentFixHints,
 			wantIs: model.ErrComposeProjectLeft, wantHint: "stop or remove what holds them",
 		},
 	}

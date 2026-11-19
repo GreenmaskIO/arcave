@@ -56,15 +56,15 @@ func TestUnmarshal(t *testing.T) {
 				// The configured path carries no project segment: storefactory roots
 				// the store at the project itself.
 				assert.Equal(t, filepath.Join(model.StateDir, "storage"), cfg.Storage.DirectoryPath())
-				assert.Equal(t, composeconfig.SnapshotBackendFullCopy, cfg.ComposeProvider.Snapshot.Backend)
+				assert.Equal(t, string(composeconfig.SnapshotBackendFullCopy), cfg.ComposeProvider.Snapshot.Backend)
 				// A project that names no compose section still gets bounds: an
 				// unbounded health-check wait is the failure this config exists to
 				// prevent, so it can never be what a bare file means.
 				assert.Equal(t, composeconfig.DefaultWaitTimeout, cfg.ComposeProvider.Compose.WaitTimeout)
 				assert.Equal(t, composeconfig.DefaultStopTimeout, cfg.ComposeProvider.Compose.StopTimeout)
 				assert.Equal(t, composeconfig.ProgressLog, cfg.ComposeProvider.Compose.Progress)
-				assert.Equal(t, composeconfig.LeftoverVolumesOverwrite, cfg.ComposeProvider.Compose.LeftoverVolumes)
-				assert.Equal(t, model.LeftoverVolumesOverwrite, cfg.ComposeProvider.Compose.LeftoverVolumesPolicy())
+				assert.Equal(t, string(composeconfig.LeftoverVolumesOverwrite), cfg.ComposeProvider.Compose.LeftoverVolumes)
+				assert.Equal(t, composeconfig.LeftoverVolumesOverwrite, cfg.ComposeProvider.Compose.LeftoverVolumesPolicy())
 				require.NotNil(t, cfg.Rollback.SafetySnapshot)
 				assert.True(t, *cfg.Rollback.SafetySnapshot)
 				assert.False(t, cfg.Rollback.SkipSafetySnapshot())
@@ -89,7 +89,7 @@ func TestUnmarshal(t *testing.T) {
 			name: "a rollback may refuse leftover volumes",
 			yaml: "compose:\n  leftover_volumes: refuse\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, model.LeftoverVolumesRefuse, cfg.ComposeProvider.Compose.LeftoverVolumesPolicy())
+				assert.Equal(t, composeconfig.LeftoverVolumesRefuse, cfg.ComposeProvider.Compose.LeftoverVolumesPolicy())
 			},
 		},
 		{
@@ -313,8 +313,8 @@ func TestUnmarshal(t *testing.T) {
 			name: "naming cdc fills its section with the defaults",
 			yaml: "snapshot:\n  backend: cdc\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, composeconfig.SnapshotBackendCDC, cfg.ComposeProvider.Snapshot.Backend)
-				assert.Equal(t, model.SnapshotBackendCDC, cfg.ComposeProvider.Snapshot.BackendKind())
+				assert.Equal(t, string(composeconfig.SnapshotBackendCDC), cfg.ComposeProvider.Snapshot.Backend)
+				assert.Equal(t, composeconfig.SnapshotBackendCDC, cfg.ComposeProvider.Snapshot.BackendKind())
 				require.NotNil(t, cfg.ComposeProvider.Backends.CDC)
 				assert.Equal(t, composeconfig.RestoreModeIncremental, cfg.ComposeProvider.Backends.CDC.RestoreMode)
 				assert.Equal(t, composeconfig.OverwriteAlways, cfg.ComposeProvider.Backends.CDC.Overwrite)
@@ -437,14 +437,14 @@ func TestUnmarshal(t *testing.T) {
 			name: "layers are deduplicated by default",
 			yaml: "",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, model.ImageBackendDedupCopy, cfg.ComposeProvider.WritableLayers.BackendKind())
+				assert.Equal(t, composeconfig.ImageBackendDedupCopy, cfg.ComposeProvider.WritableLayers.BackendKind())
 			},
 		},
 		{
 			name: "writable_layers.backend fullcopy is taken",
 			yaml: "writable_layers:\n  backend: fullcopy\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, model.ImageBackendFullCopy, cfg.ComposeProvider.WritableLayers.BackendKind())
+				assert.Equal(t, composeconfig.ImageBackendFullCopy, cfg.ComposeProvider.WritableLayers.BackendKind())
 			},
 		},
 		{
@@ -471,14 +471,14 @@ func TestUnmarshal(t *testing.T) {
 			name: "the capture mode defaults to stop",
 			yaml: "",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, string(model.CaptureModeStop), cfg.ComposeProvider.Capture.Mode)
+				assert.Equal(t, string(composeconfig.CaptureModeStop), cfg.ComposeProvider.Capture.Mode)
 			},
 		},
 		{
 			name: "a capture mode is taken",
 			yaml: "capture:\n  mode: pause\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, string(model.CaptureModePause), cfg.ComposeProvider.Capture.Mode)
+				assert.Equal(t, string(composeconfig.CaptureModePause), cfg.ComposeProvider.Capture.Mode)
 			},
 		},
 		{
@@ -491,7 +491,7 @@ func TestUnmarshal(t *testing.T) {
 			yaml: "",
 			verify: func(t *testing.T, cfg Config) {
 				assert.Equal(t, composeconfig.CaptureHooks{Timeout: time.Minute, OnError: "fail"}, cfg.ComposeProvider.Capture.Hooks)
-				assert.Equal(t, model.HookOnErrorFail, cfg.ComposeProvider.Capture.Hooks.OnErrorKind())
+				assert.Equal(t, composeconfig.HookOnErrorFail, cfg.ComposeProvider.Capture.Hooks.OnErrorKind())
 			},
 		},
 		{
@@ -499,7 +499,7 @@ func TestUnmarshal(t *testing.T) {
 			yaml: "capture:\n  hooks:\n    timeout: 2m\n    on_error: continue\n",
 			verify: func(t *testing.T, cfg Config) {
 				assert.Equal(t, composeconfig.CaptureHooks{Timeout: 2 * time.Minute, OnError: "continue"}, cfg.ComposeProvider.Capture.Hooks)
-				assert.Equal(t, model.HookOnErrorContinue, cfg.ComposeProvider.Capture.Hooks.OnErrorKind())
+				assert.Equal(t, composeconfig.HookOnErrorContinue, cfg.ComposeProvider.Capture.Hooks.OnErrorKind())
 			},
 		},
 		{

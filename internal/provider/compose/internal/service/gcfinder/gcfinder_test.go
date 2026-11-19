@@ -17,9 +17,9 @@ package gcfinder
 import (
 	"context"
 	"errors"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
-	"slices"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,15 +36,15 @@ func TestNewDaemonErasers(t *testing.T) {
 	}
 
 	// Assert
-	assert.Equal(t, []model.GarbageAction{model.GarbageActionUntag}, got)
+	assert.Equal(t, []model.GarbageAction{composemodel.GarbageActionUntag}, got)
 }
 
 // Every action a gc deletes in a compose project's store has one eraser.
 func TestNewComposeProjectErasers(t *testing.T) {
 	// Arrange
 	want := []model.GarbageAction{
-		model.GarbageActionDeleteTree, model.GarbageActionDeleteImage, model.GarbageActionDeleteObject,
-		model.GarbageActionForget,
+		composemodel.GarbageActionDeleteTree, composemodel.GarbageActionDeleteImage, composemodel.GarbageActionDeleteObject,
+		composemodel.GarbageActionForget,
 	}
 
 	// Act
@@ -99,11 +99,11 @@ func TestNewObjectCollectors(t *testing.T) {
 		daemon    bool
 	}
 	want := map[model.GarbageDataKind]resolution{
-		model.GarbageDataKindRestoredLayers:      {collector: model.GarbageCollectorKindDockerLayerTags, daemon: true},
-		model.GarbageDataKindSavepointData:       {collector: model.GarbageCollectorKindSavepointDirectory},
-		model.GarbageDataKindUpstreamImages:      {collector: model.GarbageCollectorKindOCIImages},
-		model.GarbageDataKindImageLayers:         {collector: model.GarbageCollectorKindOCIBlobs},
-		model.GarbageDataKindDeduplicatedVolumes: {collector: model.GarbageCollectorKindResticRepositories},
+		composemodel.GarbageDataKindRestoredLayers:      {collector: composemodel.GarbageCollectorKindDockerLayerTags, daemon: true},
+		composemodel.GarbageDataKindSavepointData:       {collector: composemodel.GarbageCollectorKindSavepointDirectory},
+		composemodel.GarbageDataKindUpstreamImages:      {collector: composemodel.GarbageCollectorKindOCIImages},
+		composemodel.GarbageDataKindImageLayers:         {collector: composemodel.GarbageCollectorKindOCIBlobs},
+		composemodel.GarbageDataKindDeduplicatedVolumes: {collector: composemodel.GarbageCollectorKindResticRepositories},
 	}
 
 	// Act
@@ -115,8 +115,8 @@ func TestNewObjectCollectors(t *testing.T) {
 		got[collector.DataKind()] = append(got[collector.DataKind()], resolution{collector: collector.Kind()})
 	}
 
-	// Assert: the safety snapshots are gc's own retention, no collector of the provider's.
-	require.Len(t, want, len(model.GarbageDataKinds())-1, "the table names every data kind but the safety snapshots")
+	// Assert
+	require.Len(t, want, len(composemodel.GarbageDataKinds()), "the table names every data kind of the provider")
 	for dataKind, resolved := range want {
 		assert.Equal(t, []resolution{resolved}, got[dataKind], dataKind)
 	}
@@ -128,8 +128,5 @@ func TestNewObjectCollectors(t *testing.T) {
 		}
 	}
 	assert.ElementsMatch(t,
-		slices.DeleteFunc(model.GarbageCollectorKinds(), func(kind model.GarbageCollectorKind) bool {
-			return kind == model.GarbageCollectorKindSafetySnapshotRetention
-		}),
-		collectorKinds, "every collector kind is built once")
+		composemodel.GarbageCollectorKinds(), collectorKinds, "every collector kind is built once")
 }

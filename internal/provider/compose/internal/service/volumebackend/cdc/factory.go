@@ -28,7 +28,8 @@ import (
 
 	"github.com/greenmaskio/storages"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // NamespaceRepos is the segment every volume's repository lives under, inside the
@@ -57,8 +58,8 @@ const mountRoot = "/m"
 // of its own.
 type VolumeRunner interface {
 	ContainerRunner
-	ResolveMountSource(ctx context.Context, v model.Volume) (model.MountSource, error)
-	WipeVolume(ctx context.Context, src model.MountSource) error
+	ResolveMountSource(ctx context.Context, v composemodel.Volume) (composemodel.MountSource, error)
+	WipeVolume(ctx context.Context, src composemodel.MountSource) error
 }
 
 // Options is the backends.cdc config section, translated by the compose provider's root
@@ -95,12 +96,12 @@ type Factory struct {
 // the transport names is closed by whoever started it.
 func NewFactory(deps Dependencies) *Factory { return &Factory{deps: deps} }
 
-func (*Factory) Kind() model.SnapshotBackendKind { return model.SnapshotBackendCDC }
+func (*Factory) Kind() composeconfig.SnapshotBackendKind { return composeconfig.SnapshotBackendCDC }
 
 // New resolves what is fixed for an instance's life: the volume's repository.
 // The volume's own mount source is not — resolving it may reach the daemon, and a
 // constructor has no ctx to do that on.
-func (s *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
+func (s *Factory) New(spec composemodel.BackendSpec) (composemodel.VolumeSnapshotBackend, error) {
 	repoStore, err := s.deps.RepositoryRoot.SubStorage(spec.Volume.ObjectID, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root store at the %s repository: %w", spec.Volume.ObjectID, err)

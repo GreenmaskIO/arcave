@@ -18,8 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"testing"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/storages"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
@@ -37,8 +39,8 @@ import (
 func TestPlanner_Plan_LabelsDecideTheImages(t *testing.T) {
 	// Arrange
 	introspection := composetest.LabelledIntrospection(map[string]string{
-		string(model.CaptureLabelWritableLayerBackend): "fullcopy",
-		string(model.CaptureLabelImageCapture):         "false",
+		string(composemodel.CaptureLabelWritableLayerBackend): "fullcopy",
+		string(composemodel.CaptureLabelImageCapture):         "false",
 	})
 	store := composetest.NewDirStore(t)
 	registry := &composetest.MockRegistry{}
@@ -58,11 +60,11 @@ func TestPlanner_Plan_LabelsDecideTheImages(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	require.Len(t, plan.WritableLayers, 1)
-	assert.Equal(t, model.ImageBackendFullCopy, plan.WritableLayers[0].Backend)
+	assert.Equal(t, composeconfig.ImageBackendFullCopy, plan.WritableLayers[0].Backend)
 	assert.Equal(t, composetest.DemoContainerID, plan.WritableLayers[0].Container.ID)
 	assert.Empty(t, plan.Images)
-	assert.Equal(t, []model.SkippedImage{{
-		Service: composetest.DemoService, Image: composetest.DemoBaseImage, Reason: model.SkipReasonExcluded,
+	assert.Equal(t, []composemodel.SkippedImage{{
+		Service: composetest.DemoService, Image: composetest.DemoBaseImage, Reason: composemodel.SkipReasonExcluded,
 		Detail: "arcave.image.capture=false on service " + composetest.DemoService,
 	}}, plan.NotCovered.Images)
 	assert.NoError(t, plan.LabelsIgnored)
@@ -77,7 +79,7 @@ func TestPlanner_newReplacementPolicy(t *testing.T) {
 		labels      map[string]string
 		wantIgnored bool
 	}{
-		{name: "it keeps what the restore writes into", labels: map[string]string{string(model.CaptureLabelCapture): "false"}},
+		{name: "it keeps what the restore writes into", labels: map[string]string{string(composemodel.CaptureLabelCapture): "false"}},
 		{
 			name:        "it follows the config past a bad label",
 			labels:      map[string]string{"arcave.captur": "false"},
@@ -88,7 +90,7 @@ func TestPlanner_newReplacementPolicy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			introspection := composetest.LabelledIntrospection(tt.labels)
-			introspection.Project.Volumes[0].UsedBy = []model.ServiceReference{{Service: composetest.DemoService, Target: "/data"}}
+			introspection.Project.Volumes[0].UsedBy = []composemodel.ServiceReference{{Service: composetest.DemoService, Target: "/data"}}
 			svc := New(Deps{CaptureDefaults: composetest.DemoCaptureDefaults})
 			ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -111,7 +113,7 @@ func TestPlanner_newReplacementPolicy(t *testing.T) {
 func TestNotCovered_ReportsEachExclusionOnce(t *testing.T) {
 	// Arrange
 	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{Name: "demo", Services: []composemodel.Service{
-		{Name: "app", Volumes: []composemodel.ServiceVolume{{Type: model.VolumeTypeBind, RawType: "bind", Source: "/src", Target: "/app"}}},
+		{Name: "app", Volumes: []composemodel.ServiceVolume{{Type: composemodel.VolumeTypeBind, RawType: "bind", Source: "/src", Target: "/app"}}},
 	}}}
 	excluded := composemodel.VolumeDecision{CaptureDecision: composemodel.CaptureDecision{Source: "a label"}}
 	volumePolicy := composemodel.CapturePolicy{Mounts: map[composemodel.MountRef]composemodel.VolumeDecision{{Service: "app", Target: "/app"}: excluded}}
@@ -170,7 +172,7 @@ func TestNewLayerCaptures(t *testing.T) {
 		{Service: "db", Replica: 2, Name: "demo-db-2"},
 	}
 	policy := composemodel.CapturePolicy{
-		WritableLayerBackend: model.ImageBackendDedupCopy,
+		WritableLayerBackend: composeconfig.ImageBackendDedupCopy,
 		Services: map[string]composemodel.ServiceDecision{
 			"db": {WritableLayer: composemodel.WritableLayerDecision{CaptureDecision: composemodel.CaptureDecision{Source: "a label"}}},
 		},
@@ -182,11 +184,11 @@ func TestNewLayerCaptures(t *testing.T) {
 
 	// Assert
 	assert.Equal(t, []composemodel.WritableLayerCaptureRequest{
-		{Container: containers[0], Backend: model.ImageBackendDedupCopy},
+		{Container: containers[0], Backend: composeconfig.ImageBackendDedupCopy},
 	}, layers)
-	assert.Equal(t, []model.SkippedWritableLayer{
-		{Service: "db", Replica: 1, Container: "demo-db-1", Reason: model.SkipReasonExcluded, Detail: "a label"},
-		{Service: "db", Replica: 2, Container: "demo-db-2", Reason: model.SkipReasonExcluded, Detail: "a label"},
+	assert.Equal(t, []composemodel.SkippedWritableLayer{
+		{Service: "db", Replica: 1, Container: "demo-db-1", Reason: composemodel.SkipReasonExcluded, Detail: "a label"},
+		{Service: "db", Replica: 2, Container: "demo-db-2", Reason: composemodel.SkipReasonExcluded, Detail: "a label"},
 	}, skipped)
 }
 
@@ -272,8 +274,8 @@ func TestPlanner_Plan(t *testing.T) {
 func TestPlanner_Plan_Restoring(t *testing.T) {
 	// Arrange
 	record := composetest.DemoRecord()
-	introspection := composetest.LabelledIntrospection(map[string]string{string(model.CaptureLabelCapture): "false"})
-	introspection.Project.Volumes[0].UsedBy = []model.ServiceReference{{Service: composetest.DemoService, Target: composetest.DemoTarget}}
+	introspection := composetest.LabelledIntrospection(map[string]string{string(composemodel.CaptureLabelCapture): "false"})
+	introspection.Project.Volumes[0].UsedBy = []composemodel.ServiceReference{{Service: composetest.DemoService, Target: composetest.DemoTarget}}
 	store := composetest.NewDirStore(t)
 	registry := &composetest.MockRegistry{}
 	registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(composetest.DemoVolume()), nil).Once()
@@ -301,15 +303,15 @@ func TestNewReplicaGaps(t *testing.T) {
 		name    string
 		numbers []int
 		want    string
-		wantGap []model.ReplicaGap
+		wantGap []composemodel.ReplicaGap
 	}{
 		{name: "no gap", numbers: []int{2, 1, 3}},
 		{name: "a gap in the middle", numbers: []int{3, 1},
 			want:    `"service":"db","replicas":[1,3],"missing":[2],"message":"some replicas of this service are gone`,
-			wantGap: []model.ReplicaGap{{Service: composetest.DemoService, Replicas: []int{1, 3}, Missing: []int{2}}}},
+			wantGap: []composemodel.ReplicaGap{{Service: composetest.DemoService, Replicas: []int{1, 3}, Missing: []int{2}}}},
 		{name: "the first replica gone", numbers: []int{2, 3},
 			want:    `"service":"db","replicas":[2,3],"missing":[1],"message":"some replicas of this service are gone`,
-			wantGap: []model.ReplicaGap{{Service: composetest.DemoService, Replicas: []int{2, 3}, Missing: []int{1}}}},
+			wantGap: []composemodel.ReplicaGap{{Service: composetest.DemoService, Replicas: []int{2, 3}, Missing: []int{1}}}},
 	}
 
 	for _, tt := range tests {
@@ -348,14 +350,14 @@ func TestPlanner_Plan_CoversEveryUnit(t *testing.T) {
 			{
 				Name: "app",
 				Volumes: []composemodel.ServiceVolume{
-					{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg"},
-					{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/scratch"},
+					{Type: composemodel.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg"},
+					{Type: composemodel.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/scratch"},
 				},
 			},
 			{
 				Name: "db",
 				Volumes: []composemodel.ServiceVolume{{
-					Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+					Type: composemodel.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
 					Target: "/var/lib/postgresql/data", VolumeName: "demo_pgdata",
 				}},
 			},
@@ -363,12 +365,12 @@ func TestPlanner_Plan_CoversEveryUnit(t *testing.T) {
 		},
 		Volumes: []composemodel.NamedVolume{{
 			Key: "pgdata", Name: "demo_pgdata",
-			UsedBy: []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
+			UsedBy: []composemodel.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
 		}},
 	}}
 	store := composetest.NewDirStore(t)
-	pgBackend := composetest.NewMockBackend(model.Volume{ObjectID: "volume-named-demo_pgdata"})
-	cfgBackend := composetest.NewMockBackend(model.Volume{ObjectID: "volume-service-app-etc-cfg"})
+	pgBackend := composetest.NewMockBackend(composemodel.Volume{ObjectID: "volume-named-demo_pgdata"})
+	cfgBackend := composetest.NewMockBackend(composemodel.Volume{ObjectID: "volume-service-app-etc-cfg"})
 	registry := &composetest.MockRegistry{}
 	registry.On("New", composetest.MatchSpec(store, "volume-named-demo_pgdata")).Return(pgBackend, nil).Once()
 	registry.On("New", composetest.MatchSpec(store, "volume-service-app-etc-cfg")).Return(cfgBackend, nil).Once()
@@ -387,10 +389,10 @@ func TestPlanner_Plan_CoversEveryUnit(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []model.VolumeSnapshotBackend{pgBackend, cfgBackend}, plan.Volumes)
-	assert.Equal(t, model.NotCovered{
-		Mounts: []model.SkippedVolume{{Service: "app", Target: "/scratch", RawType: "tmpfs",
-			Reason: model.SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"}},
+	assert.ElementsMatch(t, []composemodel.VolumeSnapshotBackend{pgBackend, cfgBackend}, plan.Volumes)
+	assert.Equal(t, composemodel.NotCovered{
+		Mounts: []composemodel.SkippedVolume{{Service: "app", Target: "/scratch", RawType: "tmpfs",
+			Reason: composemodel.SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"}},
 		ServicesWithoutVolumes: []string{"web"},
 	}, plan.NotCovered)
 	assert.Contains(t, logs.String(), "volume will not be backed up")
@@ -403,7 +405,7 @@ func TestPlanner_Plan_CoversEveryUnit(t *testing.T) {
 func TestPlanner_Plan_AnonymousVolumePerReplica(t *testing.T) {
 	// Arrange
 	anon := func(replica int) composemodel.ServiceVolume {
-		return composemodel.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: replica}
+		return composemodel.ServiceVolume{Type: composemodel.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: replica}
 	}
 	introspection := composemodel.IntrospectionResult{Project: composemodel.Project{
 		Name: "demo",
@@ -414,11 +416,11 @@ func TestPlanner_Plan_AnonymousVolumePerReplica(t *testing.T) {
 	}}
 	store := composetest.NewDirStore(t)
 	registry := &composetest.MockRegistry{}
-	var backends []model.VolumeSnapshotBackend
+	var backends []composemodel.VolumeSnapshotBackend
 	for replica := 1; replica <= 3; replica++ {
 		objectID := fmt.Sprintf("volume-anon-worker-%d-cache", replica)
-		backend := composetest.NewMockBackend(model.Volume{ObjectID: objectID})
-		registry.On("New", mock.MatchedBy(func(spec model.BackendSpec) bool {
+		backend := composetest.NewMockBackend(composemodel.Volume{ObjectID: objectID})
+		registry.On("New", mock.MatchedBy(func(spec composemodel.BackendSpec) bool {
 			return spec.Store == store && spec.Volume.ObjectID == objectID &&
 				spec.Volume.Anon != nil && spec.Volume.Anon.Replica == replica
 		})).Return(backend, nil).Once()
@@ -446,13 +448,13 @@ func TestPlanner_Plan_AnonymousVolumePerReplica(t *testing.T) {
 // on every volume the plan resolves.
 func TestPlanner_Plan_StampsTheConfiguredBackend(t *testing.T) {
 	// Arrange
-	backend := composetest.NewMockBackend(model.Volume{ObjectID: "volume-named-demo_db", Backend: model.SnapshotBackendCDC})
+	backend := composetest.NewMockBackend(composemodel.Volume{ObjectID: "volume-named-demo_db", Backend: composeconfig.SnapshotBackendCDC})
 	registry := &composetest.MockRegistry{}
-	registry.On("New", mock.MatchedBy(func(spec model.BackendSpec) bool {
-		return spec.Volume.Backend == model.SnapshotBackendCDC
+	registry.On("New", mock.MatchedBy(func(spec composemodel.BackendSpec) bool {
+		return spec.Volume.Backend == composeconfig.SnapshotBackendCDC
 	})).Return(backend, nil).Once()
 	defaults := composetest.DemoCaptureDefaults
-	defaults.VolumeBackend = model.SnapshotBackendCDC
+	defaults.VolumeBackend = composeconfig.SnapshotBackendCDC
 	svc := New(Deps{
 		ProjectAssembler: composetest.DemoAssembler(),
 		SpecCodec:        composetest.DemoCodec(),
@@ -467,7 +469,7 @@ func TestPlanner_Plan_StampsTheConfiguredBackend(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, []model.VolumeSnapshotBackend{backend}, plan.Volumes)
+	assert.Equal(t, []composemodel.VolumeSnapshotBackend{backend}, plan.Volumes)
 	registry.AssertExpectations(t)
 }
 
@@ -479,16 +481,16 @@ func TestPlanner_Plan_CoversAnUnmountedVolume(t *testing.T) {
 		Name:     "demo",
 		Services: composetest.DemoIntrospection().Project.Services,
 		Volumes: []composemodel.NamedVolume{
-			{Key: "db", Name: "demo_db", UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}},
+			{Key: "db", Name: "demo_db", UsedBy: []composemodel.ServiceReference{{Service: "db", Target: "/data"}}},
 			// Mounted by no service — docker created it, so it can hold data.
 			{Key: "orphan", Name: "demo_orphan"},
 		},
 	}}
 	store := composetest.NewDirStore(t)
 	registry := &composetest.MockRegistry{}
-	backends := make([]model.VolumeSnapshotBackend, 0, 2)
+	backends := make([]composemodel.VolumeSnapshotBackend, 0, 2)
 	for _, objectID := range []string{"volume-named-demo_db", "volume-named-demo_orphan"} {
-		backend := composetest.NewMockBackend(model.Volume{ObjectID: objectID})
+		backend := composetest.NewMockBackend(composemodel.Volume{ObjectID: objectID})
 		registry.On("New", composetest.MatchSpec(store, objectID)).Return(backend, nil).Once()
 		backends = append(backends, backend)
 	}
@@ -601,7 +603,7 @@ func TestPlanner_Plan_PlansTheImagesAndWritableLayers(t *testing.T) {
 	record := composetest.DemoRecord()
 	tests := []struct {
 		name      string
-		restoring *model.Savepoint
+		restoring *composemodel.Savepoint
 	}{
 		{name: "a savepoint"},
 		{name: "before a restore", restoring: &record},
@@ -630,7 +632,7 @@ func TestPlanner_Plan_PlansTheImagesAndWritableLayers(t *testing.T) {
 			assert.Equal(t, []composemodel.ImageCaptureRequest{composetest.DemoImageCaptureRequest()}, plan.Images)
 			assert.Equal(t, []composemodel.WritableLayerCaptureRequest{{
 				Container: composetest.DemoContainerRef(),
-				Backend:   model.ImageBackendDedupCopy,
+				Backend:   composeconfig.ImageBackendDedupCopy,
 			}}, plan.WritableLayers)
 			assert.Equal(t, []composemodel.ContainerRef{composetest.DemoContainerRef()}, plan.Containers)
 			registry.AssertExpectations(t)
@@ -645,12 +647,12 @@ func TestStampServices(t *testing.T) {
 
 	// Act
 	stampServices(project, map[string]map[string]string{
-		"db":   {string(model.SystemLabelWritableLayerStamp): "true; origin=config"},
-		"gone": {string(model.SystemLabelWritableLayerStamp): "false; origin=config"},
+		"db":   {string(composemodel.SystemLabelWritableLayerStamp): "true; origin=config"},
+		"gone": {string(composemodel.SystemLabelWritableLayerStamp): "false; origin=config"},
 	})
 
 	// Assert
-	assert.Equal(t, types.Labels{"tier": "data", string(model.SystemLabelWritableLayerStamp): "true; origin=config"}, project.Services["db"].Labels)
+	assert.Equal(t, types.Labels{"tier": "data", string(composemodel.SystemLabelWritableLayerStamp): "true; origin=config"}, project.Services["db"].Labels)
 	assert.NotContains(t, project.Services, "gone")
 }
 
@@ -660,14 +662,14 @@ func TestNewKeptMounts(t *testing.T) {
 	var (
 		excluded = composemodel.VolumeDecision{
 			CaptureDecision: composemodel.CaptureDecision{Origin: composemodel.OriginLabel, Source: "arcave.mounts.exclude=/data on service app"},
-			Backend:         model.SnapshotBackendCDC,
+			Backend:         composeconfig.SnapshotBackendCDC,
 		}
-		bind  = composemodel.ServiceVolume{Type: model.VolumeTypeBind, Source: "/srv/data", Target: "/data"}
-		anon  = composemodel.ServiceVolume{Type: model.VolumeTypeAnon, Target: "/cache", Replica: 1, VolumeName: "anon-1"}
-		named = composemodel.ServiceVolume{Type: model.VolumeTypeNamed, Target: "/db", VolumeName: "demo_db"}
+		bind  = composemodel.ServiceVolume{Type: composemodel.VolumeTypeBind, Source: "/srv/data", Target: "/data"}
+		anon  = composemodel.ServiceVolume{Type: composemodel.VolumeTypeAnon, Target: "/cache", Replica: 1, VolumeName: "anon-1"}
+		named = composemodel.ServiceVolume{Type: composemodel.VolumeTypeNamed, Target: "/db", VolumeName: "demo_db"}
 		kept  = composemodel.VolumeDecision{
 			CaptureDecision: composemodel.NewConfigDecision(true, "the rollback restores into it"),
-			Backend:         model.SnapshotBackendCDC,
+			Backend:         composeconfig.SnapshotBackendCDC,
 		}
 	)
 	refOf := func(mount composemodel.ServiceVolume) composemodel.MountRef {
@@ -729,7 +731,7 @@ func TestNewStoppedServices(t *testing.T) {
 	image := composemodel.CaptureDecision{Origin: composemodel.OriginLabel, Source: "arcave.image.capture=false on service db"}
 	decisions := map[string]composemodel.ServiceDecision{"db": {
 		Image:       image,
-		Mode:        model.CaptureModePause,
+		Mode:        composeconfig.CaptureModePause,
 		PreCapture:  &composemodel.Hook{Command: []string{"pre"}},
 		PostCapture: &composemodel.Hook{Command: []string{"post"}},
 	}}
@@ -738,6 +740,6 @@ func TestNewStoppedServices(t *testing.T) {
 	got := newStoppedServices(decisions)
 
 	// Assert
-	assert.Equal(t, map[string]composemodel.ServiceDecision{"db": {Image: image, Mode: model.CaptureModeStop}}, got)
-	assert.Equal(t, model.CaptureModePause, decisions["db"].Mode, "the decisions it was read from are left as they were")
+	assert.Equal(t, map[string]composemodel.ServiceDecision{"db": {Image: image, Mode: composeconfig.CaptureModeStop}}, got)
+	assert.Equal(t, composeconfig.CaptureModePause, decisions["db"].Mode, "the decisions it was read from are left as they were")
 }

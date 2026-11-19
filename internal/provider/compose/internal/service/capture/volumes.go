@@ -23,6 +23,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -32,12 +33,12 @@ const volumeOpName = "snapshot"
 // captureVolumes takes one capture per backend under id, concurrently, its stats indexed alike
 // with backends; on error what the fan-out wrote is left for a later gc.
 func (s *Capturer) captureVolumes(
-	ctx context.Context, id model.SavepointID, labels map[string]string, backends []model.VolumeSnapshotBackend,
-) ([]model.SnapshotStat, error) {
+	ctx context.Context, id model.SavepointID, labels map[string]string, backends []composemodel.VolumeSnapshotBackend,
+) ([]composemodel.SnapshotStat, error) {
 	if err := id.Validate(); err != nil {
 		return nil, fmt.Errorf("validate savepoint id: %w", err)
 	}
-	stats := make([]model.SnapshotStat, len(backends))
+	stats := make([]composemodel.SnapshotStat, len(backends))
 	if len(backends) == 0 {
 		return stats, nil
 	}
@@ -57,7 +58,7 @@ func (s *Capturer) captureVolumes(
 
 			started := time.Now()
 			log.Debug().Msg("volume operation started")
-			stat, err := backend.Snapshot(opCtx, model.BackendSnapshotRequest{
+			stat, err := backend.Snapshot(opCtx, composemodel.BackendSnapshotRequest{
 				SnapshotID: id,
 				Labels:     labels,
 			})
@@ -82,7 +83,7 @@ func (s *Capturer) captureVolumes(
 }
 
 // volumeOpContext attributes every line the capture logs.
-func volumeOpContext(ctx context.Context, backend model.VolumeSnapshotBackend, id model.SavepointID) context.Context {
+func volumeOpContext(ctx context.Context, backend composemodel.VolumeSnapshotBackend, id model.SavepointID) context.Context {
 	volume := backend.Volume()
 	return zerolog.Ctx(ctx).With().
 		Str("volume", volume.ObjectID).

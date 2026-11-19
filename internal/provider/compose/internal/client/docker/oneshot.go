@@ -19,9 +19,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"io"
 	"strings"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/pkg/stdcopy"
@@ -30,8 +31,6 @@ import (
 	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // oneShotLabel marks every throwaway container arcave creates, so one a killed run
@@ -398,7 +397,7 @@ var volumeHolderCmd = []string{"true"}
 // withVolumeHolder runs fn against a volume holder with source mounted
 // at volumeHolderMount, and removes it when fn returns.
 func withVolumeHolder(
-	ctx context.Context, api dockerAPI, src model.MountSource, fn func(id string) error,
+	ctx context.Context, api dockerAPI, src composemodel.MountSource, fn func(id string) error,
 ) error {
 	id, err := startVolumeHolder(ctx, api, src)
 	if err != nil {
@@ -418,7 +417,7 @@ func withVolumeHolder(
 // container that mounts it starts, so copying before that would read a mount
 // nothing has set up yet.
 func startVolumeHolder(
-	ctx context.Context, api dockerAPI, src model.MountSource,
+	ctx context.Context, api dockerAPI, src composemodel.MountSource,
 ) (string, error) {
 	if src.Source == "" {
 		return "", fmt.Errorf("cannot reach a %q volume with no source", src.Type)

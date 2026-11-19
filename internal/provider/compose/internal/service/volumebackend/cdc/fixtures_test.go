@@ -24,7 +24,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // The volume every test captures: one named volume of the demo project, mounted
@@ -74,18 +75,18 @@ const (
 
 // demoAddress is what the engine answers for demoVolume: a named volume is its
 // docker name, whatever any service mounts it at.
-var demoAddress = model.MountSource{Type: model.MountSourceVolume, Source: demoVolName}
+var demoAddress = composemodel.MountSource{Type: composemodel.MountSourceVolume, Source: demoVolName}
 
 // demoVolume is the unit under test.
-func demoVolume() model.Volume {
-	return model.Volume{
+func demoVolume() composemodel.Volume {
+	return composemodel.Volume{
 		ObjectID:       demoObjectID,
 		ComposeProject: demoProject,
-		Type:           model.VolumeTypeNamed,
-		Backend:        model.SnapshotBackendCDC,
-		Named: &model.VolumePropertiesNamed{
+		Type:           composemodel.VolumeTypeNamed,
+		Backend:        composeconfig.SnapshotBackendCDC,
+		Named: &composemodel.VolumePropertiesNamed{
 			VolumeName: demoVolName,
-			UsedBy:     []model.ServiceReference{{Service: demoService, Target: demoTarget}},
+			UsedBy:     []composemodel.ServiceReference{{Service: demoService, Target: demoTarget}},
 		},
 	}
 }
@@ -103,7 +104,7 @@ func newStore(t *testing.T) storages.Storager {
 
 // harness is one wired backend plus the doubles behind it.
 type harness struct {
-	snapshotter model.VolumeSnapshotBackend
+	snapshotter composemodel.VolumeSnapshotBackend
 	runner      *mockRunner
 	root        storages.Storager
 	// repo is the repository root re-rooted at this volume's repository — where
@@ -135,7 +136,7 @@ func newHarnessOver(t *testing.T, transport Transport, opts Options) *harness {
 		Transport:      transport,
 		RepositoryRoot: root,
 		Options:        opts,
-	}).New(model.BackendSpec{Volume: demoVolume()})
+	}).New(composemodel.BackendSpec{Volume: demoVolume()})
 	require.NoError(t, err)
 
 	return &harness{

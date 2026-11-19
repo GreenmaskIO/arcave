@@ -122,7 +122,7 @@ func TestProgressE2E_JSONStream(t *testing.T) {
 	compose := newComposeProject(t, "progress-it")
 	projectRoot := t.TempDir()
 	runArcave(t, projectRoot, nil, "init", "--name", "arcave-progress-e2e")
-	writeStorageConfig(t, projectRoot, startDirectoryStorage(t).file, composeconfig.SnapshotBackendFullCopy)
+	writeStorageConfig(t, projectRoot, startDirectoryStorage(t).file, string(composeconfig.SnapshotBackendFullCopy))
 	compose.up(t, 1)
 	run := func(args ...string) []byte {
 		t.Helper()

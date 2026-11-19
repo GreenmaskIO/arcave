@@ -23,7 +23,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
@@ -32,16 +31,6 @@ var (
 	errCDCImageRequired         = errors.New("backends.cdc.image is required")
 	errCDCServerAddressRequired = errors.New("backends.cdc.server_address is required")
 	errCDCContainerHostRequired = errors.New("backends.cdc.container_host is required")
-)
-
-// The tokens snapshot.backend accepts.
-const (
-	// SnapshotBackendFullCopy stores each mount's tar stream whole, in the format
-	// backends.fullcopy.compression names.
-	SnapshotBackendFullCopy = string(model.SnapshotBackendFullCopy)
-	// SnapshotBackendCDC captures into a restic repository that outlives any one
-	// savepoint, writing only the chunks that changed.
-	SnapshotBackendCDC = string(model.SnapshotBackendCDC)
 )
 
 // The formats backends.fullcopy.compression accepts.
@@ -161,15 +150,6 @@ const (
 // DefaultHookTimeout bounds one hook in one replica when neither its label nor the config does.
 const DefaultHookTimeout = 60 * time.Second
 
-// The tokens compose.leftover_volumes accepts.
-const (
-	// LeftoverVolumesOverwrite restores over a volume that outlived its compose project's
-	// containers, and warns. The default.
-	LeftoverVolumesOverwrite = "overwrite"
-	// LeftoverVolumesRefuse fails such a rollback before anything is created.
-	LeftoverVolumesRefuse = "refuse"
-)
-
 // Config is the compose provider's sections of arcave's config: how it reaches the daemon and
 // runs compose, and what a capture takes and stores by default. arcave's config embeds it
 // inline, so its keys sit at the top level of .arcave/config.yaml.
@@ -197,16 +177,16 @@ func (c *Config) ApplyDefaults() {
 		c.Compose.Progress = ProgressLog
 	}
 	if c.Compose.LeftoverVolumes == "" {
-		c.Compose.LeftoverVolumes = LeftoverVolumesOverwrite
+		c.Compose.LeftoverVolumes = string(LeftoverVolumesOverwrite)
 	}
 	if c.Snapshot.Backend == "" {
-		c.Snapshot.Backend = SnapshotBackendFullCopy
+		c.Snapshot.Backend = string(SnapshotBackendFullCopy)
 	}
 	if c.WritableLayers.Backend == "" {
-		c.WritableLayers.Backend = string(model.ImageBackendDedupCopy)
+		c.WritableLayers.Backend = string(ImageBackendDedupCopy)
 	}
 	if c.Capture.Mode == "" {
-		c.Capture.Mode = string(model.CaptureModeStop)
+		c.Capture.Mode = string(CaptureModeStop)
 	}
 	if c.Capture.WritableLayers == nil {
 		c.Capture.WritableLayers = utils.New(true)
@@ -227,7 +207,7 @@ func (c *Config) ApplyDefaults() {
 		c.Capture.Hooks.Timeout = DefaultHookTimeout
 	}
 	if c.Capture.Hooks.OnError == "" {
-		c.Capture.Hooks.OnError = string(model.HookOnErrorFail)
+		c.Capture.Hooks.OnError = string(HookOnErrorFail)
 	}
 	// Whatever snapshot.backend says: a label may route a volume through fullcopy.
 	if c.Backends.FullCopy.Compression == "" {
@@ -241,7 +221,7 @@ func (c *Config) ApplyDefaults() {
 // never runs. Like the storage arm it fills a copy and re-points, since a Config
 // travels by value and writing through the pointer would reach across the copy.
 func (c *Config) applyCDCDefaults() {
-	if c.Backends.CDC == nil && c.Snapshot.Backend != SnapshotBackendCDC {
+	if c.Backends.CDC == nil && SnapshotBackendKind(c.Snapshot.Backend) != SnapshotBackendCDC {
 		return
 	}
 	cdc := CDCWithDefaults(c.Backends.CDC)
@@ -377,7 +357,7 @@ func (c Compose) Validate() error {
 		return fmt.Errorf("unsupported compose.progress %q (supported: %s, %s, %s)",
 			c.Progress, ProgressLog, ProgressTTY, ProgressQuiet)
 	}
-	switch c.LeftoverVolumes {
+	switch LeftoverVolumesPolicy(c.LeftoverVolumes) {
 	case LeftoverVolumesOverwrite, LeftoverVolumesRefuse:
 		return nil
 	default:
@@ -387,8 +367,8 @@ func (c Compose) Validate() error {
 }
 
 // LeftoverVolumesPolicy returns the configured token as the policy preparing a savepoint applies.
-func (c Compose) LeftoverVolumesPolicy() model.LeftoverVolumesPolicy {
-	return model.LeftoverVolumesPolicy(c.LeftoverVolumes)
+func (c Compose) LeftoverVolumesPolicy() LeftoverVolumesPolicy {
+	return LeftoverVolumesPolicy(c.LeftoverVolumes)
 }
 
 // Snapshot selects the snapshot backend that owns the read→write pipeline. It
@@ -400,7 +380,7 @@ type Snapshot struct {
 
 // Validate rejects a backend arcave cannot construct.
 func (s Snapshot) Validate() error {
-	switch s.Backend {
+	switch SnapshotBackendKind(s.Backend) {
 	case SnapshotBackendFullCopy, SnapshotBackendCDC:
 		return nil
 	default:
@@ -413,8 +393,8 @@ func (s Snapshot) Validate() error {
 // the one place the two vocabularies meet. An unknown token yields
 // SnapshotBackendUnknown, which the registry refuses by name; Validate has
 // rejected it long before.
-func (s Snapshot) BackendKind() model.SnapshotBackendKind {
-	kind, _ := model.ParseVolumeBackend(s.Backend)
+func (s Snapshot) BackendKind() SnapshotBackendKind {
+	kind, _ := ParseVolumeBackend(s.Backend)
 	return kind
 }
 
@@ -426,16 +406,16 @@ type WritableLayers struct {
 
 // Validate rejects a layout arcave does not know.
 func (w WritableLayers) Validate() error {
-	if _, ok := model.ParseImageBackend(w.Backend); !ok {
+	if _, ok := ParseImageBackend(w.Backend); !ok {
 		return fmt.Errorf("unsupported writable_layers.backend %q (supported: %s, %s)",
-			w.Backend, model.ImageBackendDedupCopy, model.ImageBackendFullCopy)
+			w.Backend, ImageBackendDedupCopy, ImageBackendFullCopy)
 	}
 	return nil
 }
 
 // BackendKind is the configured layout as the kind a capture carries.
-func (w WritableLayers) BackendKind() model.ImageBackendKind {
-	kind, _ := model.ParseImageBackend(w.Backend)
+func (w WritableLayers) BackendKind() ImageBackendKind {
+	kind, _ := ParseImageBackend(w.Backend)
 	return kind
 }
 
@@ -452,9 +432,9 @@ type Capture struct {
 
 // Validate rejects a capture mode arcave does not know and hook defaults it cannot act on.
 func (c Capture) Validate() error {
-	if _, ok := model.ParseCaptureMode(c.Mode); !ok {
+	if _, ok := ParseCaptureMode(c.Mode); !ok {
 		return fmt.Errorf("unsupported capture.mode %q (supported: %s, %s, %s)",
-			c.Mode, model.CaptureModeStop, model.CaptureModePause, model.CaptureModeLive)
+			c.Mode, CaptureModeStop, CaptureModePause, CaptureModeLive)
 	}
 	return c.Hooks.Validate()
 }
@@ -472,16 +452,16 @@ func (h CaptureHooks) Validate() error {
 	if h.Timeout <= 0 {
 		return fmt.Errorf("capture.hooks.timeout must be a positive duration, got %s", h.Timeout)
 	}
-	if _, ok := model.ParseHookOnError(h.OnError); !ok {
+	if _, ok := ParseHookOnError(h.OnError); !ok {
 		return fmt.Errorf("unsupported capture.hooks.on_error %q (supported: %s, %s)",
-			h.OnError, model.HookOnErrorFail, model.HookOnErrorContinue)
+			h.OnError, HookOnErrorFail, HookOnErrorContinue)
 	}
 	return nil
 }
 
 // OnErrorKind is the configured on-error as the kind a hook carries.
-func (h CaptureHooks) OnErrorKind() model.HookOnError {
-	onError, _ := model.ParseHookOnError(h.OnError)
+func (h CaptureHooks) OnErrorKind() HookOnError {
+	onError, _ := ParseHookOnError(h.OnError)
 	return onError
 }
 

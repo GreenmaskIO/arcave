@@ -18,9 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -36,12 +36,16 @@ import (
 
 func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	// Arrange
-	savepoint := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "before-migration", NotCovered: &model.NotCovered{
-		Mounts: []model.SkippedVolume{{Service: "app", Target: "/scratch", RawType: "tmpfs",
-			Reason: model.SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"}},
-		ServicesWithoutVolumes: []string{"web"},
-		KilledContainers:       []model.KilledContainer{{Service: "db", Replica: 1, Container: "demo-db-1"}},
-	}}
+	savepoint := model.Savepoint{
+		ID:       "019e843e-1650-7000-8000-000000000000",
+		Name:     "before-migration",
+		Provider: "compose",
+		Summary: model.SavepointSummary{
+			Units:   []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1, SizeBytes: 10}},
+			Notices: []model.Notice{{Message: "web has no volumes: only its writable layer is held"}},
+		},
+		Detail: json.RawMessage(`{"stats":[{"volume":{"object_id":"volume-named-demo_db"}}]}`),
+	}
 	svc := &mockService{}
 	svc.On("CreateSavepoint", mock.Anything, model.CreateSavepointRequest{Name: "before-migration"}).
 		Return(savepoint, nil).Once()
@@ -59,6 +63,30 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	assert.Equal(t, savepoint, out)
 	assert.True(t, released, "what the call opened must not outlive it")
 	svc.AssertExpectations(t)
+}
+
+// A savepoint's body is an object the schema takes as it comes: inferred, json.RawMessage would be
+// an array of bytes.
+func TestSavepointOutputSchema_AcceptsADetail(t *testing.T) {
+	// Arrange
+	resolved, err := newOutputSchema[model.Savepoint]().Resolve(nil)
+	require.NoError(t, err)
+	savepoint := model.Savepoint{
+		ID:       "019e843e-1650-7000-8000-000000000000",
+		Provider: "compose",
+		Summary:  model.SavepointSummary{Units: []model.UnitTally{{Kind: model.UnitKindVolumes, Count: 1}}},
+		Detail:   json.RawMessage(`{"stats":[{"volume":{"object_id":"volume-named-demo_db"}}]}`),
+	}
+	data, err := json.Marshal(savepoint)
+	require.NoError(t, err)
+	var instance map[string]any
+	require.NoError(t, json.Unmarshal(data, &instance))
+
+	// Act
+	err = resolved.Validate(instance)
+
+	// Assert
+	require.NoError(t, err)
 }
 
 func TestMCPHandler_listSavepointsMCP(t *testing.T) {
@@ -296,8 +324,8 @@ func TestMCPHandler_DeploymentErrorsInMCPSpelling(t *testing.T) {
 		{name: "up over a present compose project", up: true, err: &model.ComposeProjectPresentError{Volumes: []string{"demo_db"}},
 			wantHint: "the rollback tool replaces"},
 		{name: "down of another session's", err: elsewhere, wantHint: "call it with session feat"},
-		{name: "down of compose's own", err: &model.NotDeployedByArcaveError{Replicas: []string{"db-1"}}, wantHint: "pass force"},
-		{name: "a drop held back", err: &model.ComposeProjectLeftError{Volumes: []string{"demo_db"}}, wantHint: "then call it again"},
+		{name: "down of compose's own", err: fmt.Errorf("%w: no deployment labels on db-1", model.ErrNotDeployedByArcave), wantHint: "pass force"},
+		{name: "a drop held back", err: fmt.Errorf("%w: volumes demo_db", model.ErrComposeProjectLeft), wantHint: "then call it again"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -648,7 +676,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 	record := model.Session{ID: handlerSession, Name: "feat", From: &model.SessionOrigin{Session: model.DefaultSession}}
 	// A partial gc is still a report; its session marshals as the string the schema says.
 	gcResult := model.GarbageCollectResult{DryRun: true, Session: handlerSession, Reports: []model.GarbageReport{{
-		DataKind: model.GarbageDataKindImageLayers, ComposeProject: "demo",
+		DataKind: dataKindImageLayers, ComposeProject: "demo",
 		Summary: model.GarbageSummary{Aborted: "1 manifests of committed savepoints cannot be read"},
 	}}, Total: model.GarbageTotal{Aborted: 1}}
 	// A partial status is still a report; its session ids marshal as the strings the schema says.
@@ -670,8 +698,8 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 			Replicas: []model.ReplicaStatus{{Number: 1, State: model.ReplicaStateRunning}}}},
 		Unreadable: []model.StatusUnreadable{{Source: model.StatusUnreadableStore, Error: "unreachable"}},
 	}
-	layers := []model.WritableLayerRestoreResult{{Service: "db", Replica: 1, ContainerName: "demo-db-1",
-		ImageID: model.ImageDigestID("sha256:" + strings.Repeat("a", 64)), Tag: "arcave/demo-db-1-postgres-16:sp-v1"}}
+	restored := model.RestoreSummary{Units: []model.UnitTally{{Kind: model.UnitKindVolumes}, {Kind: model.UnitKindLayers, Count: 1}}}
+	restoredDetail := json.RawMessage(`{"writable_layers":[{"replica":1,"service":"db","tag":"arcave/demo-db-1-postgres-16:sp-v1"}]}`)
 	current := model.CurrentSession{
 		Session:       record,
 		CurrentSource: model.CurrentSessionSource{Source: model.SessionRefSourcePointer},
@@ -697,7 +725,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 		Discarded:       model.DiscardedResources{Containers: []string{"demo-db-1"}, Volumes: []string{"demo_db"}, Networks: []string{"demo_default"}},
 		RemovedTags:     []model.ImageRef{"arcave/demo-db-1-postgres-16:sp-v1"},
 	}
-	upResult := model.UpResult{RolledBackTo: savepoint, Restored: []model.Volume{},
+	upResult := model.UpResult{RolledBackTo: savepoint, Restored: restored,
 		Discarded: &model.DiscardedResources{Containers: []string{"demo-db-1"}, Volumes: []string{}, Networks: []string{}}}
 	tests := []struct {
 		tool               string
@@ -736,8 +764,8 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 		{tool: "rollback", args: map[string]any{"compose_project": "demo", "ref": "latest"},
 			setup: func(svc *mockService) {
 				svc.On("Rollback", mock.Anything, mock.Anything).
-					Return(model.RollbackResult{RolledBackTo: savepoint, WritableLayers: layers}, nil).Once()
-			}, want: model.RollbackResult{RolledBackTo: savepoint, WritableLayers: layers}, wantComposeProject: "demo"},
+					Return(model.RollbackResult{RolledBackTo: savepoint, Restored: restored, Detail: restoredDetail}, nil).Once()
+			}, want: model.RollbackResult{RolledBackTo: savepoint, Restored: restored, Detail: restoredDetail}, wantComposeProject: "demo"},
 		{tool: "up", args: map[string]any{"compose_project": "demo", "force": true},
 			setup: func(svc *mockService) {
 				svc.On("Up", mock.Anything, model.UpRequest{Latest: ptr(true), Force: true}).Return(upResult, nil).Once()
@@ -780,7 +808,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 		{tool: "gc", args: map[string]any{"kinds": []string{"upstream-images"}},
 			setup: func(svc *mockService) {
 				svc.On("GarbageCollect", mock.Anything, model.GarbageCollectRequest{
-					DryRun: true, DataKinds: []model.GarbageDataKind{model.GarbageDataKindUpstreamImages},
+					DryRun: true, DataKinds: []model.GarbageDataKind{dataKindUpstreamImages},
 				}).
 					Return(gcResult, model.ErrGarbageCollectPartial).Once()
 			}, want: gcResult},
@@ -873,7 +901,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 // deletion still hands back what it deleted, as a tool error.
 func TestMCPHandler_garbageCollectMCP(t *testing.T) {
 	deleted := model.GarbageCollectResult{Session: handlerSession, Reports: []model.GarbageReport{{
-		DataKind: model.GarbageDataKindSavepointData,
+		DataKind: dataKindSavepointData,
 		Deletion: &model.GarbageDeletion{NotRun: 1},
 	}}}
 

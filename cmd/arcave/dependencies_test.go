@@ -81,12 +81,13 @@ func TestOpenSavepointStoreService(t *testing.T) {
 	scope, err := openComposeProjectScope(ctx, cfg, projectPath, "exp", "demo", &opened)
 	require.NoError(t, err)
 	savepoint := model.Savepoint{
-		ID: "019e843e-1650-7000-8000-000000000000",
-		Stats: []model.SnapshotStat{
-			{Volume: model.Volume{ObjectID: "volume-named-a", Backend: model.SnapshotBackendFullCopy}},
-			{Volume: model.Volume{ObjectID: "volume-named-b", Backend: model.SnapshotBackendCDC}},
-			{Volume: model.Volume{ObjectID: "volume-named-c", Backend: "retired"}},
-		},
+		ID:       "019e843e-1650-7000-8000-000000000000",
+		Provider: "compose",
+		Detail: json.RawMessage(`{"stats": [
+			{"volume": {"object_id": "volume-named-a", "backend": "fullcopy"}},
+			{"volume": {"object_id": "volume-named-b", "backend": "cdc"}},
+			{"volume": {"object_id": "volume-named-c", "backend": "retired"}}
+		]}`),
 	}
 	putSavepointRecord(ctx, t, scope.store, savepoint)
 	archive := savepoint.ID.String() + "/volume-named-a/data.tar"
@@ -176,7 +177,11 @@ func TestOpenGCService_RetainsTheSafetySnapshots(t *testing.T) {
 			t.Cleanup(func() { opened.Release(ctx) })
 			scope, err := openComposeProjectScope(ctx, cfg, projectPath, "", "demo", &opened)
 			require.NoError(t, err)
-			for _, savepoint := range []model.Savepoint{{ID: oldest, Labels: labels}, {ID: newest, Labels: labels}, {ID: plain}} {
+			for _, savepoint := range []model.Savepoint{
+				{ID: oldest, Labels: labels, Provider: "compose"},
+				{ID: newest, Labels: labels, Provider: "compose"},
+				{ID: plain, Provider: "compose"},
+			} {
 				putSavepointRecord(ctx, t, scope.store, savepoint)
 			}
 			data := oldest.String() + "/volume-named-a/data.tar"

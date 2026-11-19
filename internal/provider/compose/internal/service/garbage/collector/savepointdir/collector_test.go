@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/gctest"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
@@ -35,7 +36,11 @@ func TestCollector_Find(t *testing.T) {
 	gctest.WriteObject(t, root, gctest.DeadSavepoint.String()+"/volume-named-db/data.tar", "12345", gctest.Recent)
 	gctest.WriteObject(t, root, gctest.OtherDeadSavepoint.String()+"/heartbeat.json", "{}", gctest.Recent)
 	gctest.WriteObject(t, root, "shared/oci/blobs/sha256/"+gctest.DeadBlob, "x", gctest.Old)
-	scope := gctest.NewScope(t, store, model.Savepoint{ID: gctest.LiveSavepoint})
+	scope := gctest.NewScope(t, store, composemodel.Savepoint{
+		Header: model.Savepoint{
+			ID: gctest.LiveSavepoint,
+		},
+	})
 	scope.Dead = []model.SavepointID{gctest.DeadSavepoint, gctest.OtherDeadSavepoint}
 
 	// Act
@@ -43,19 +48,19 @@ func TestCollector_Find(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	got := stat.(model.SavepointDirectoryStat)
+	got := stat.(composemodel.SavepointDirectoryStat)
 	// The directory store reports local times.
 	for i := range got.Ops {
 		got.Ops[i].LastModified = got.Ops[i].LastModified.UTC()
 	}
 	assert.Equal(t, []model.GarbageOp{
 		{
-			Action: model.GarbageActionDeleteTree, Target: gctest.DeadSavepoint.String(), Bytes: utils.New(int64(5)),
-			Reason: model.GarbageReasonDeadCapture, LastModified: gctest.Recent, Savepoint: gctest.DeadSavepoint,
+			Action: composemodel.GarbageActionDeleteTree, Target: gctest.DeadSavepoint.String(), Bytes: utils.New(int64(5)),
+			Reason: composemodel.GarbageReasonDeadCapture, LastModified: gctest.Recent, Savepoint: gctest.DeadSavepoint,
 		},
 		{
-			Action: model.GarbageActionDeleteTree, Target: gctest.OtherDeadSavepoint.String(), Bytes: utils.New(int64(2)),
-			Reason: model.GarbageReasonDeadCapture, LastModified: gctest.Recent, Savepoint: gctest.OtherDeadSavepoint,
+			Action: composemodel.GarbageActionDeleteTree, Target: gctest.OtherDeadSavepoint.String(), Bytes: utils.New(int64(2)),
+			Reason: composemodel.GarbageReasonDeadCapture, LastModified: gctest.Recent, Savepoint: gctest.OtherDeadSavepoint,
 		},
 	}, got.Ops)
 	assert.Empty(t, got.Skipped)

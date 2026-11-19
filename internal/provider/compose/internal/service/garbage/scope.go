@@ -25,6 +25,7 @@ import (
 	"github.com/greenmaskio/storages"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
@@ -54,7 +55,7 @@ func (s *Finder) readComposeProjectScope(
 		store      storages.Storager
 		objects    []storages.ObjectStat
 		trees      []model.SavepointID
-		savepoints []model.Savepoint
+		savepoints []composemodel.Savepoint
 		err        error
 	)
 	if store, err = storefactory.ComposeProject(sessionStore, name); err != nil {
@@ -127,8 +128,8 @@ func newSavepointTrees(objects []storages.ObjectStat) []model.SavepointID {
 }
 
 // newUncommittedTrees lists the trees of trees no record of savepoints commits.
-func newUncommittedTrees(savepoints []model.Savepoint, trees []model.SavepointID) []model.SavepointID {
+func newUncommittedTrees(savepoints []composemodel.Savepoint, trees []model.SavepointID) []model.SavepointID {
 	return slices.DeleteFunc(slices.Clone(trees), func(id model.SavepointID) bool {
-		return slices.ContainsFunc(savepoints, func(savepoint model.Savepoint) bool { return savepoint.ID == id })
+		return slices.ContainsFunc(savepoints, func(savepoint composemodel.Savepoint) bool { return savepoint.Header.ID == id })
 	})
 }

@@ -155,7 +155,7 @@ func TestSavepoint_TwoConsecutiveSavepoints_DeduplicatesBlobs(t *testing.T) {
 	// Act: first savepoint
 	first, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "first"})
 	require.NoError(t, err)
-	require.Len(t, first.WritableLayers, 1)
+	require.Len(t, detailOf(t, first).WritableLayers, 1)
 
 	firstBlobKeys := blobStoreKeys(t, env.blobStore)
 	firstBlobCount := len(blobOnlyKeys(firstBlobKeys))
@@ -166,24 +166,24 @@ func TestSavepoint_TwoConsecutiveSavepoints_DeduplicatesBlobs(t *testing.T) {
 	// Act: second savepoint
 	second, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "second"})
 	require.NoError(t, err)
-	require.Len(t, second.WritableLayers, 1)
+	require.Len(t, detailOf(t, second).WritableLayers, 1)
 
 	secondBlobCount := len(blobOnlyKeys(blobStoreKeys(t, env.blobStore)))
 	t.Logf("second savepoint: %d blobs, %d of them new", secondBlobCount, secondBlobCount-firstBlobCount)
 
 	// Assert: bytes, not blob count — how many metadata blobs a save archive carries
 	// is the daemon's business; the classic image store adds a legacy json per layer.
-	capture := second.WritableLayers[0]
+	capture := detailOf(t, second).WritableLayers[0]
 	assert.Less(t, capture.StoredBytes, capture.SizeBytes/10,
 		"the second savepoint stored %d of the archive's %d bytes: the base layer went in again",
 		capture.StoredBytes, capture.SizeBytes)
 
-	assert.NotEmpty(t, first.WritableLayers[0].CommittedImageID, "first savepoint image ID")
-	assert.NotEmpty(t, second.WritableLayers[0].CommittedImageID, "second savepoint image ID")
+	assert.NotEmpty(t, detailOf(t, first).WritableLayers[0].CommittedImageID, "first savepoint image ID")
+	assert.NotEmpty(t, detailOf(t, second).WritableLayers[0].CommittedImageID, "second savepoint image ID")
 
-	_, err = env.daemon.ImageInspect(env.ctx, first.WritableLayers[0].CommittedImageID.String())
+	_, err = env.daemon.ImageInspect(env.ctx, detailOf(t, first).WritableLayers[0].CommittedImageID.String())
 	assert.True(t, dockerIsNotFound(err), "first image should be gone from daemon: %v", err)
-	_, err = env.daemon.ImageInspect(env.ctx, second.WritableLayers[0].CommittedImageID.String())
+	_, err = env.daemon.ImageInspect(env.ctx, detailOf(t, second).WritableLayers[0].CommittedImageID.String())
 	assert.True(t, dockerIsNotFound(err), "second image should be gone from daemon: %v", err)
 }
 
@@ -199,15 +199,15 @@ func TestSavepoint_TwoSavepoints_BothRestore(t *testing.T) {
 
 	first, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "first"})
 	require.NoError(t, err)
-	require.Len(t, first.WritableLayers, 1)
+	require.Len(t, detailOf(t, first).WritableLayers, 1)
 
 	env.mutateContainer(t, "second-epoch")
 	second, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "second"})
 	require.NoError(t, err)
-	require.Len(t, second.WritableLayers, 1)
-	require.NotEqual(t, first.WritableLayers[0].CommittedImageID, second.WritableLayers[0].CommittedImageID,
+	require.Len(t, detailOf(t, second).WritableLayers, 1)
+	require.NotEqual(t, detailOf(t, first).WritableLayers[0].CommittedImageID, detailOf(t, second).WritableLayers[0].CommittedImageID,
 		"the two savepoints must differ, or deduplication is trivially true")
-	assert.Less(t, second.WritableLayers[0].StoredBytes, second.WritableLayers[0].SizeBytes,
+	assert.Less(t, detailOf(t, second).WritableLayers[0].StoredBytes, detailOf(t, second).WritableLayers[0].SizeBytes,
 		"the second savepoint reuses the first one's base layers")
 
 	// Act

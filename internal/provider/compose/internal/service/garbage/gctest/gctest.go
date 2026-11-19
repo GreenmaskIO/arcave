@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 )
 
@@ -81,7 +82,7 @@ func WriteJSON(t *testing.T, root, key string, value any, modified time.Time) {
 }
 
 // NewScope is the scope gc builds over store: listed once, as the store holds it now.
-func NewScope(t *testing.T, store storages.Storager, savepoints ...model.Savepoint) garbage.ComposeProjectScope {
+func NewScope(t *testing.T, store storages.Storager, savepoints ...composemodel.Savepoint) garbage.ComposeProjectScope {
 	t.Helper()
 	objects, err := store.List(context.Background(), "")
 	require.NoError(t, err)
@@ -103,12 +104,12 @@ func Reasons(skips []model.GarbageSkip) []model.GarbageReason {
 
 // RestoredLayerRef is repository's restored layer tag for savepoint, as a rollback puts it.
 func RestoredLayerRef(repository string, savepoint model.SavepointID) model.ImageRef {
-	return model.ImageRef(repository + ":" + model.RestoredLayerTagPrefix + savepoint.String())
+	return model.ImageRef(repository + ":" + composemodel.RestoredLayerTagPrefix + savepoint.String())
 }
 
 // Digest is the image id of 64 chars.
-func Digest(char string) model.ImageDigestID {
-	return model.ImageDigestID("sha256:" + strings.Repeat(char, 64))
+func Digest(char string) composemodel.ImageDigestID {
+	return composemodel.ImageDigestID("sha256:" + strings.Repeat(char, 64))
 }
 
 // Targets lists each op's target.

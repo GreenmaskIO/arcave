@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // anonReplicasSpec is one service on three replicas, each holding its own anonymous volume.
@@ -53,8 +54,8 @@ func TestRollback_RestoresEveryReplicasAnonymousVolume(t *testing.T) {
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "per-replica"})
 	require.NoError(t, err)
 	var anonIDs []string
-	for _, stat := range savepoint.Stats {
-		if stat.Volume.Type == model.VolumeTypeAnon {
+	for _, stat := range detailOf(t, savepoint).Stats {
+		if stat.Volume.Type == composemodel.VolumeTypeAnon {
 			anonIDs = append(anonIDs, stat.Volume.ObjectID)
 		}
 	}

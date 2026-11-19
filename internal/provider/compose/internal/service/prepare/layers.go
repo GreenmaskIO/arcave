@@ -50,21 +50,21 @@ const maxRepositoryPath = 255
 // restoreWritableLayers loads every writable layer the savepoint holds back into the daemon,
 // concurrently, each under its own tag.
 func (s *Preparer) restoreWritableLayers(
-	ctx context.Context, savepoint model.Savepoint, composeProject string,
-) ([]model.WritableLayerRestoreResult, error) {
-	if len(savepoint.WritableLayers) == 0 {
-		zerolog.Ctx(ctx).Info().Str("snapshot_id", savepoint.ID.String()).
+	ctx context.Context, savepoint composemodel.Savepoint, composeProject string,
+) ([]composemodel.WritableLayerRestoreResult, error) {
+	if len(savepoint.Detail.WritableLayers) == 0 {
+		zerolog.Ctx(ctx).Info().Str("snapshot_id", savepoint.Header.ID.String()).
 			Msg("the savepoint holds no writable layers; nothing to restore")
 		return nil, nil
 	}
 
-	restored := make([]model.WritableLayerRestoreResult, len(savepoint.WritableLayers))
-	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindLayerRestore}, len(savepoint.WritableLayers))
+	restored := make([]composemodel.WritableLayerRestoreResult, len(savepoint.Detail.WritableLayers))
+	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindLayerRestore}, len(savepoint.Detail.WritableLayers))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.maxConcurrentOperations)
-	for i, capture := range savepoint.WritableLayers {
+	for i, capture := range savepoint.Detail.WritableLayers {
 		eg.Go(func() error {
-			opCtx := imageRestoreContext(egCtx, capture, savepoint.ID)
+			opCtx := imageRestoreContext(egCtx, capture, savepoint.Header.ID)
 			opCtx, step := progress.Run(opCtx, progress.Step{Kind: kindLayer, ID: capture.ContainerName},
 				progress.MeasureBytes)
 			log := zerolog.Ctx(opCtx)
@@ -72,9 +72,9 @@ func (s *Preparer) restoreWritableLayers(
 			started := time.Now()
 			log.Debug().Msg("writable layer restore started")
 			image, err := s.layerRestorer.RestoreWritableLayer(opCtx, composemodel.WritableLayerRestoreRequest{
-				SnapshotID: savepoint.ID,
+				SnapshotID: savepoint.Header.ID,
 				Layer:      capture,
-				Tag:        restoredLayerTag(composeProject, savepoint.ID, capture),
+				Tag:        restoredLayerTag(composeProject, savepoint.Header.ID, capture),
 			})
 			if err != nil {
 				err = fmt.Errorf("restore writable layer of %s/%d: %w", capture.Service, capture.Replica, err)
@@ -98,11 +98,11 @@ func (s *Preparer) restoreWritableLayers(
 
 // requireImages refuses, before anything is stopped, a service the rollback would build
 // on an image compose may not pull and the daemon does not hold.
-func (s *Preparer) requireImages(ctx context.Context, project *types.Project, restored []model.WritableLayerRestoreResult) error {
+func (s *Preparer) requireImages(ctx context.Context, project *types.Project, restored []composemodel.WritableLayerRestoreResult) error {
 	for _, name := range slices.Sorted(maps.Keys(project.Services)) {
 		svc := project.Services[name]
 		if svc.PullPolicy != types.PullPolicyNever ||
-			slices.ContainsFunc(restored, func(r model.WritableLayerRestoreResult) bool { return r.Service == name }) {
+			slices.ContainsFunc(restored, func(r composemodel.WritableLayerRestoreResult) bool { return r.Service == name }) {
 			continue
 		}
 		present, err := s.imageLookup.ImageRefExists(ctx, svc.Image)
@@ -118,12 +118,12 @@ func (s *Preparer) requireImages(ctx context.Context, project *types.Project, re
 
 // retargetImages points every restored service, on a copy of the project, at its lowest
 // recorded replica's image with pull_policy never: the tag exists only in the local daemon.
-func retargetImages(project *types.Project, restored []model.WritableLayerRestoreResult) *types.Project {
+func retargetImages(project *types.Project, restored []composemodel.WritableLayerRestoreResult) *types.Project {
 	if len(restored) == 0 {
 		return project
 	}
 
-	lowest := map[string]model.WritableLayerRestoreResult{}
+	lowest := map[string]composemodel.WritableLayerRestoreResult{}
 	for _, layer := range restored {
 		if current, ok := lowest[layer.Service]; !ok || layer.Replica < current.Replica {
 			lowest[layer.Service] = layer
@@ -145,15 +145,15 @@ func retargetImages(project *types.Project, restored []model.WritableLayerRestor
 // arcave/<project>-<service>-<replica>-<base image>:sp-<savepoint id>. The
 // repository carries the identity and the tag the savepoint, so `docker images`
 // reads as one row per savepoint under a row per replica.
-func restoredLayerTag(composeProject string, snapshotID model.SavepointID, capture model.WritableLayer) string {
-	return restoredImageRepository(composeProject, capture) + ":" + model.RestoredLayerTagPrefix + snapshotID.String()
+func restoredLayerTag(composeProject string, snapshotID model.SavepointID, capture composemodel.WritableLayer) string {
+	return restoredImageRepository(composeProject, capture) + ":" + composemodel.RestoredLayerTagPrefix + snapshotID.String()
 }
 
 // restoredImageRepository builds the repository half and keeps it addressable: the
 // base image is the one segment carrying no identity, so it is what gets cut when
 // the name would pass docker's cap, and the replica is still named without it.
-func restoredImageRepository(composeProject string, capture model.WritableLayer) string {
-	identity := model.RestoredLayerTagNamespace + "/" +
+func restoredImageRepository(composeProject string, capture composemodel.WritableLayer) string {
+	identity := composemodel.RestoredLayerTagNamespace + "/" +
 		joinSegments(refSegment(composeProject), refSegment(capture.Service), strconv.Itoa(capture.Replica))
 
 	base := refSegment(capture.UpstreamImageRef)
@@ -203,7 +203,7 @@ func refSegment(segment string) string {
 
 // imageRestoreContext attributes every line the restore logs.
 func imageRestoreContext(
-	ctx context.Context, capture model.WritableLayer, snapshotID model.SavepointID,
+	ctx context.Context, capture composemodel.WritableLayer, snapshotID model.SavepointID,
 ) context.Context {
 	return zerolog.Ctx(ctx).With().
 		Str("service", capture.Service).

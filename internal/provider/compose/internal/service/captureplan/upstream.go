@@ -16,8 +16,9 @@ package captureplan
 
 import (
 	"context"
-	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"slices"
+
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/moby/moby/api/types/image"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -51,10 +52,10 @@ func newContainerRefs(ctx context.Context, introspection composemodel.Introspect
 // its backend, and the ones it leaves out.
 func newLayerCaptures(
 	ctx context.Context, containers []composemodel.ContainerRef, capturePolicy composemodel.CapturePolicy,
-) ([]composemodel.WritableLayerCaptureRequest, []model.SkippedWritableLayer) {
+) ([]composemodel.WritableLayerCaptureRequest, []composemodel.SkippedWritableLayer) {
 	var (
 		layers  []composemodel.WritableLayerCaptureRequest
-		skipped []model.SkippedWritableLayer
+		skipped []composemodel.SkippedWritableLayer
 	)
 	for _, ref := range containers {
 		decision := capturePolicy.DecideService(ref.Service).WritableLayer
@@ -67,11 +68,11 @@ func newLayerCaptures(
 		}
 		zerolog.Ctx(ctx).Info().Str("service", ref.Service).Int("replica", ref.Replica).Str("reason", decision.Source).
 			Msg("writable layer is not captured; a rollback to this savepoint creates the container fresh from its image")
-		skipped = append(skipped, model.SkippedWritableLayer{
+		skipped = append(skipped, composemodel.SkippedWritableLayer{
 			Service:   ref.Service,
 			Replica:   ref.Replica,
 			Container: ref.Name,
-			Reason:    model.SkipReasonExcluded,
+			Reason:    composemodel.SkipReasonExcluded,
 			Detail:    decision.Source,
 		})
 	}
@@ -82,13 +83,13 @@ func newLayerCaptures(
 // skip per service it leaves out.
 func imageCaptureContainers(
 	ctx context.Context, containers []composemodel.ContainerRef, capturePolicy composemodel.CapturePolicy,
-) ([]composemodel.ContainerRef, []model.SkippedImage) {
+) ([]composemodel.ContainerRef, []composemodel.SkippedImage) {
 	var (
 		taken   []composemodel.ContainerRef
-		skipped []model.SkippedImage
+		skipped []composemodel.SkippedImage
 	)
 	// kept are the upstreams some service takes: one is not reported skipped for another.
-	kept := map[model.ImageDigestID]bool{}
+	kept := map[composemodel.ImageDigestID]bool{}
 	reported := map[string]bool{}
 	for _, ref := range containers {
 		if capturePolicy.DecideService(ref.Service).Image.Capture {
@@ -104,10 +105,10 @@ func imageCaptureContainers(
 		reported[ref.Service] = true
 		zerolog.Ctx(ctx).Info().Str("service", ref.Service).Str("image", ref.UpstreamImageRef).
 			Str("reason", decision.Source).Msg("image is not captured")
-		skipped = append(skipped, model.SkippedImage{
+		skipped = append(skipped, composemodel.SkippedImage{
 			Service: ref.Service,
 			Image:   ref.UpstreamImageRef,
-			Reason:  model.SkipReasonExcluded,
+			Reason:  composemodel.SkipReasonExcluded,
 			Detail:  decision.Source,
 		})
 	}
@@ -116,7 +117,7 @@ func imageCaptureContainers(
 
 // resolveUpstream is composemodel.ResolveUpstream, with what it cannot say logged:
 // a container off the image compose created it on, and a layer naming no upstream.
-func resolveUpstream(ctx context.Context, introspection composemodel.IntrospectionResult, container composemodel.Container) (model.ImageDigestID, string) {
+func resolveUpstream(ctx context.Context, introspection composemodel.IntrospectionResult, container composemodel.Container) (composemodel.ImageDigestID, string) {
 	if container.Inspect.Config == nil {
 		return "", ""
 	}
@@ -131,7 +132,7 @@ func resolveUpstream(ctx context.Context, introspection composemodel.Introspecti
 }
 
 // newUnresolvedImages returns the containers whose upstream resolveUpstream could not name.
-func newUnresolvedImages(introspection composemodel.IntrospectionResult, containers []composemodel.ContainerRef) []model.UnresolvedImage {
+func newUnresolvedImages(introspection composemodel.IntrospectionResult, containers []composemodel.ContainerRef) []composemodel.UnresolvedImage {
 	images := map[string]string{}
 	for _, svc := range introspection.Project.Services {
 		for _, container := range svc.Containers {
@@ -140,12 +141,12 @@ func newUnresolvedImages(introspection composemodel.IntrospectionResult, contain
 			}
 		}
 	}
-	var unresolved []model.UnresolvedImage
+	var unresolved []composemodel.UnresolvedImage
 	for _, ref := range containers {
 		if ref.UpstreamImageID != "" {
 			continue
 		}
-		unresolved = append(unresolved, model.UnresolvedImage{
+		unresolved = append(unresolved, composemodel.UnresolvedImage{
 			Service: ref.Service, Replica: ref.Replica, Container: ref.Name, Image: images[ref.ID],
 		})
 	}
@@ -192,7 +193,7 @@ func newImageCaptures(introspection composemodel.IntrospectionResult, containers
 		}
 		inspect, existsInDaemon := introspection.Images[ref.UpstreamImageID]
 		reqs = append(reqs, composemodel.ImageCaptureRequest{
-			Image: model.Image{
+			Image: composemodel.Image{
 				ID:          ref.UpstreamImageID,
 				Refs:        newImageRefs(ref.UpstreamImageRef, inspect.RepoTags),
 				RepoDigests: inspect.RepoDigests,

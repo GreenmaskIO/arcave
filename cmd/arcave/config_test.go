@@ -52,7 +52,7 @@ func TestResolveConfig(t *testing.T) {
 				assert.Equal(t, config.StorageTypeDirectory, cfg.Storage.Type)
 				// No project segment: storefactory roots the store at the project itself.
 				assert.Equal(t, filepath.Join(".arcave", "storage"), cfg.Storage.DirectoryPath())
-				assert.Equal(t, composeconfig.SnapshotBackendFullCopy, cfg.ComposeProvider.Snapshot.Backend)
+				assert.Equal(t, string(composeconfig.SnapshotBackendFullCopy), cfg.ComposeProvider.Snapshot.Backend)
 				assert.Empty(t, cfg.Log.Level, "the output picks the level when none is set")
 				assert.Equal(t, utils.DefaultLogFormat, cfg.Log.Format)
 			},
@@ -96,7 +96,7 @@ func TestResolveConfig(t *testing.T) {
 				assert.Equal(t, "unix:///tmp/d.sock", cfg.ComposeProvider.Docker.Host)
 				assert.Equal(t, config.StorageTypeDirectory, cfg.Storage.Type)
 				assert.Equal(t, "/snaps", cfg.Storage.DirectoryPath())
-				assert.Equal(t, composeconfig.SnapshotBackendFullCopy, cfg.ComposeProvider.Snapshot.Backend)
+				assert.Equal(t, string(composeconfig.SnapshotBackendFullCopy), cfg.ComposeProvider.Snapshot.Backend)
 				assert.Equal(t, "warn", cfg.Log.Level)
 				assert.Equal(t, "json", cfg.Log.Format)
 			},

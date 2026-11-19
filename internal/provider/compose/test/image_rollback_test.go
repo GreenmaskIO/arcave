@@ -35,6 +35,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/introspect"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
@@ -54,7 +55,7 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "with-layer"})
 	require.NoError(t, err)
-	require.Len(t, savepoint.WritableLayers, 1)
+	require.Len(t, detailOf(t, savepoint).WritableLayers, 1)
 
 	// The layer drifts, and so does the volume beside it.
 	env.write(t, env.replicas(t)[0], "drifted")
@@ -64,9 +65,9 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	require.Len(t, res.WritableLayers, 1)
-	tag := model.ImageRef(res.WritableLayers[0].Tag)
-	tagged, ok := tag.RestoredLayerSavepoint()
+	require.Len(t, restoreDetailOf(t, res.Detail).WritableLayers, 1)
+	tag := model.ImageRef(restoreDetailOf(t, res.Detail).WritableLayers[0].Tag)
+	tagged, ok := composemodel.ParseRestoredLayerTag(tag)
 	require.True(t, ok, "%s is no restored layer tag", tag)
 	assert.Equal(t, savepoint.ID, tagged)
 	assert.True(t, strings.HasPrefix(string(tag), fmt.Sprintf("arcave/%s-app-1-busybox", env.project)), string(tag))
@@ -77,23 +78,23 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 	assert.Equal(t, "original", env.read(t, rebuilt[0], daemontest.VolumeMarker), "the volume beside it")
 
 	// The restored layer names its upstream, so a savepoint taken on it still does.
-	restored, err := env.daemon.ImageInspect(env.ctx, res.WritableLayers[0].Tag)
+	restored, err := env.daemon.ImageInspect(env.ctx, restoreDetailOf(t, res.Detail).WritableLayers[0].Tag)
 	require.NoError(t, err)
 	require.NotNil(t, restored.Config)
-	assert.Equal(t, savepoint.WritableLayers[0].UpstreamImageID.String(), restored.Config.Labels[string(model.SystemLabelBaseImageID)])
-	assertSameImageRef(t, "busybox", restored.Config.Labels[string(model.SystemLabelBaseImageRef)])
+	assert.Equal(t, detailOf(t, savepoint).WritableLayers[0].UpstreamImageID.String(), restored.Config.Labels[string(composemodel.SystemLabelBaseImageID)])
+	assertSameImageRef(t, "busybox", restored.Config.Labels[string(composemodel.SystemLabelBaseImageRef)])
 
 	next, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "on-the-layer"})
 	require.NoError(t, err)
-	require.Len(t, next.WritableLayers, 1)
-	assertSameImageRef(t, "busybox", next.WritableLayers[0].UpstreamImageRef)
-	assert.Equal(t, savepoint.WritableLayers[0].UpstreamImageID, next.WritableLayers[0].UpstreamImageID)
-	require.Len(t, next.Images, 1)
-	assert.True(t, next.Images[0].Stored)
-	assert.Zero(t, next.Images[0].StoredBytes, "the upstream is already in the store")
+	require.Len(t, detailOf(t, next).WritableLayers, 1)
+	assertSameImageRef(t, "busybox", detailOf(t, next).WritableLayers[0].UpstreamImageRef)
+	assert.Equal(t, detailOf(t, savepoint).WritableLayers[0].UpstreamImageID, detailOf(t, next).WritableLayers[0].UpstreamImageID)
+	require.Len(t, detailOf(t, next).Images, 1)
+	assert.True(t, detailOf(t, next).Images[0].Stored)
+	assert.Zero(t, detailOf(t, next).Images[0].StoredBytes, "the upstream is already in the store")
 	t.Logf("upstream %s: first capture stored %d of %d bytes, second stored %d",
-		next.Images[0].ID, savepoint.Images[0].StoredBytes,
-		savepoint.Images[0].SizeBytes, next.Images[0].StoredBytes)
+		detailOf(t, next).Images[0].ID, detailOf(t, savepoint).Images[0].StoredBytes,
+		detailOf(t, savepoint).Images[0].SizeBytes, detailOf(t, next).Images[0].StoredBytes)
 }
 
 // A second rollback to the same savepoint loads nothing: the layer is in the daemon, and
@@ -108,10 +109,10 @@ func TestRollback_AgainToTheSameSavepointPutsTheSameTagBack(t *testing.T) {
 	env.write(t, env.replicas(t)[0], "original")
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "with-layer"})
 	require.NoError(t, err)
-	require.Len(t, savepoint.WritableLayers, 1)
+	require.Len(t, detailOf(t, savepoint).WritableLayers, 1)
 	first, err := env.svc.Rollback(env.ctx, model.RollbackRequest{ID: &savepoint.ID})
 	require.NoError(t, err)
-	require.Len(t, first.WritableLayers, 1)
+	require.Len(t, restoreDetailOf(t, first.Detail).WritableLayers, 1)
 	env.write(t, env.replicas(t)[0], "drifted again")
 
 	// Act
@@ -119,20 +120,20 @@ func TestRollback_AgainToTheSameSavepointPutsTheSameTagBack(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	require.Len(t, second.WritableLayers, 1)
-	assert.Equal(t, first.WritableLayers[0].Tag, second.WritableLayers[0].Tag, "the tag names the savepoint alone")
-	assert.Equal(t, first.WritableLayers[0].ImageID, second.WritableLayers[0].ImageID, "the same layer, loaded once")
+	require.Len(t, restoreDetailOf(t, second.Detail).WritableLayers, 1)
+	assert.Equal(t, restoreDetailOf(t, first.Detail).WritableLayers[0].Tag, restoreDetailOf(t, second.Detail).WritableLayers[0].Tag, "the tag names the savepoint alone")
+	assert.Equal(t, restoreDetailOf(t, first.Detail).WritableLayers[0].ImageID, restoreDetailOf(t, second.Detail).WritableLayers[0].ImageID, "the same layer, loaded once")
 	assert.Equal(t, "original", env.read(t, env.replicas(t)[0], daemontest.LayerMarker))
 
-	restored, err := env.daemon.ImageInspect(env.ctx, second.WritableLayers[0].ImageID.String())
+	restored, err := env.daemon.ImageInspect(env.ctx, restoreDetailOf(t, second.Detail).WritableLayers[0].ImageID.String())
 	require.NoError(t, err)
 	var tags []string
 	for _, ref := range restored.RepoTags {
-		if model.ImageRef(ref).IsRestoredLayerTag() {
+		if composemodel.IsRestoredLayerTag(model.ImageRef(ref)) {
 			tags = append(tags, string(model.ImageRef(ref).Familiar()))
 		}
 	}
-	assert.Equal(t, []string{second.WritableLayers[0].Tag}, tags, "one restored-layer tag, put twice")
+	assert.Equal(t, []string{restoreDetailOf(t, second.Detail).WritableLayers[0].Tag}, tags, "one restored-layer tag, put twice")
 }
 
 func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
@@ -148,7 +149,7 @@ func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
 
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "scaled"})
 	require.NoError(t, err)
-	require.Len(t, savepoint.WritableLayers, 2, "one capture per replica")
+	require.Len(t, detailOf(t, savepoint).WritableLayers, 2, "one capture per replica")
 
 	env.write(t, env.replicas(t)[0], "drifted")
 	env.write(t, env.replicas(t)[1], "drifted")
@@ -158,7 +159,7 @@ func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	require.Len(t, res.WritableLayers, 2)
+	require.Len(t, restoreDetailOf(t, res.Detail).WritableLayers, 2)
 
 	// A compose service names one image, so the second replica is the one the
 	// per-replica fixup had to rebuild.
