@@ -156,26 +156,29 @@ func newWayBackEnv(t *testing.T) (env *sessionEnv, feat model.Session, v2 model.
 	return env, feat, v2
 }
 
-// The store commands read no marker: under one, the way back it names goes.
-func TestInflightMarker_StoreCommandsPass(t *testing.T) {
+// gc refuses to delete in the marker's session, its dry run reports; savepoint remove and session
+// remove read no marker, so under one the way back it names goes.
+func TestInflightMarker_StoreCommands(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
 	env, feat, v2 := newWayBackEnv(t)
 
 	// Act
+	refused := runArcaveRefused(t, env.projectRoot, "--session", "feat", "gc")
+	// Its session alone: a report's detail is an interface the JSON does not decode back into.
+	reported := decode[struct {
+		Session model.SessionID `json:"session"`
+	}](t, runArcave(t, env.projectRoot, nil, "--session", "feat", "gc", "--dry-run"))
 	removed := decode[model.RemoveResult](t, runArcave(t, env.projectRoot, nil,
 		"-p", env.project, "--session", "feat", "savepoint", "remove", v2.ID.String()))
-	// Its session alone: a report's detail is an interface the JSON does not decode back into.
-	collected := decode[struct {
-		Session model.SessionID `json:"session"`
-	}](t, runArcave(t, env.projectRoot, nil, "--session", "feat", "gc"))
 	deleted := decode[model.RemoveSessionResponse](t, runArcave(t, env.projectRoot, nil, "session", "remove", "feat"))
 
 	// Assert
+	assert.Contains(t, refused, "was interrupted")
+	assert.Equal(t, feat.ID, reported.Session)
 	require.Len(t, removed.Removed, 1)
 	assert.Equal(t, v2.ID, removed.Removed[0].ID)
-	assert.Equal(t, feat.ID, collected.Session)
 	assert.True(t, deleted.Removed)
 	assert.NoDirExists(t, env.sessionDir(feat.ID))
 	_, found, err := env.inflight.Get(env.ctx)
