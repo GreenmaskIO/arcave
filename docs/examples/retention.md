@@ -230,13 +230,7 @@ arcave savepoint list --include-safety-snapshots \
 arcave savepoint remove 019e8491-04c8-7000-8000-000000000000
 ```
 
-While the rollback that left it is unrecovered — `.arcave/inflight.json` still stands — every removal that is not a `--dry-run` is refused, because the safety snapshot may be the way back:
-
-```text title="stderr"
-Error: rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring); recover by rolling back to 019e8491-04c8-7000-8000-000000000000
-```
-
-The log line before it names the rollback that recovers. Run that first; the removal works once the marker is cleared.
+Neither the removal nor gc reads the [inflight marker](../concepts.md#inflight-marker): both run while an interrupted rollback stands. What keeps that rollback's safety snapshot — the way back — is retention: it is the newest of its compose project, and `retain_recent: 1`, the default, keeps it. Removing it by hand, or a gc under `retain_recent: 0`, leaves the marker naming a savepoint that is gone; see [Troubleshooting](../reference/troubleshooting.md#the-way-back-from-an-interrupted-rollback-is-gone).
 
 :::warning
 Only after you are certain you do not need the pre-rollback state it holds: a safety snapshot is the last copy of that state, and the only way to undo its rollback — see [Troubleshooting](../reference/troubleshooting.md#an-interrupted-rollback).

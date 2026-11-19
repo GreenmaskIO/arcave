@@ -112,3 +112,25 @@ func openComposeWorkload(t *testing.T, store storages.Storager, arcaveProject, c
 	t.Cleanup(func() { workload.Close(context.Background()) })
 	return workload
 }
+
+// openInflightMarkers opens arcaveProject's inflight marker on the test daemon as composeProject
+// writes it, skipping without a daemon; what the test leaves of it is cleared when it ends.
+func openInflightMarkers(t *testing.T, arcaveProject, composeProject string) compose.InflightMarkers {
+	t.Helper()
+
+	daemontest.NewClient(t)
+	settings := composeconfig.Config{}
+	settings.ApplyDefaults()
+	markers, err := compose.OpenInflightMarkers(compose.Config{
+		Settings:      settings,
+		ArcaveProject: model.ArcaveProjectName(arcaveProject),
+	}, model.DockerComposeProjectName(composeProject))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := markers.Clear(context.Background()); err != nil {
+			t.Logf("clearing the inflight marker of %s: %v", arcaveProject, err)
+		}
+		markers.Close(context.Background())
+	})
+	return markers
+}

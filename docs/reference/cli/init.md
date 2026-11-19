@@ -123,7 +123,7 @@ arcave init --override
 
 ## After init
 
-Add `.arcave/` to `.gitignore`. It holds the config, the lock file (`lock`), the interrupted-rollback marker (`inflight.json`), the current-session pointer (`current_session`) and — by default — the savepoint data itself (`storage/`).
+Add `.arcave/` to `.gitignore`. It holds the config, the lock file (`lock`), the current-session pointer (`current_session`) and — by default — the savepoint data itself (`storage/`).
 
 ## Next step
 

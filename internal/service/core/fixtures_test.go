@@ -24,6 +24,7 @@ import (
 
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -210,4 +211,13 @@ func demoPrepareOptions(savepoint model.Savepoint, recovering bool) provider.Pre
 		Deployment: newDeploymentOf(savepoint),
 		Recovering: recovering,
 	}
+}
+
+var (
+	errWorkflow  = errors.New("workflow failed")
+	errListStore = errors.New("store unreachable")
+)
+
+func newLockTestContext() context.Context {
+	return zerolog.Nop().WithContext(context.Background())
 }

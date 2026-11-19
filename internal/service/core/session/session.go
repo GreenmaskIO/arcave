@@ -46,11 +46,6 @@ type writeAdmission interface {
 	AdmitWrite(ctx context.Context) error
 }
 
-// inflightMarkers reads the interrupted-rollback marker, which refuses removing its session.
-type inflightMarkers interface {
-	Get(ctx context.Context) (marker model.InflightMarker, found bool, err error)
-}
-
 type sessionRepository interface {
 	SaveSession(ctx context.Context, session model.Session) error
 	CopySession(ctx context.Context, from, to model.SessionID, except ...string) (int64, error)
@@ -84,7 +79,6 @@ type Deps struct {
 	Locker   projectLocker
 	// WriteAdmission admits a workflow's writes to the arcave project's store, before the first.
 	WriteAdmission writeAdmission
-	Inflight       inflightMarkers
 	// Current is the current-session pointer.
 	Current currentSessionPointer
 	// Store is the arcave project store a fork's heartbeat is written into and read from.
@@ -107,7 +101,6 @@ type Service struct {
 	sessions   sessionRepository
 	locker     projectLocker
 	admission  writeAdmission
-	inflight   inflightMarkers
 	current    currentSessionPointer
 	runnerInfo heartbeat.RunnerInfo
 	// newLocker opens one session's lock in the store.
@@ -128,7 +121,6 @@ func New(deps Deps) *Service {
 		sessions:            deps.Sessions,
 		locker:              deps.Locker,
 		admission:           deps.WriteAdmission,
-		inflight:            deps.Inflight,
 		current:             deps.Current,
 		runnerInfo:          deps.RunnerInfo,
 		newLocker:           deps.NewSessionLocker,
@@ -290,10 +282,9 @@ func (s *Service) CreateSession(ctx context.Context, req model.CreateSessionRequ
 	})
 }
 
-// RemoveSession drops a session and everything it holds, and reports the bytes freed. It refuses
-// one an inflight marker names; the default session, the current or pinned one, and a tree still
-// cloning or unknown, only unless forced. Forcing the current one clears the pointer; forcing the
-// default one empties its tree, and it goes on existing.
+// RemoveSession drops a session and everything it holds, and reports the bytes freed. Unless forced
+// it refuses the default, current or pinned session and a tree still cloning or unknown; forcing
+// the current one clears the pointer, forcing the default one empties its tree and keeps it.
 func (s *Service) RemoveSession(
 	ctx context.Context, req model.RemoveSessionRequest,
 ) (_ model.RemoveSessionResponse, err error) {
@@ -315,16 +306,6 @@ func (s *Service) RemoveSession(
 		if id == model.DefaultSession && !req.Force {
 			return model.RemoveSessionResponse{}, fmt.Errorf("%w; --force empties it, every savepoint it holds included",
 				model.ErrDefaultSessionDelete)
-		}
-		marker, found, err := s.inflight.Get(ctx)
-		if err != nil {
-			return model.RemoveSessionResponse{}, fmt.Errorf("reading the inflight marker: %w", err)
-		}
-		if found && marker.Session == id {
-			err := &model.InterruptedRollbackError{Marker: marker}
-			zerolog.Ctx(ctx).Error().Err(err).Str("session", id.String()).
-				Str("compose_project", marker.ComposeProject.String()).Msg(workflow.RecoveryHint(marker))
-			return model.RemoveSessionResponse{}, err
 		}
 		current, err := s.requireNotInUse(ctx, id, req)
 		if err != nil {

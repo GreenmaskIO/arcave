@@ -69,7 +69,7 @@ func TestGarbageCollector_GarbageCollect_Progress(t *testing.T) {
 	ctx := progress.WithTracker(context.Background(), progress.New(recorder, func() time.Time {
 		return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 	}))
-	svc := New(newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t), newNoMarker(t)))
+	svc := New(newDeps(model.DefaultSession, &mockSessions{}, session, newHeldLocker(t)))
 
 	// Act
 	_, err := svc.GarbageCollect(ctx, model.GarbageCollectRequest{})

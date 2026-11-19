@@ -106,7 +106,7 @@ func arcaveCommandIn(t *testing.T, projectRoot string, args ...string) *exec.Cmd
 func initArcave(t *testing.T, env *sessionEnv) {
 	t.Helper()
 
-	out, err := arcaveCommand(t, env, "init", "--name", sessionArcaveProject).CombinedOutput()
+	out, err := arcaveCommand(t, env, "init", "--name", env.arcaveProject).CombinedOutput()
 	require.NoError(t, err, "arcave init: %s", out)
 }
 

@@ -68,7 +68,6 @@ func TestSessionService_RemoveSession_SessionLock(t *testing.T) {
 				Current:          &fakePointer{},
 				Sessions:         repo,
 				Locker:           locker,
-				Inflight:         &fakeInflight{},
 			})
 
 			// Act
@@ -217,7 +216,6 @@ func TestSessionService_withWriteUnlock(t *testing.T) {
 				Sessions:         repo,
 				Locker:           locker,
 				WriteAdmission:   admission,
-				Inflight:         &fakeInflight{},
 			})
 
 			// Act

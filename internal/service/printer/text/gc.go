@@ -138,13 +138,10 @@ func formatTotalFreed(result model.GarbageCollectResult) string {
 	}
 }
 
-// newGarbageNotices is what kept the gc from finishing: the warnings, what a collector could not
-// judge or refused to, and the deletions that did not go through.
+// newGarbageNotices is what kept the gc from finishing: what a collector could not judge or refused
+// to, and the deletions that did not go through.
 func newGarbageNotices(result model.GarbageCollectResult) []model.Notice {
-	notices := make([]model.Notice, 0, len(result.Warnings))
-	for _, warning := range result.Warnings {
-		notices = append(notices, model.Notice{Message: warning})
-	}
+	var notices []model.Notice
 	for _, report := range result.Reports {
 		where := string(report.DataKind)
 		if report.ComposeProject != "" {

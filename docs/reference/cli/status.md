@@ -30,7 +30,7 @@ One word sums the compose project up. `rollback-pending` is arcave's; every othe
 
 | `state` | When |
 |---|---|
-| `rollback-pending` | `.arcave/inflight.json` names this compose project: a rollback is running, or was interrupted. `status` cannot tell the two apart. The marker is host-local: from another machine an interrupted rollback reads `absent` or `degraded` instead — see [Limitations](../limitations.md). |
+| `rollback-pending` | The [inflight marker](../../concepts.md#inflight-marker) on the daemon names this compose project: a rollback is running, or was interrupted. `status` cannot tell the two apart. It is seen from any checkout or machine with the same `project.name` against that daemon. |
 | `absent` | No container. |
 | `stopped` | No container runs, one at least exited or was never started (a completed job aside), and no replica is missing, paused, restarting, dead or being removed. |
 | `degraded` | A recorded replica is missing, exited with a code other than `0`, restarting, paused, created and never started, dead, being removed, or unhealthy. |
@@ -102,7 +102,7 @@ A warning states what is so, and ends with its code in brackets; the JSON carrie
 | `rollback-pending` | The inflight marker stands: a rollback is running, or was interrupted. | Once no arcave command is running, recover as [the troubleshooting page](../troubleshooting.md#an-interrupted-rollback) says; `rollback_in_flight.recover` is the savepoint a rollback to recovers it. A rollback started while the other is still at work is refused, so trying is safe. |
 | `store-unreadable` | The store could not be read; the result shows the daemon alone and the command exits `1`. | Check `storage` and `encryption.key`. |
 | `session-unresolved` | The session could not be resolved: the current session (`.arcave/current_session`) names a session removed since, or the sessions could not be listed. The message names the `--session` given, else the current session. | For a removed session, `arcave session unset`, or `arcave session set <session>`; for a listing that failed, as `store-unreadable`. |
-| `inflight-marker-unreadable` | `.arcave/inflight.json` does not parse. | See [the troubleshooting page](../troubleshooting.md#an-interrupted-rollback). |
+| `inflight-marker-unreadable` | A marker volume's `io.arcave.inflight.*` labels do not parse, or the daemon's volumes could not be listed. | See [the troubleshooting page](../troubleshooting.md#an-interrupted-rollback). |
 | `deployed-savepoint-gone` | The deployed savepoint, or its whole session, was removed since — by `savepoint remove`, `session remove`, or a gc retiring a safety snapshot: no rollback can return to it. | `arcave savepoint create` keeps what runs now. |
 | `other-arcave-project` | The deployed savepoint is another arcave project's: another checkout of this compose project, with another `project.name`. Its savepoint is not looked up. | Run `status` from that checkout. |
 | `other-session` | The deployed savepoint is another session's than the one your commands work in. | `arcave session set <that session>` to work in it. |

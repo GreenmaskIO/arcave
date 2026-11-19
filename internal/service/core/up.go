@@ -144,28 +144,23 @@ func (s *Service) upOver(
 		return model.RollbackResult{}, fmt.Errorf("recording the inflight marker, nothing changed: %w", err)
 	}
 
-	var vacant provider.VacantWorkload
-	restored, err := runStep(ctx, kindRollbackApply, func(ctx context.Context) (provider.RestoredWorkload, error) {
-		// Proved gone before the build: compose's down alone leaves a busy volume, which the build
-		// would reuse with its old data. A network left holds none, and the build reuses it.
-		dropped, err := surveyed.Drop(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if vacant, err = dropped.Vacant(prepared); err != nil {
-			return nil, err
-		}
-		return s.buildFromSavepoint(ctx, vacant, prepared, savepoint.ID, "", req.WaitTimeout)
-	})
+	restored, vacant, err := s.applySavepoint(ctx, prepared, savepoint.ID, "", req.WaitTimeout,
+		func(ctx context.Context) (provider.VacantWorkload, error) {
+			// Proved gone before the build: compose's down alone leaves a busy volume, which the build
+			// would reuse with its old data. A network left holds none, and the build reuses it.
+			dropped, err := surveyed.Drop(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return dropped.Vacant(prepared)
+		})
 	if err != nil {
 		workflow.LogInterrupt(ctx, "up interrupted: removing what it created")
 		s.abortColdStart(ctx, vacant)
 		return model.RollbackResult{}, fmt.Errorf("up failed: %w", preferInterrupt(ctx, err))
 	}
 
-	// On a revertContext, as every path's cleanup; nothing was orphaned, the drop leaving nothing.
-	cleanupCtx, cancel := revertContext(ctx)
-	defer cancel()
-	s.cleanUpRollback(cleanupCtx, restored)
+	// Nothing was orphaned, the drop leaving nothing.
+	s.cleanUpRollback(ctx, restored)
 	return newRollbackResult(savepoint, prepared.Summary(), "", nil), nil
 }

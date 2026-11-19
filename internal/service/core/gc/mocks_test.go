@@ -50,6 +50,17 @@ type fakeWriteAdmission struct{}
 
 func (fakeWriteAdmission) AdmitWrite(context.Context) error { return nil }
 
+// fakeInflight reads marker, found and err, for tests that are not about a refusal.
+type fakeInflight struct {
+	marker model.InflightMarker
+	found  bool
+	err    error
+}
+
+func (f fakeInflight) Get(context.Context) (model.InflightMarker, bool, error) {
+	return f.marker, f.found, f.err
+}
+
 // mockWriteAdmission doubles writeAdmission.
 type mockWriteAdmission struct{ mock.Mock }
 
@@ -97,14 +108,6 @@ type fakeGrantedSessionLock struct{}
 
 func (fakeGrantedSessionLock) Verify(context.Context) error { return nil }
 func (fakeGrantedSessionLock) Unlock(context.Context) error { return nil }
-
-type mockInflight struct{ mock.Mock }
-
-func (m *mockInflight) Get(ctx context.Context) (model.InflightMarker, bool, error) {
-	args := m.Called(ctx)
-	marker, _ := args.Get(0).(model.InflightMarker)
-	return marker, args.Bool(1), args.Error(2)
-}
 
 type mockSession struct {
 	mock.Mock

@@ -99,6 +99,19 @@ func openComposeObserver(
 	return observer, nil
 }
 
+// openComposeInflightMarkers opens the inflight marker on the daemon as composeProject writes it, the
+// daemon connected; its connection goes on opened.
+func openComposeInflightMarkers(
+	cfg config.Config, composeProject model.DockerComposeProjectName, opened *utils.Closers,
+) (compose.InflightMarkers, error) {
+	markers, err := compose.OpenInflightMarkers(newComposeConfig(cfg, ""), composeProject)
+	if err != nil {
+		return compose.InflightMarkers{}, err
+	}
+	opened.AddFunc(markers.Close)
+	return markers, nil
+}
+
 // newComposeConfig is what the compose provider is opened with: its own sections of cfg and the
 // two arcave settings it reads, project.name and common.concurrency.
 func newComposeConfig(cfg config.Config, composeProgress string) compose.Config {

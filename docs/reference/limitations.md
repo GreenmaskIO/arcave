@@ -79,7 +79,15 @@ Running `docker compose up` by hand after a rollback recreates the containers fr
 
 A rollback labels the containers it builds, and `status` reads what is deployed off those labels. They live in the daemon the rollback ran against: another daemon (`DOCKER_HOST`) holds none. They are plain text there, the session's and the savepoint's names included, under `encryption.enabled` too: anyone who can `docker inspect` the containers reads them.
 
-The inflight marker an interrupted rollback leaves, `.arcave/inflight.json`, is local to the machine that ran the rollback. `status` on another machine, or against another daemon, does not see it: an interrupted rollback reads there as `absent` or `degraded`, not `rollback-pending`.
+The [inflight marker](../concepts.md#inflight-marker) an interrupted rollback leaves lives there too, as a volume: every checkout and machine with the same `project.name` sees it against that daemon, and another daemon — another `DOCKER_HOST` or docker context, another Podman user, rootless or rootful — has its own.
+
+### A volume prune can delete the inflight marker
+
+`docker volume prune -a`, `podman volume prune -a` and `podman system prune --volumes` delete the marker's volume, since nothing mounts it; a plain `docker volume prune` keeps it. arcave then forgets that a rollback was interrupted, and the next command builds on a half-written environment without a refusal. Don't prune volumes while a rollback is interrupted.
+
+### Bind mounts are shared by every daemon of the machine
+
+A bind mount's host directory is the same for every daemon and Podman user on the machine, while the marker is each daemon's own. A rollback interrupted while writing into a bind under one daemon or user leaves the directory half-written, and nothing marks it under another.
 
 ## Some volumes are captured differently than you might expect
 
@@ -116,10 +124,6 @@ A rollback that failed and reverted, or was interrupted before the teardown, lea
 
 `--no-safety-snapshot` reads nothing of the live project, so `compose down` knows only what the savepoint recorded. Containers go whatever the spec says, but a network the live project declares and the savepoint doesn't stays in Docker, and the next savepoint records it. A service is stopped within the savepoint's `stop_grace_period`, not the live one. Remove such a network with `docker network rm`.
 
-### gc on another machine doesn't see an interrupted rollback
-
-The marker a rollback leaves when it is interrupted, `.arcave/inflight.json`, is local to the machine it ran on. A gc there refuses to delete while it stands; a gc on another machine sharing the store doesn't see it, and may retire a safety snapshot that interrupted rollback still needs, its revert having failed included. After an interrupted rollback, recover before running gc from elsewhere.
-
 ### gc is not kept out of a rollback's window from elsewhere
 
 A rollback loads its layers into the daemon and tags them before it creates the containers that run on them. The project lock keeps a gc in the same checkout out of that window, and the session's lock one in the same session on any host sharing the store. A gc of the same arcave project on the same daemon, in another session or over another store, is kept out by neither: it removes the tags, and the rollback fails when it creates or rebuilds its containers and goes back to its safety snapshot, or takes down what it created. No data is lost: the layers stay in the store, and running the rollback again passes. Run `arcave gc` while no rollback runs on the daemon from another checkout or session.
@@ -130,7 +134,7 @@ Every rollback leaves an `arcave/…:sp-<savepoint id>` image tag in the daemon,
 
 ## An interrupted rollback is not finished for you
 
-If a rollback is killed partway through, arcave refuses every command that changes state until you recover. It doesn't resume on its own. A rollback that took no safety snapshot — of a project that had no containers, or under `--no-safety-snapshot` — has none to go back to: you recover by running the same rollback again, or one to another savepoint. [Troubleshooting](troubleshooting.md#an-interrupted-rollback) shows how to recover.
+If a rollback is killed partway through, arcave refuses `up`, `down`, `savepoint create` and every rollback but the recovery until you recover. It doesn't resume on its own. `savepoint remove` and `session remove` don't read the marker and don't refuse, nor does `gc` when it cannot reach the daemon: they can delete the safety snapshot the recovery needs, so recover first. A rollback that took no safety snapshot — of a project that had no containers, or under `--no-safety-snapshot` — has none to go back to: you recover by running the same rollback again, or one to another savepoint. [Troubleshooting](troubleshooting.md#an-interrupted-rollback) shows how to recover.
 
 ## A failed rollback can leave anonymous volumes behind
 

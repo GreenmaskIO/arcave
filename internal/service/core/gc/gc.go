@@ -42,7 +42,7 @@ type writeAdmission interface {
 	AdmitWrite(ctx context.Context) error
 }
 
-// inflightMarkers reads the interrupted-rollback marker.
+// inflightMarkers reads the marker of an interrupted rollback, kept on the daemon.
 type inflightMarkers interface {
 	Get(ctx context.Context) (marker model.InflightMarker, found bool, err error)
 }
@@ -58,7 +58,8 @@ type Deps struct {
 	WriteAdmission writeAdmission
 	// SessionLocker holds the session's lock in the store for the whole run.
 	SessionLocker model.SessionLocker
-	Inflight      inflightMarkers
+	// Inflight is the marker of an interrupted rollback, which refuses a run that deletes in its session.
+	Inflight inflightMarkers
 	// RetainRecent is how many safety snapshots of each compose project a run keeps.
 	RetainRecent int
 }
@@ -142,12 +143,11 @@ func (s *GarbageCollector) collectGarbage(
 func (s *GarbageCollector) reportGarbage(
 	ctx context.Context, req model.GarbageCollectRequest,
 ) (model.GarbageCollectResult, error) {
-	inflightWarnings := s.readInflightWarnings(ctx)
 	found := s.findGarbage(ctx, req.DataKinds)
 	if cause := context.Cause(ctx); cause != nil {
 		return model.GarbageCollectResult{}, cause
 	}
-	result := s.newGarbageCollectResult(req, newFoundReports(found), inflightWarnings)
+	result := s.newGarbageCollectResult(req, newFoundReports(found))
 	if result.IsPartial() {
 		return result, model.ErrGarbageCollectPartial
 	}
@@ -169,7 +169,7 @@ func (s *GarbageCollector) deleteGarbage(
 	eraseCtx, erase := progress.Begin(ctx, progress.Step{Kind: kindGCErase})
 	deleted, err := eraseGarbage(eraseCtx, grantedLock, found)
 	erase.End(err)
-	result := s.newGarbageCollectResult(req, deleted, nil)
+	result := s.newGarbageCollectResult(req, deleted)
 	if err != nil {
 		return result, &model.GarbageCollectInterruptedError{Cause: err}
 	}
@@ -179,37 +179,24 @@ func (s *GarbageCollector) deleteGarbage(
 	return result, nil
 }
 
-// requireNoInflight refuses a run that deletes while an interrupted rollback stands: what it was
-// writing is not settled.
+// requireNoInflight refuses a run that deletes while an interrupted rollback of the session stands:
+// its safety snapshot is the way back. A marker that cannot be read is logged and does not refuse.
 func (s *GarbageCollector) requireNoInflight(ctx context.Context) error {
 	marker, found, err := s.inflight.Get(ctx)
 	if err != nil {
-		return fmt.Errorf("reading the inflight marker: %w", err)
+		zerolog.Ctx(ctx).Warn().Err(err).
+			Msg("the inflight marker cannot be read; gc goes on without knowing of an interrupted rollback")
+		return nil
 	}
-	if !found {
+	if !found || marker.Session != s.sessionID {
 		return nil
 	}
 	err = &model.InterruptedRollbackError{Marker: marker}
 	zerolog.Ctx(ctx).Error().Err(err).
 		Str("session", marker.Session.String()).
 		Str("compose_project", marker.ComposeProject.String()).
-		Msg("finish or recover the interrupted rollback first; arcave gc --dry-run still reports")
+		Msg(workflow.RecoveryHint(marker))
 	return err
-}
-
-// readInflightWarnings says when an interrupted rollback stands: its savepoints are committed,
-// so they stay live, but what it was writing is not settled.
-func (s *GarbageCollector) readInflightWarnings(ctx context.Context) []string {
-	marker, found, err := s.inflight.Get(ctx)
-	if err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Msg("reading the inflight marker")
-		return []string{fmt.Sprintf("the inflight marker cannot be read: %v", err)}
-	}
-	if !found {
-		return nil
-	}
-	return []string{fmt.Sprintf("an interrupted rollback of compose project %s in session %s to savepoint %s stands",
-		marker.ComposeProject, marker.Session, marker.Target)}
 }
 
 // findGarbage finds what the provider deems garbage, then the safety snapshots past the retention:
@@ -229,7 +216,7 @@ func (s *GarbageCollector) findGarbage(ctx context.Context, dataKinds []model.Ga
 
 // newGarbageCollectResult is the result over reports.
 func (s *GarbageCollector) newGarbageCollectResult(
-	req model.GarbageCollectRequest, reports []model.GarbageReport, warnings []string,
+	req model.GarbageCollectRequest, reports []model.GarbageReport,
 ) model.GarbageCollectResult {
 	return model.GarbageCollectResult{
 		DryRun:     req.DryRun,
@@ -237,7 +224,6 @@ func (s *GarbageCollector) newGarbageCollectResult(
 		Reports:    reports,
 		Savepoints: newDeadSavepoints(reports),
 		Total:      newGarbageTotal(reports),
-		Warnings:   warnings,
 	}
 }
 

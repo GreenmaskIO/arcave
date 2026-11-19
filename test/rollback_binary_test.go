@@ -67,7 +67,7 @@ func TestRollback_ThroughTheBuiltBinary(t *testing.T) {
 	env.externalVolume(t, shared, "mkdir /data/app && printf %s kept > /data/app/marker && chown 999:999 /data/app/marker")
 	env.upDocument(t, fmt.Sprintf(rebuiltReplicaSpec, env.project, t.TempDir()))
 	projectRoot := t.TempDir()
-	runArcave(t, projectRoot, nil, "init", "--name", "arcave-binary-rollback")
+	runArcave(t, projectRoot, nil, "init", "--name", "arcave-binary-rollback-"+daemontest.RandomSuffix(t))
 	writeStorageConfig(t, projectRoot, config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: t.TempDir()},

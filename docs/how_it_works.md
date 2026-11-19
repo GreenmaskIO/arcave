@@ -212,7 +212,11 @@ With the `cdc` backend the safety capture is an increment in the same per-volume
 
 ## The interrupted-rollback marker
 
-A rollback writes `.arcave/inflight.json` before its first destructive write — the teardown — and clears it once the environment is consistent again. The marker carries the phase it died in, because the remedy differs, along with the savepoint being restored and the safety snapshot that undoes it.
+A rollback writes the inflight marker before its first destructive write — the teardown — and clears it once the environment is consistent again. The marker carries the phase it died in, because the remedy differs, along with the savepoint being restored and the safety snapshot that undoes it.
+
+The marker lives on the daemon the rollback runs against, not in the checkout: an empty `local` volume named `arcave-inflight-<compose project>-<uuid>`, mounted nowhere and carrying no compose labels. The marker is in its labels — `io.arcave.inflight.arcave-project`, which it is looked up by, then `compose-project`, `session`, `target`, `safety` (empty when there is none), `phase`, `at` and a `description`. A volume's labels never change, so each write creates a new volume and removes the ones before it; a reader takes the newest by `at`. A finished rollback removes them all.
+
+There is one marker per daemon and arcave project: every checkout or machine with the same `project.name` sees it against that daemon, and removing `.arcave/` leaves it. Another daemon — another `DOCKER_HOST` or docker context, another Podman user, rootless or rootful — has its own marker, as it has its own containers. Only the commands that work with the daemon read the marker: `gc`, `savepoint remove` and `session remove` do not.
 
 | Phase | How far it got |
 |---|---|
@@ -221,7 +225,7 @@ A rollback writes `.arcave/inflight.json` before its first destructive write —
 | `restore-done` | Volumes restored, but the project never came up cleanly. |
 | `inconsistent` | The automatic revert itself failed. The safety snapshot is retained. |
 
-While a marker stands, the next mutating workflow is **refused** — with one exception, the remedy, which is allowed through: a rollback to that marker's own safety snapshot, or, after a rollback that took none, a rollback to any savepoint of the session and compose project: there is no earlier state left to protect.
+While a marker stands, the next workflow that changes the compose project is **refused** — with one exception, the remedy, which is allowed through: a rollback to that marker's own safety snapshot, or, after a rollback that took none, a rollback to any savepoint of the session and compose project: there is no earlier state left to protect.
 
 arcave does not finish a rollback it died in the middle of. Recovery is explicit and yours to drive — see [Troubleshooting](reference/troubleshooting.md#an-interrupted-rollback).
 

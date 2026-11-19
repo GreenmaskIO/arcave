@@ -270,7 +270,6 @@ type GarbageCollectResult struct {
 	// Savepoints groups the ops naming a dead savepoint by it, in report order.
 	Savepoints []DeadSavepoint `json:"savepoints,omitempty"`
 	Total      GarbageTotal    `json:"total"`
-	Warnings   []string        `json:"warnings,omitempty"`
 }
 
 // IsPartial reports whether anything was left unjudged, aborted, failed or not deleted.

@@ -61,6 +61,7 @@ type Deps struct {
 	SessionLocker model.SessionLocker
 	// Workload is the compose project the workflows act on, through the provider's stages.
 	Workload provider.Workload
+	// Inflight is the marker an interrupted rollback leaves on the daemon.
 	Inflight inflightMarkers
 	// ArcaveProject is the arcave project the workload belongs to, which a rollback's deployment
 	// labels name.
@@ -87,6 +88,7 @@ type Deps struct {
 type Service struct {
 	*SavepointStoreService
 	workload            provider.Workload
+	inflightMarker      inflightMarkers
 	arcaveProject       model.ArcaveProjectName
 	store               storages.Navigator
 	runnerInfo          heartbeat.RunnerInfo
@@ -101,12 +103,12 @@ func New(deps Deps) *Service {
 			ProjectLocker:  deps.ProjectLocker,
 			WriteAdmission: deps.WriteAdmission,
 			SessionLocker:  deps.SessionLocker,
-			Inflight:       deps.Inflight,
 			Session:        deps.Session,
 			ComposeProject: deps.ComposeProject,
 			Sessions:       deps.Sessions,
 		}),
 		workload:            deps.Workload,
+		inflightMarker:      deps.Inflight,
 		arcaveProject:       deps.ArcaveProject,
 		store:               deps.Store,
 		runnerInfo:          deps.RunnerInfo,

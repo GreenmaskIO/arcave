@@ -72,15 +72,18 @@ volumes:
   data: {}
 `
 
+// statusArcaveProject opens the name of a status test's arcave project; each env suffixes it, as
+// the inflight marker is the arcave project's on the shared daemon.
 const statusArcaveProject = "arcave-status-it"
 
 // statusEnv is a compose project run from statusSpec and an arcave project over it.
 type statusEnv struct {
 	*composeProject
-	projectRoot string
-	storeDir    string
-	document    string
-	env         []string
+	projectRoot   string
+	arcaveProject string
+	storeDir      string
+	document      string
+	env           []string
 }
 
 func newStatusEnv(t *testing.T, env ...string) *statusEnv {
@@ -91,11 +94,12 @@ func newStatusEnv(t *testing.T, env ...string) *statusEnv {
 	statusEnv := &statusEnv{
 		composeProject: compose,
 		projectRoot:    t.TempDir(),
+		arcaveProject:  statusArcaveProject + "-" + daemontest.RandomSuffix(t),
 		storeDir:       storage.Directory.Path,
 		document:       fmt.Sprintf(statusSpec, compose.project),
 		env:            env,
 	}
-	runArcave(t, statusEnv.projectRoot, env, "init", "--name", statusArcaveProject)
+	runArcave(t, statusEnv.projectRoot, env, "init", "--name", statusEnv.arcaveProject)
 	writeStorageConfigWith(t, statusEnv.projectRoot, storage,
 		storageE2EBackend{name: string(composeconfig.SnapshotBackendFullCopy), backend: string(composeconfig.SnapshotBackendFullCopy)}, len(env) > 0)
 	compose.upDocument(t, statusEnv.document)
@@ -117,12 +121,13 @@ func (e *statusEnv) status(t *testing.T) statusOnWire {
 // statusOnWire is the JSON of arcave status as a client reads it, its detail the compose
 // provider's.
 type statusOnWire struct {
-	State      string                   `json:"state"`
-	Session    *model.SessionRef        `json:"session"`
-	Deployment *model.DeploymentStatus  `json:"deployment"`
-	Unreadable []model.StatusUnreadable `json:"unreadable"`
-	Notices    []model.Notice           `json:"notices"`
-	Detail     composeStatusDetail      `json:"detail"`
+	State            string                   `json:"state"`
+	Session          *model.SessionRef        `json:"session"`
+	Deployment       *model.DeploymentStatus  `json:"deployment"`
+	RollbackInFlight *model.RollbackInFlight  `json:"rollback_in_flight"`
+	Unreadable       []model.StatusUnreadable `json:"unreadable"`
+	Notices          []model.Notice           `json:"notices"`
+	Detail           composeStatusDetail      `json:"detail"`
 }
 
 // composeStatusDetail is the compose provider's detail of a status.
@@ -400,7 +405,7 @@ func findReplica(t *testing.T, status statusOnWire, service string, number int) 
 func readEncryptionMarker(t *testing.T, env *statusEnv) string {
 	t.Helper()
 
-	file := filepath.Join(env.storeDir, "arcave", "projects", statusArcaveProject, encryptionmarker.FileName)
+	file := filepath.Join(env.storeDir, "arcave", "projects", env.arcaveProject, encryptionmarker.FileName)
 	data, err := os.ReadFile(file)
 	require.NoError(t, err)
 	info, err := os.Stat(file)

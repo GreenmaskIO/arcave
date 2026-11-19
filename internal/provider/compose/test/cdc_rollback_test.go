@@ -50,7 +50,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/repo"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/workload"
-	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/core/session"
@@ -73,9 +72,8 @@ const (
 	// finds a volume's mount through them, and it is the compose project segment of the
 	// store root.
 	cdcProject = "arcave-cdc-it"
-	// cdcArcaveProject is the arcave project — cfg.Project.Name, deliberately spelled
-	// differently from the compose project so the two levels of the store root stay
-	// distinguishable in an assertion.
+	// cdcArcaveProject opens cfg.Project.Name, spelled apart from cdcProject; each env suffixes it,
+	// as its inflight marker is the arcave project's on the shared daemon.
 	cdcArcaveProject = "arcave-it-tenant"
 	// blobKiB is the payload per volume — small enough to run in seconds, large
 	// enough that an increment is visibly smaller than a full capture. Random
@@ -236,7 +234,6 @@ func TestCDCBackend_RollbackInAClonedSession(t *testing.T) {
 	sessions := session.New(session.Deps{
 		Sessions:         sessionrepo.New(arcaveProjectStore),
 		Locker:           lock.New(env.projectRoot),
-		Inflight:         inflightrepo.New(env.projectRoot),
 		Store:            arcaveProjectStore,
 		NewSession:       newProviderSession(arcaveProjectStore),
 		NewSessionLocker: newSessionLockerFactory(arcaveProjectStore),
@@ -274,6 +271,8 @@ type cdcEnv struct {
 	volumes             []cdcVolume
 
 	// What serviceIn wires another session's service from.
+	arcaveProject string
+	inflight      compose.InflightMarkers
 	projectRoot   string
 	storageCfg    config.Storage
 	cdcCfg        composeconfig.CDCBackend
@@ -311,6 +310,7 @@ func newCDCEnv(t *testing.T, cdcCfg composeconfig.CDCBackend) *cdcEnv {
 	}
 
 	logs := &syncBuffer{}
+	arcaveProject := cdcArcaveProject + "-" + suffix
 	env := &cdcEnv{
 		ctx:     zerolog.New(logs).Level(zerolog.InfoLevel).WithContext(context.Background()),
 		compose: &stubComposeRunner{},
@@ -318,7 +318,9 @@ func newCDCEnv(t *testing.T, cdcCfg composeconfig.CDCBackend) *cdcEnv {
 		engine:  engine,
 		volumes: volumes,
 
-		projectRoot: t.TempDir(),
+		arcaveProject: arcaveProject,
+		inflight:      openInflightMarkers(t, arcaveProject, cdcProject),
+		projectRoot:   t.TempDir(),
 		storageCfg: config.Storage{
 			Type:      config.StorageTypeDirectory,
 			Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
@@ -382,7 +384,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 	// session — savepoints, a rollback's undo and the cdc repositories alike. The
 	// arcave project is named apart from the compose project, so an assertion on the tree shows
 	// both levels rather than one name standing in for two.
-	composeProjectStore, err := storefactory.New(t.Context(), e.storageCfg, e.projectRoot, cdcArcaveProject, session, cdcProject)
+	composeProjectStore, err := storefactory.New(t.Context(), e.storageCfg, e.projectRoot, model.ArcaveProjectName(e.arcaveProject), session, cdcProject)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, composeProjectStore.Close()) })
 
@@ -407,11 +409,11 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 	svc := core.New(core.Deps{
 		Savepoints:     compose.NewStoreSavepoints(composeProjectStore),
 		Store:          composeProjectStore,
-		ArcaveProject:  cdcArcaveProject,
+		ArcaveProject:  model.ArcaveProjectName(e.arcaveProject),
 		SessionLocker:  newSessionLocker(t, e.arcaveProjectStore(t), session),
 		WriteAdmission: newPlainAdmission(e.arcaveProjectStore(t)),
 		ProjectLocker:  lock.New(e.projectRoot),
-		Inflight:       inflightrepo.New(e.projectRoot),
+		Inflight:       e.inflight,
 		Session:        session,
 		ComposeProject: cdcProject,
 		Sessions:       sessionrepo.New(e.arcaveProjectStore(t)),
@@ -456,7 +458,7 @@ func (e *cdcEnv) arcaveProjectStore(t *testing.T) storages.Storager {
 	root, err := storefactory.Root(t.Context(), e.storageCfg, e.projectRoot)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, root.Close()) })
-	store, err := storefactory.ArcaveProject(root, cdcArcaveProject)
+	store, err := storefactory.ArcaveProject(root, model.ArcaveProjectName(e.arcaveProject))
 	require.NoError(t, err)
 	return store
 }

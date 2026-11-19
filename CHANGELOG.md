@@ -4,10 +4,18 @@
 
 ### Breaking changes
 
+- **The interrupted-rollback marker lives on the daemon, not in `.arcave/inflight.json`.** It is an empty volume, `arcave-inflight-<compose project>-<uuid>`, mounted nowhere, the marker in its `io.arcave.inflight.*` labels; a rollback that finishes leaves nothing behind. There is one per daemon and arcave project: every checkout and machine with the same `project.name` sees it against that daemon, and `status` reads `rollback-pending` there; deleting `.arcave/` no longer erases it. Another daemon or Podman user has its own. A `.arcave/inflight.json` left by an earlier version is not read: delete it by hand. To remove the marker yourself, `docker volume ls --filter label=io.arcave.inflight.compose-project=<name>`, then `docker volume rm`. See [the inflight marker](https://www.greenmask.io/docs/arcave/concepts/#inflight-marker).
+- **`gc`, `savepoint remove` and `session remove` no longer read the marker** and are never refused by it; they still run without a daemon. The way back from an interrupted rollback — its safety snapshot, the newest of its compose project, which `retain_recent: 1` keeps — can therefore be deleted; the marker then refuses a rollback to any other savepoint, and `arcave down --force` followed by `arcave up <savepoint>` gets out. See [Troubleshooting](https://www.greenmask.io/docs/arcave/reference/troubleshooting/#the-way-back-from-an-interrupted-rollback-is-gone).
+- **gc's result has no `warnings`**: a standing rollback is `status`'s to show.
 - **`arcave status --format json` moves the compose project's services under `detail`.** `services` is `detail.services`, `deployment.source` and `deployment.replaced` are `detail.source` and `detail.replaced`, and `deployment.savepoint.restored` is gone; `deployment` is `null` when no container carries a rollback's labels. `state` keeps its words. The same holds for the MCP `status` tool. See [output](https://www.greenmask.io/docs/arcave/reference/output/#status).
 - **Text `status` says `absent`, not `not running`**, and no longer prints `N containers replaced since` or `restored N volumes, M layers`: each recreated replica has its `replica-recreated` warning, and `savepoint list` shows what a savepoint holds.
 - **A savepoint's `summary` has no `gaps` and no `replicas`.** What a rollback does not put back is in `detail.not_covered` and in a status of its deployment; the layers it holds in `detail.writable_layers`.
 - **`down`'s `deployment` has no `service_replicas`.**
+
+### Good to know before you rely on it
+
+- `docker volume prune -a`, `podman volume prune -a` and `podman system prune --volumes` delete the marker's volume, and arcave forgets the rollback was interrupted. A plain `volume prune` keeps it.
+- A bind mount's directory is shared by every daemon of the machine: a rollback interrupted while writing into it under one daemon or Podman user is not marked under another.
 
 ## v0.1.0-alpha.6 — 2026-11-18
 

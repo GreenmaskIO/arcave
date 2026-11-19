@@ -110,9 +110,11 @@ What a savepoint captures is the compose file's to say. By default it is everyth
 
 ## Inflight marker
 
-`.arcave/inflight.json` records that a rollback is in progress, or died in progress. It is written before the first destructive write and cleared when the environment is consistent again, and it carries the phase — `recreating`, `restoring`, `restore-done` or `inconsistent` — because the remedy differs per phase.
+The inflight marker records that a rollback is in progress, or died in progress. It is written before the first destructive write and cleared when the environment is consistent again, and it carries the phase — `recreating`, `restoring`, `restore-done` or `inconsistent` — because the remedy differs per phase.
 
-While a marker stands, the next mutating workflow is refused. The one exception is the remedy: a rollback to that marker's own safety snapshot — or, when the interrupted rollback started from a compose project with no containers and so took no safety snapshot, the same rollback again. See [Troubleshooting](reference/troubleshooting.md#an-interrupted-rollback).
+It lives on the daemon, beside what it guards: an empty volume, `arcave-inflight-<compose project>-<uuid>`, mounted nowhere, the marker in its `io.arcave.inflight.*` labels. There is one per daemon and arcave project (`project.name`), so every checkout and machine with that project name sees it against that daemon, and deleting `.arcave/` does not erase it. Another daemon — another `DOCKER_HOST`, docker context or Podman user — has its own, as it has its own containers. A rollback that finishes leaves nothing on the daemon.
+
+While a marker stands, the next workflow that changes the compose project is refused. The one exception is the remedy: a rollback to that marker's own safety snapshot — or, when the interrupted rollback started from a compose project with no containers and so took no safety snapshot, the same rollback again. Commands that only touch the store — `gc`, `savepoint remove`, `session remove` — do not read the marker. See [Troubleshooting](reference/troubleshooting.md#an-interrupted-rollback).
 
 ## Related docs
 

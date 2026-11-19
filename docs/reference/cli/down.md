@@ -48,13 +48,13 @@ A one-off container or a hook's runner names no deployment and is not judged; it
 
 ## `--force`
 
-`--force` takes the environment down whoever deployed it, and clears an interrupted-rollback marker of **this** compose project, from any session. The marker is what guarded that rollback's safety snapshot, the last copy of the state before it: the result names it in `cleared_inflight`, a warning says so, and nothing keeps [`arcave gc`](gc.md) from retiring it now. Roll back to it before the next gc if you still want that state.
+`--force` takes the environment down whoever deployed it, and clears an interrupted-rollback marker of **this** compose project, from any session. That rollback's safety snapshot is the last copy of the state before it: the result names it in `cleared_inflight`, a warning says so, and only retention keeps [`arcave gc`](gc.md) from retiring it — the first newer safety snapshot of the compose project retires it under the default `retain_recent: 1`. Roll back to it before then if you still want that state.
 
 A marker of another compose project refuses the down, forced or not: it guards that one's environment.
 
 ## Locks
 
-`down` claims the project lock on `.arcave/lock`, and no session lock: it writes nothing to the store, and the daemon, the lock and the marker are all host-local. It needs a reachable daemon, the initialised project and a [named compose project](index.md#naming-the-project).
+`down` claims the project lock on `.arcave/lock`, and no session lock: it writes nothing to the store, and the marker it clears lives on the daemon. It needs a reachable daemon, the initialised project and a [named compose project](index.md#naming-the-project).
 
 ## Flags
 
