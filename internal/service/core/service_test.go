@@ -15,21 +15,26 @@
 package core
 
 import (
-	"context"
-	"time"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// putInflightMarker writes the marker for the rollback restoring targetID; safety is the safety
-// snapshot it names, empty for none. A phase change rewrites it whole.
-func (s *Service) putInflightMarker(ctx context.Context, phase model.InflightPhase, targetID, safety model.SavepointID) error {
-	return s.inflightMarker.Put(ctx, model.InflightMarker{
-		Phase:          phase,
-		Session:        s.session,
-		ComposeProject: s.composeProject,
-		Target:         targetID,
-		Safety:         safety,
-		At:             time.Now(),
-	})
+func TestNew_ZeroSessionIsTheDefault(t *testing.T) {
+	// Act
+	svc := New(Deps{SessionLocker: fakeSessionLocker{}})
+
+	// Assert
+	assert.Equal(t, model.DefaultSession, svc.session)
+}
+
+// A zero session is the default one.
+func TestNewSavepointStoreService(t *testing.T) {
+	// Act
+	svc := NewSavepointStoreService(SavepointStoreDeps{})
+
+	// Assert
+	assert.Equal(t, model.DefaultSession, svc.session)
 }

@@ -43,13 +43,16 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
-// sessionScope is the arcave project's store and the session a command works in.
+// sessionScope is the arcave project's store and the session a command works in, with the flock
+// and the inflight marker beside the project root.
 type sessionScope struct {
 	arcaveProjectStore storages.Storager
 	writeAdmission     writeAdmission
 	sessions           *sessionrepo.Repository
 	sessionID          model.SessionID
 	sessionLocker      *sessionlock.Locker
+	projectLocker      *lock.Locker
+	inflight           *inflightrepo.Repository
 }
 
 // openSessionScope opens the arcave project's store and resolves sessionRef on it.
@@ -60,8 +63,13 @@ func openSessionScope(
 	if err != nil {
 		return sessionScope{}, err
 	}
-	sessions := sessionrepo.New(arcaveProject.store)
-	session, err := newSessionService(projectPath, arcaveProject, sessions).ResolveSession(ctx, sessionRef)
+	var (
+		sessions      = sessionrepo.New(arcaveProject.store)
+		projectLocker = lock.New(projectPath)
+		inflight      = inflightrepo.New(projectPath)
+	)
+	session, err := newSessionService(projectPath, arcaveProject, sessions, projectLocker, inflight).
+		ResolveSession(ctx, sessionRef)
 	if err != nil {
 		return sessionScope{}, fmt.Errorf("resolve session: %w", err)
 	}
@@ -75,6 +83,8 @@ func openSessionScope(
 		sessions:           sessions,
 		sessionID:          session.ID,
 		sessionLocker:      sessionLocker,
+		projectLocker:      projectLocker,
+		inflight:           inflight,
 	}, nil
 }
 
@@ -129,13 +139,13 @@ func openSavepointService(
 	// The locker is bound to the project root here, so the service never names a path.
 	return core.New(core.Deps{
 		Savepoints:     newComposeSavepoints(scope.store),
-		ProjectLocker:  lock.New(projectPath),
+		ProjectLocker:  scope.projectLocker,
 		WriteAdmission: scope.writeAdmission,
 		// The session's lock in the store, which the flock beside it cannot be across hosts.
 		SessionLocker: scope.sessionLocker,
 		Workload:      workload,
 		// The marker an interrupted rollback leaves behind, host-local beside the lock.
-		Inflight:       inflightrepo.New(projectPath),
+		Inflight:       scope.inflight,
 		ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
 		Session:        scope.sessionID,
 		ComposeProject: composeProject,
@@ -166,8 +176,8 @@ func openDownService(
 		return nil, err
 	}
 	return core.NewDownService(core.DownDeps{
-		ProjectLocker:  lock.New(projectPath),
-		Inflight:       inflightrepo.New(projectPath),
+		ProjectLocker:  scope.projectLocker,
+		Inflight:       scope.inflight,
 		Sessions:       scope.sessions,
 		Session:        scope.sessionID,
 		ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
@@ -188,10 +198,10 @@ func openSavepointStoreService(
 	}
 	return core.NewSavepointStoreService(core.SavepointStoreDeps{
 		Savepoints:     newComposeSavepoints(scope.store),
-		ProjectLocker:  lock.New(projectPath),
+		ProjectLocker:  scope.projectLocker,
 		WriteAdmission: scope.writeAdmission,
 		SessionLocker:  scope.sessionLocker,
-		Inflight:       inflightrepo.New(projectPath),
+		Inflight:       scope.inflight,
 		Session:        scope.sessionID,
 		ComposeProject: composeProject,
 		Sessions:       scope.sessions,
@@ -237,18 +247,20 @@ func openSessionService(
 	if err != nil {
 		return nil, err
 	}
-	return newSessionService(projectPath, arcaveProject, sessionrepo.New(arcaveProject.store)), nil
+	return newSessionService(projectPath, arcaveProject, sessionrepo.New(arcaveProject.store),
+		lock.New(projectPath), inflightrepo.New(projectPath)), nil
 }
 
 // newSessionService wires the session commands over the arcave project's store.
 func newSessionService(
 	projectPath string, arcaveProject openedArcaveProject, sessions *sessionrepo.Repository,
+	projectLocker *lock.Locker, inflight *inflightrepo.Repository,
 ) *session.Service {
 	return session.New(session.Deps{
 		Sessions:       sessions,
-		Locker:         lock.New(projectPath),
+		Locker:         projectLocker,
 		WriteAdmission: arcaveProject.writeAdmission,
-		Inflight:       inflightrepo.New(projectPath),
+		Inflight:       inflight,
 		Current:        currentsession.New(projectPath),
 		Store:          arcaveProject.store,
 		NewSession: func(id model.SessionID) provider.Session {
@@ -402,10 +414,10 @@ func openGCService(
 	return gc.New(gc.Deps{
 		Sessions:        scope.sessions,
 		ProviderSession: providerSession,
-		Locker:          lock.New(projectPath),
+		Locker:          scope.projectLocker,
 		WriteAdmission:  scope.writeAdmission,
 		SessionLocker:   scope.sessionLocker,
-		Inflight:        inflightrepo.New(projectPath),
+		Inflight:        scope.inflight,
 		RetainRecent:    utils.Value(cfg.GC.SafetySnapshots.RetainRecent),
 	}), nil
 }
