@@ -120,8 +120,8 @@ Deletion is permanent. It frees the savepoint's own directory; the [deduplicated
 | An id or name with `--retain-recent 0` | `cannot combine savepoint ids or names with retain-recent/retain-for/before-date` — `0` is a rule like any other. |
 | A negative `--retain-recent` | `retain-recent must be zero or positive` |
 | A negative `--retain-for`, e.g. `-1h` | `retain-for must be zero or positive` |
-| An unparseable duration | `invalid --retain-for "2 weeks": …` |
-| A bare date in `--before-date` | `invalid --before-date "2026-06-01": …` — it takes RFC3339Nano. |
+| An unparseable duration | `invalid retain-for duration "2 weeks": …; retain-for takes a duration, e.g. 24h or 7d` |
+| A bare date in `--before-date` | `invalid before-date timestamp "2026-06-01": …; before-date takes an RFC 3339 timestamp, e.g. 2026-06-01T00:00:00Z` |
 | An id or name that is not there | `savepoint(s) not found: 019e843e-1650-7000-8000-000000000000`, **and nothing is deleted**. Every such argument is named. There are no partial deletes: one typo in a list of five removes none of them. |
 | A name several savepoints carry | `2 savepoints are named "clean"; name one by id instead: 019e843e-1650-7000-8000-000000000000, 019e8488-3ac8-7000-8000-000000000000`, and nothing is deleted. |
 | Another arcave run holds the lock | `another arcave command is already running in this project`. `--dry-run` takes no lock and is unaffected. |

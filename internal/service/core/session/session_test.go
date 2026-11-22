@@ -655,6 +655,8 @@ func TestSessionService_CreateSession_HeartbeatLostCancelsTheFork(t *testing.T) 
 			// Assert
 			require.ErrorIs(t, err, model.ErrHeartbeatLost)
 			assert.ErrorContains(t, err, tt.wantErr)
+			assert.ErrorContains(t, err, "the partial session is not committed; its tree is left in the store")
+			assert.ErrorContains(t, err, "fork into sessions/")
 			repo.AssertExpectations(t)
 			beats.AssertExpectations(t)
 			locker.AssertExpectations(t)
@@ -1336,6 +1338,31 @@ func TestSessionService_RemoveSession_Pinned(t *testing.T) {
 	}
 }
 
+// A delete that fails partway says the session is partly removed.
+func TestSessionService_RemoveSession_DeleteFailure(t *testing.T) {
+	// Arrange
+	errDelete := errors.New("delete boom")
+	locker := &mockLocker{}
+	expectLock(locker)
+	repo := &mockSessionRepo{}
+	repo.On("ListSessions", mock.Anything).
+		Return([]model.Session{model.DefaultSessionRecord, sessionRecord(demoSession, "exp", sessionNow)}, nil).Once()
+	repo.On("SessionSize", mock.Anything, demoSession).Return(int64(10), nil).Once()
+	repo.On("DeleteSession", mock.Anything, demoSession).Return(errDelete).Once()
+	svc := New(Deps{WriteAdmission: fakeWriteAdmission{}, NewSessionLocker: newFakeSessionLocker, Current: &fakePointer{}, Sessions: repo, Locker: locker})
+
+	// Act
+	got, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: "exp"})
+
+	// Assert
+	require.EqualError(t, err, "deleting session "+demoSession.String()+": delete boom; the session is partly removed")
+	require.ErrorIs(t, err, errDelete)
+	assert.ErrorIs(t, err, model.ErrSessionRemovePartial)
+	assert.Zero(t, got)
+	repo.AssertExpectations(t)
+	locker.AssertExpectations(t)
+}
+
 func TestSessionService_RemoveSession_PointerClearFailureKeepsTheResult(t *testing.T) {
 	// Arrange
 	locker := &mockLocker{}
@@ -1352,9 +1379,17 @@ func TestSessionService_RemoveSession_PointerClearFailureKeepsTheResult(t *testi
 	// Act
 	got, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: "exp", Force: true})
 
-	// Assert: the delete happened, so it is reported; the dangling pointer is the next command's to name.
+	// Assert: the delete happened, so it is reported, the pointer it left named beside it.
 	require.NoError(t, err)
-	assert.Equal(t, model.RemoveSessionResponse{Session: demoSession, Removed: true, FreedBytes: 10}, got)
+	assert.Equal(t, model.RemoveSessionResponse{
+		Session:    demoSession,
+		Removed:    true,
+		FreedBytes: 10,
+		Notices: []model.Notice{{
+			Message: "the deleted session " + demoSession.String() +
+				" is still the current one: the pointer could not be cleared: permission denied",
+		}},
+	}, got)
 	repo.AssertExpectations(t)
 	locker.AssertExpectations(t)
 }

@@ -70,15 +70,7 @@ func (s *Service) requireNoInflight(ctx context.Context, restoring model.Savepoi
 			safety:     marker.Safety,
 		}, nil
 	}
-	err = &model.InterruptedRollbackError{Marker: marker}
-	zerolog.Ctx(ctx).Error().Err(err).
-		Str("interrupted_target", marker.Target.String()).
-		Str("session", marker.Session.String()).
-		Str("compose_project", marker.ComposeProject.String()).
-		Str("safety_snapshot_id", marker.Safety.String()).
-		Str("phase", string(marker.Phase)).
-		Msg(workflow.RecoveryHint(marker))
-	return rollbackRecovery{}, err
+	return rollbackRecovery{}, &model.InterruptedRollbackError{Marker: marker}
 }
 
 // isRecoveryRollback reports whether a rollback to id, in this session and compose project,

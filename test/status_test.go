@@ -349,8 +349,8 @@ func TestStatus_SessionNamingNone(t *testing.T) {
 	out, err := cmd.Output()
 
 	// Assert: the user's typo is the command's error, not a partial status.
-	var exitErr *exec.ExitError
-	require.True(t, errors.As(err, &exitErr), "a session naming none fails status: %v", err)
+	exitErr, ok := errors.AsType[*exec.ExitError](err)
+	require.True(t, ok, "a session naming none fails status: %v", err)
 	assert.Empty(t, out, "and prints no status")
 	assert.Contains(t, string(exitErr.Stderr), model.ErrSessionNotFound.Error())
 }
@@ -374,8 +374,8 @@ func TestStatus_StoreUnreadable(t *testing.T) {
 	out, err := cmd.Output()
 
 	// Assert
-	var exitErr *exec.ExitError
-	require.True(t, errors.As(err, &exitErr), "a partial status exits non-zero: %v", err)
+	exitErr, ok := errors.AsType[*exec.ExitError](err)
+	require.True(t, ok, "a partial status exits non-zero: %v", err)
 	assert.Equal(t, 1, exitErr.ExitCode())
 	status := decode[statusOnWire](t, out)
 	require.Len(t, status.Unreadable, 1)

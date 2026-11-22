@@ -106,9 +106,9 @@ func (e *hooksEnv) arcave(t *testing.T, env []string, args ...string) arcaveRun 
 	cmd.Stderr = &stderr
 	started := time.Now()
 	err := cmd.Run()
-	var exitErr *exec.ExitError
 	if err != nil {
-		require.True(t, errors.As(err, &exitErr), "arcave %v: %v", args, err)
+		_, ok := errors.AsType[*exec.ExitError](err)
+		require.True(t, ok, "arcave %v: %v", args, err)
 	}
 	return arcaveRun{
 		stdout:   stdout.Bytes(),

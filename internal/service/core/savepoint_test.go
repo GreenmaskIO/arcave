@@ -303,99 +303,80 @@ func TestCaptureHeld(t *testing.T) {
 		wantErr     string
 		// wantLogOrder are lines the log must hold in this order; "release" is the release's.
 		wantLogOrder []string
-		// wantNoRestartLog says no release failure was logged.
-		wantNoRestartLog bool
 		// wantBeat is how the savepoint's heartbeat ends.
 		wantBeat heartbeat.Status
 	}{
 		{
-			name:             "hold, capture, release",
-			wantNoRestartLog: true,
-			wantBeat:         heartbeat.StatusDone,
+			name:     "hold, capture, release",
+			wantBeat: heartbeat.StatusDone,
 		},
 		{
-			name:             "a failed hold releases and captures nothing",
-			holdErr:          errBoom,
-			wantErr:          "boom",
-			wantNoRestartLog: true,
-			wantBeat:         heartbeat.StatusFailed,
+			name:     "a failed hold releases and captures nothing",
+			holdErr:  errBoom,
+			wantErr:  "boom; partial capture " + committed.ID.String() + " is retained for a later gc",
+			wantBeat: heartbeat.StatusFailed,
 		},
 		{
 			name:        "an interrupted hold releases and captures nothing",
 			holdErr:     errBoom,
 			interruptOn: "Hold",
-			wantErr:     "interrupted: context canceled",
-			wantLogOrder: []string{
-				"savepoint interrupted while holding the services",
-				"release",
-				"failure the interrupt caused",
-			},
-			wantNoRestartLog: true,
-			wantBeat:         heartbeat.StatusFailed,
+			wantErr:     "interrupted: context canceled; partial capture " + committed.ID.String() + " is retained for a later gc",
+			wantBeat:    heartbeat.StatusFailed,
 		},
 		{
-			name:             "a failed capture releases",
-			captureErr:       errBoom,
-			wantErr:          "capturing the savepoint: boom",
-			wantNoRestartLog: true,
-			wantBeat:         heartbeat.StatusFailed,
+			name:       "a failed capture releases",
+			captureErr: errBoom,
+			wantErr:    "capturing the savepoint: boom; partial capture " + committed.ID.String() + " is retained for a later gc",
+			wantBeat:   heartbeat.StatusFailed,
 		},
 		{
 			name:        "an interrupted capture releases",
 			captureErr:  errBoom,
 			interruptOn: "Capture",
-			wantErr:     "capturing the savepoint: interrupted: context canceled",
-			wantLogOrder: []string{
-				"savepoint interrupted during capture",
-				"failure the interrupt caused",
-				"release",
-			},
-			wantNoRestartLog: true,
-			wantBeat:         heartbeat.StatusFailed,
+			wantErr: "capturing the savepoint: interrupted: context canceled; partial capture " + committed.ID.String() +
+				" is retained for a later gc",
+			wantBeat: heartbeat.StatusFailed,
 		},
 		{
-			name:             "a lost lock abandons the capture and releases",
-			verifyErr:        model.ErrSessionLockLost,
-			wantErr:          "capturing the savepoint: commit savepoint " + committed.ID.String() + ": " + model.ErrSessionLockLost.Error(),
-			wantNoRestartLog: true,
-			wantBeat:         heartbeat.StatusFailed,
+			name:      "a lost lock abandons the capture and releases",
+			verifyErr: model.ErrSessionLockLost,
+			wantErr: "capturing the savepoint: commit savepoint " + committed.ID.String() + ": " + model.ErrSessionLockLost.Error() +
+				"; partial capture " + committed.ID.String() + " is retained for a later gc",
+			wantBeat: heartbeat.StatusFailed,
 		},
 		{
-			name:             "a failed commit releases",
-			commitErr:        errBoom,
-			wantErr:          "capturing the savepoint: commit savepoint " + committed.ID.String() + ": boom",
-			wantNoRestartLog: true,
-			wantBeat:         heartbeat.StatusFailed,
+			name:      "a failed commit releases",
+			commitErr: errBoom,
+			wantErr: "capturing the savepoint: commit savepoint " + committed.ID.String() + ": boom; partial capture " +
+				committed.ID.String() + " is retained for a later gc",
+			wantBeat: heartbeat.StatusFailed,
 		},
 		{
-			name:             "an interrupt past the commit releases and fails nothing",
-			interruptOn:      "Commit",
-			wantLogOrder:     []string{"savepoint committed before the interrupt", "release"},
-			wantNoRestartLog: true,
-			wantBeat:         heartbeat.StatusDone,
+			name:         "an interrupt past the commit releases and fails nothing",
+			interruptOn:  "Commit",
+			wantLogOrder: []string{"savepoint committed before the interrupt", "release"},
+			wantBeat:     heartbeat.StatusDone,
 		},
 		{
-			name:             "a failed release past the commit names the savepoint",
-			releaseErr:       errBoom,
-			wantErr:          "savepoint " + committed.ID.String() + " committed; bringing the project back: boom",
-			wantNoRestartLog: true,
-			wantBeat:         heartbeat.StatusDone,
+			name:       "a failed release past the commit names the savepoint",
+			releaseErr: errBoom,
+			wantErr:    "savepoint " + committed.ID.String() + " committed; bringing the project back: boom",
+			wantBeat:   heartbeat.StatusDone,
 		},
 		{
-			name:         "a failed release under a failed capture is logged",
-			captureErr:   errors.New("capture boom"),
-			releaseErr:   errBoom,
-			wantErr:      "capturing the savepoint: capture boom",
-			wantLogOrder: []string{"bringing the project back failed after the capture failure"},
-			wantBeat:     heartbeat.StatusFailed,
+			name:       "a failed release under a failed capture is named in the error",
+			captureErr: errors.New("capture boom"),
+			releaseErr: errBoom,
+			wantErr: "capturing the savepoint: capture boom; partial capture " + committed.ID.String() +
+				" is retained for a later gc; the services were not resumed: boom",
+			wantBeat: heartbeat.StatusFailed,
 		},
 		{
-			name:         "a failed release under a failed hold is logged",
-			holdErr:      errors.New("stop boom"),
-			releaseErr:   errBoom,
-			wantErr:      "stop boom",
-			wantLogOrder: []string{"bringing the project back failed after the hold failure"},
-			wantBeat:     heartbeat.StatusFailed,
+			name:       "a failed release under a failed hold is named in the error",
+			holdErr:    errors.New("stop boom"),
+			releaseErr: errBoom,
+			wantErr:    "stop boom; partial capture " + committed.ID.String() + " is retained for a later gc; the services were not resumed: boom",
+			wantBeat:   heartbeat.StatusFailed,
 		},
 	}
 
@@ -449,14 +430,18 @@ func TestCaptureHeld(t *testing.T) {
 				assert.Zero(t, savepoint)
 			}
 			for _, cause := range []error{tt.holdErr, tt.captureErr, tt.verifyErr, tt.commitErr} {
-				if cause != nil && tt.interruptOn == "" {
+				switch {
+				case cause == nil:
+				case tt.interruptOn == "":
 					assert.ErrorIs(t, err, cause)
+				default:
+					// The interrupt is the error, in place of the failure it caused.
+					_, ok := errors.AsType[*model.InterruptedError](err)
+					assert.True(t, ok)
+					assert.NotErrorIs(t, err, cause)
 				}
 			}
 			assertLogOrder(t, logs.String(), tt.wantLogOrder)
-			if tt.wantNoRestartLog {
-				assert.NotContains(t, logs.String(), "bringing the project back failed")
-			}
 			assert.Equal(t, tt.wantBeat, readSavepointHeartbeat(t, store, committed.ID).Status)
 			capturer.AssertExpectations(t)
 			grantedLock.AssertExpectations(t)

@@ -88,7 +88,7 @@ Nothing else is created here. A relative store path materialises when the first 
 
 | Condition | Message |
 |---|---|
-| A config is already there, without `--override` | `project already initialized use --override` |
+| A config is already there, without `--override` | `project already initialized; pass --override to overwrite it` |
 | The project name normalises to nothing, and none was given | `invalid config: project.name: invalid arcave project name "": must not be empty (set project.name explicitly)` |
 | A name outside the charset | `invalid config: project.name: invalid arcave project name "My App": must start with [a-z0-9] and continue with [a-z0-9_-] (set project.name explicitly)` |
 

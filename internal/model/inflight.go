@@ -62,17 +62,34 @@ func (m InflightMarker) RecoveryID() SavepointID {
 	return m.Safety
 }
 
+// describeState says what an interrupted or failed rollback left behind, by the phase it reached.
+func (m InflightMarker) describeState() string {
+	switch {
+	case m.Safety != "" && m.Target == m.Safety:
+		return "the recovery to the safety snapshot failed; volumes may be half-restored"
+	// Ahead of restore-done: a failed cold start has removed what the restore wrote into.
+	// The containers may be gone: a forced up drops the compose project in this phase.
+	case m.Safety == "" && m.Phase == InflightRecreating:
+		return "a rollback that took no safety snapshot was interrupted before it restored any volume; " +
+			"the containers may be gone"
+	case m.Safety == "":
+		return "a rollback that took no safety snapshot was interrupted; volumes may be half-restored"
+	case m.Phase == InflightRestoreDone:
+		return "every volume was restored and only the services were not started"
+	case m.Phase == InflightInconsistent:
+		return "the rollback failed and so did its revert"
+	default:
+		return "volumes may mix states"
+	}
+}
+
 // InterruptedRollbackError refuses a mutating workflow while a marker stands. What
-// happened and what to do about it is the Marker's; a caller reads it with errors.As.
+// happened is the Marker's; the way to recover is the adapter's to name.
 type InterruptedRollbackError struct {
 	Marker InflightMarker
 }
 
 func (m *InterruptedRollbackError) Error() string {
-	interrupted := fmt.Sprintf("rollback to savepoint %s was interrupted (%s); recover by rolling back to %s",
-		m.Marker.Target, m.Marker.Phase, m.Marker.RecoveryID())
-	if m.Marker.Safety == "" {
-		return interrupted + " or another savepoint"
-	}
-	return interrupted
+	return fmt.Sprintf("rollback to savepoint %s was interrupted (%s): %s",
+		m.Marker.Target, m.Marker.Phase, m.Marker.describeState())
 }

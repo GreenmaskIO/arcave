@@ -156,10 +156,12 @@ func runHooks(
 		failures    []*hookError
 	)
 	for _, runErr := range errs {
-		var hookErr *hookError
+		if runErr == nil {
+			continue
+		}
+		hookErr, isHookErr := errors.AsType[*hookError](runErr)
 		switch {
-		case runErr == nil:
-		case !errors.As(runErr, &hookErr):
+		case !isHookErr:
 			// An interrupt: the command is being stopped, whatever the hooks did.
 			return nil, runErr
 		case hookErr.target.hook.OnError == composeconfig.HookOnErrorContinue:

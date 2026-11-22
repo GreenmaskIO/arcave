@@ -15,12 +15,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
 	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
 	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
 	"github.com/greenmaskio/arcave/internal/service/projectinit"
 )
@@ -42,13 +44,22 @@ var (
 // no compose project and opens neither the storage backend nor the Docker engine.
 func runConfigInit(cmd *cobra.Command, _ []string) error {
 	if configFound && !configInitOverride {
-		return fmt.Errorf("project already initialized use --override")
+		return newInitializedError(model.ErrProjectInitialized)
 	}
 
 	template := config.NewConfig()
 	template.Project.Name = configInitName
 	h := cli.NewConfigInitHandler(projectinit.New(projectRoot, cfgrepo.New(projectRoot)), loadRunOutput())
-	return h.Init(cmd.Context(), template, configInitOverride)
+	return newInitializedError(h.Init(cmd.Context(), template, configInitOverride))
+}
+
+// newInitializedError adds the flag that overwrites an initialized project's config; any other
+// error passes unchanged.
+func newInitializedError(err error) error {
+	if errors.Is(err, model.ErrProjectInitialized) {
+		return fmt.Errorf("%w; pass --override to overwrite it", err)
+	}
+	return err
 }
 
 func init() {

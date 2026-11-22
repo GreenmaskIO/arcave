@@ -39,6 +39,10 @@ func removeUsageError(err error) error {
 		return errors.New("retain-recent must be zero or positive")
 	case errors.Is(err, model.ErrRetainForNegative):
 		return errors.New("retain-for must be zero or positive")
+	case errors.Is(err, model.ErrInvalidRetainFor):
+		return fmt.Errorf("%w; retain-for takes a duration, e.g. 24h or 7d", err)
+	case errors.Is(err, model.ErrInvalidBeforeDate):
+		return fmt.Errorf("%w; before-date takes an RFC 3339 timestamp, e.g. 2026-06-01T00:00:00Z", err)
 	default:
 		return err
 	}
@@ -59,6 +63,14 @@ type sessionFixHints struct {
 	pointer string
 	// inUse is the way past a refusal to delete the session in use.
 	inUse string
+	// defaultDelete is the way past a refusal to delete the default session.
+	defaultDelete string
+	// cloning is the way past a refusal to delete a tree whose fork looks alive.
+	cloning string
+	// statusUnknown is the way past a refusal to delete a tree of unknown status.
+	statusUnknown string
+	// removePartial is the way to finish a session removal that stopped partway.
+	removePartial string
 }
 
 var (
@@ -66,34 +78,124 @@ var (
 		pointer: "run 'arcave session unset' or 'arcave session set <session>'",
 		inUse: "switch with 'arcave session set <session>' or 'arcave session unset' first, " +
 			"or pass --force to delete it and clear the pointer",
+		defaultDelete: "pass --force to empty it, every savepoint it holds included",
+		cloning:       "if no fork is running, pass --force to delete it",
+		statusUnknown: "if nothing is writing it, pass --force to delete it",
+		removePartial: "run it again with the session id to remove the rest",
 	}
 	mcpSessionFixHints = sessionFixHints{
-		pointer: "call session_unset or session_set",
-		inUse:   "switch with session_set or session_unset first, or pass force to delete it anyway",
+		pointer:       "call session_unset or session_set",
+		inUse:         "switch with session_set or session_unset first, or pass force to delete it anyway",
+		defaultDelete: "pass force to empty it, every savepoint it holds included",
+		cloning:       "if no fork is running, pass force to delete it",
+		statusUnknown: "if nothing is writing it, pass force to delete it",
+		removePartial: "call session_remove again with the session id to remove the rest",
 	}
 	// mcpPinnedSessionFixHints names force alone for a session in use: a pinned server refuses
 	// session_set and session_unset.
 	mcpPinnedSessionFixHints = sessionFixHints{
-		pointer: "call session_unset or session_set",
-		inUse:   "pass force to delete it anyway",
+		pointer:       "call session_unset or session_set",
+		inUse:         "pass force to delete it anyway",
+		defaultDelete: mcpSessionFixHints.defaultDelete,
+		cloning:       mcpSessionFixHints.cloning,
+		statusUnknown: mcpSessionFixHints.statusUnknown,
+		removePartial: mcpSessionFixHints.removePartial,
 	}
 )
 
-// WithFixHint adds the CLI's fix to a current-session error; any other passes unchanged.
+// WithFixHint adds the CLI's fix to a session or an interrupted-rollback error; any other passes
+// unchanged.
 func WithFixHint(err error) error {
-	return sessionFixError(err, cliSessionFixHints)
+	return recoveryError(sessionFixError(err, cliSessionFixHints), cliRecoveryFixHints)
 }
 
-// sessionFixError adds the adapter's fix to a current-session error.
+// sessionFixError adds the adapter's fix to a session error.
 func sessionFixError(err error, hints sessionFixHints) error {
 	switch {
 	case errors.Is(err, model.ErrCurrentSessionNotFound), errors.Is(err, model.ErrCurrentSessionUnreadable):
 		return fmt.Errorf("%w; %s", err, hints.pointer)
 	case errors.Is(err, model.ErrCurrentSessionDelete):
 		return fmt.Errorf("%w; %s", err, hints.inUse)
+	case errors.Is(err, model.ErrDefaultSessionDelete):
+		return fmt.Errorf("%w; %s", err, hints.defaultDelete)
+	case errors.Is(err, model.ErrSessionCloning):
+		return fmt.Errorf("%w; %s", err, hints.cloning)
+	case errors.Is(err, model.ErrSessionStatusUnknown):
+		return fmt.Errorf("%w; %s", err, hints.statusUnknown)
+	case errors.Is(err, model.ErrSessionRemovePartial):
+		return fmt.Errorf("%w; %s", err, hints.removePartial)
 	default:
 		return err
 	}
+}
+
+// recoveryFixHints is how an adapter tells a caller to recover from an interrupted or failed
+// rollback, each in the spelling of its own surface.
+type recoveryFixHints struct {
+	// rollback is the rollback that recovers; %[1]s is the session, %[2]s the compose project, %[3]s
+	// the savepoint.
+	rollback string
+	// anySavepoint says a rollback to another savepoint recovers too.
+	anySavepoint string
+	// safetySnapshot is where to find the safety snapshot a failed revert kept; %s is its id.
+	safetySnapshot string
+}
+
+// keepRestoredFix is the way to keep a rollback that restored every volume and only did not start;
+// %s is the compose project. It names docker, not arcave, so both surfaces share it.
+const keepRestoredFix = "or keep the rollback: start the compose project and remove the marker volume labelled " +
+	"io.arcave.inflight.compose-project=%s"
+
+var (
+	cliRecoveryFixHints = recoveryFixHints{
+		rollback:     "recover with `arcave rollback --session %[1]s -p %[2]s %[3]s`",
+		anySavepoint: ", or name another savepoint",
+		safetySnapshot: "safety snapshot %s lists under `arcave savepoint list --include-safety-snapshots` " +
+			"and can be rolled back to by id",
+	}
+	mcpRecoveryFixHints = recoveryFixHints{
+		rollback:       "recover by calling rollback with session %[1]s, compose_project %[2]s and ref %[3]s",
+		anySavepoint:   ", or another savepoint",
+		safetySnapshot: "savepoint_list with include_safety_snapshots lists safety snapshot %s, which rollback takes by id",
+	}
+)
+
+// recoveryError adds the way to recover to an error that names a standing inflight marker.
+func recoveryError(err error, hints recoveryFixHints) error {
+	if interrupted, ok := errors.AsType[*model.InterruptedRollbackError](err); ok {
+		return fmt.Errorf("%w; %s", err, newRecoveryFix(interrupted.Marker, hints))
+	}
+	return err
+}
+
+// newRecoveryFix is how to recover from what marker records, as hints spell it.
+func newRecoveryFix(marker model.InflightMarker, hints recoveryFixHints) string {
+	hint := fmt.Sprintf(hints.rollback, marker.Session, marker.ComposeProject, marker.RecoveryID())
+	if marker.AcceptsAnySavepoint() {
+		hint += hints.anySavepoint
+	}
+	switch {
+	case marker.Phase == model.InflightInconsistent && marker.Safety != "":
+		hint += "; " + fmt.Sprintf(hints.safetySnapshot, marker.Safety)
+	case marker.Phase == model.InflightRestoreDone && marker.Safety != "":
+		hint += "; " + fmt.Sprintf(keepRestoredFix, marker.ComposeProject)
+	}
+	return hint
+}
+
+// gcInflightFixHints is what a gc refused by an interrupted rollback can still do, as each
+// surface spells it.
+const (
+	cliGCInflightFixHint = "`arcave gc --dry-run` still reports"
+	mcpGCInflightFixHint = "call gc with dry_run, which still reports"
+)
+
+// gcInflightError adds what a gc refused by an interrupted rollback can still do.
+func gcInflightError(err error, hint string) error {
+	if _, ok := errors.AsType[*model.InterruptedRollbackError](err); ok {
+		return fmt.Errorf("%w; %s", err, hint)
+	}
+	return err
 }
 
 // deploymentFixHints is what an adapter tells a caller to do about an up or a down refused, each
@@ -132,11 +234,11 @@ var (
 
 // deploymentError adds the fix to what refuses an up or a down, as hints spell it.
 func deploymentError(err error, hints deploymentFixHints) error {
-	var elsewhere *model.DeployedElsewhereError
+	elsewhere, isElsewhere := errors.AsType[*model.DeployedElsewhereError](err)
 	switch {
 	case errors.Is(err, model.ErrComposeProjectPresent):
 		return fmt.Errorf("%w; %s", err, hints.present)
-	case errors.As(err, &elsewhere):
+	case isElsewhere:
 		return fmt.Errorf("%w; %s", err, fmt.Sprintf(hints.elsewhere, elsewhere.Deployment.Session))
 	case errors.Is(err, model.ErrNotDeployedByArcave):
 		return fmt.Errorf("%w; %s", err, hints.notByArcave)

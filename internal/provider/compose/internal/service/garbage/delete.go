@@ -17,10 +17,10 @@ package garbage
 import (
 	"context"
 	"errors"
+
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 
 	"github.com/greenmaskio/storages"
-	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
@@ -110,7 +110,6 @@ func DeleteOps(
 			})
 		case err != nil:
 			step.End(err)
-			zerolog.Ctx(ctx).Error().Err(err).Str("target", op.Target).Msg("delete garbage")
 			failed = append(failed, model.GarbageDeleteFailure{
 				Target:      op.Target,
 				Error:       err.Error(),

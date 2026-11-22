@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/rs/zerolog"
-
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -107,11 +105,7 @@ func probeCollector(ctx context.Context, collector ObjectCollector) error {
 	if !ok {
 		return nil
 	}
-	err := probe.Probe(ctx)
-	if err != nil {
-		zerolog.Ctx(ctx).Info().Err(err).Str("collector", string(collector.Kind())).Msg("garbage kind is not judged")
-	}
-	return err
+	return probe.Probe(ctx)
 }
 
 // runDaemonCollectors runs every daemon collector of the set over scope.
@@ -169,7 +163,7 @@ func (c *collectorSet) readCollectorReport(
 	case unavailable != nil:
 		summary = model.GarbageSummary{Aborted: unavailable.Error()}
 	default:
-		if stat, failure = runFind(ctx, collector, composeProject, find); stat != nil {
+		if stat, failure = runFind(collector, find); stat != nil {
 			summary = stat.Summary()
 		}
 	}
@@ -183,18 +177,13 @@ func (c *collectorSet) readCollectorReport(
 	}
 }
 
-// runFind runs find; a failure, or no finding, is logged and returned as the report's error.
-func runFind(
-	ctx context.Context, collector ObjectCollector, composeProject model.DockerComposeProjectName,
-	find func() (model.GarbageStat, error),
-) (model.GarbageStat, string) {
+// runFind runs find; a failure, or no finding, is returned as the report's error.
+func runFind(collector ObjectCollector, find func() (model.GarbageStat, error)) (model.GarbageStat, string) {
 	stat, err := find()
 	if err == nil && stat == nil {
 		err = fmt.Errorf("collector %s returned no finding", collector.Kind())
 	}
 	if err != nil {
-		zerolog.Ctx(ctx).Error().Err(err).Str("collector", string(collector.Kind())).
-			Str("compose_project", composeProject.String()).Msg("garbage collector failed")
 		return nil, err.Error()
 	}
 	return stat, ""

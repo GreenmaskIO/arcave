@@ -46,8 +46,8 @@ func TestEncryption_ReadersNeverMark(t *testing.T) {
 		out, err := runArcaveWith(t, env.projectRoot, encrypted, "-p", env.project, "status", "--format", "json")
 
 		// Assert
-		var exitErr *exec.ExitError
-		require.True(t, errors.As(err, &exitErr), "status over plain data is partial: %v", err)
+		exitErr, ok := errors.AsType[*exec.ExitError](err)
+		require.True(t, ok, "status over plain data is partial: %v", err)
 		assert.Equal(t, 1, exitErr.ExitCode())
 		status := decode[statusOnWire](t, out)
 		require.Len(t, status.Unreadable, 1)
@@ -71,8 +71,8 @@ func TestEncryption_ReadersNeverMark(t *testing.T) {
 			_, err := runArcaveWith(t, env.projectRoot, encrypted, command.args...)
 
 			// Assert
-			var exitErr *exec.ExitError
-			require.True(t, errors.As(err, &exitErr), "refused: %v", err)
+			exitErr, ok := errors.AsType[*exec.ExitError](err)
+			require.True(t, ok, "refused: %v", err)
 			assert.Contains(t, string(exitErr.Stderr), model.ErrStoreHoldsPlainData.Error())
 			assert.Equal(t, before, readProjectTree(t, env), "a refusal writes nothing")
 		})
@@ -101,9 +101,9 @@ func TestEncryption_OnlyAWriterMarksAnEmptyProject(t *testing.T) {
 		_, err := runArcaveWith(t, env.projectRoot, encrypted, "-p", env.project, "status", "--format", "json")
 
 		// Assert: with no record to read the status is whole or partial.
-		var exitErr *exec.ExitError
 		if err != nil {
-			require.True(t, errors.As(err, &exitErr), "status: %v", err)
+			exitErr, ok := errors.AsType[*exec.ExitError](err)
+			require.True(t, ok, "status: %v", err)
 			assert.Equal(t, 1, exitErr.ExitCode(), "status: %s", exitErr.Stderr)
 		}
 		assert.Empty(t, readProjectTree(t, env))

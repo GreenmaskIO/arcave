@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // configWriter persists the arcave project's config. Only Init uses it: every other
@@ -54,7 +55,7 @@ func (s *Service) Init(_ context.Context, cfg config.Config, override bool) (res
 		return "", "", fmt.Errorf("check existing config: %w", err)
 	}
 	if exists && !override {
-		return "", "", fmt.Errorf("project already initialized: %s exists (use --override to overwrite)", s.configWriter.Path())
+		return "", "", fmt.Errorf("%w: %s exists", model.ErrProjectInitialized, s.configWriter.Path())
 	}
 
 	cfg.ApplyDefaults(s.projectRoot)

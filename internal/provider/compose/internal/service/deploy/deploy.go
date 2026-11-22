@@ -223,7 +223,6 @@ func (s *Deployer) removeOrphanedVolumes(ctx context.Context, anonymousVolumeNam
 			continue
 		}
 		if err := s.volumeRemover.RemoveVolume(ctx, name); err != nil {
-			log.Info().Err(err).Str("volume", name).Msg("orphaned anonymous volume left behind")
 			progress.Current(ctx).Warn(fmt.Sprintf("orphaned anonymous volume %s left behind: %s", name, err))
 			continue
 		}

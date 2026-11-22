@@ -20,7 +20,6 @@ import (
 	"sync"
 
 	"github.com/greenmaskio/storages"
-	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
@@ -162,7 +161,6 @@ func forgetRepo(ctx context.Context, pruner Pruner, repo repoForget) repoPrune {
 	freed, err := pruner.Forget(repoCtx, repo.objectID, repo.ids)
 	if err != nil {
 		step.End(err)
-		zerolog.Ctx(ctx).Error().Err(err).Str("repository", repo.objectID).Msg("forget dead snapshots")
 		return repoPrune{
 			err:         err,
 			interrupted: ctx.Err() != nil,

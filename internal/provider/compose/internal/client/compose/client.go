@@ -100,7 +100,10 @@ func (c *Client) Stop(ctx context.Context, project *types.Project) ([]string, er
 // StopServices is Stop of the named services alone; none names every service.
 func (c *Client) StopServices(ctx context.Context, project *types.Project, services []string) ([]string, error) {
 	defer c.routeEvents(ctx)()
-	timeout := c.logStopTimeout(ctx, project, services, "stopping compose services")
+	timeout, raisedBy := c.stopTimeoutFor(project, services)
+	if raisedBy != "" {
+		zerolog.Ctx(ctx).Info().Str("stop_timeout", timeout.String()).Str("raised_by", raisedBy).Msg("a stop_grace_period raised the stop timeout")
+	}
 	running := c.runningContainers(ctx, project, services)
 
 	stopOptions := api.StopOptions{
@@ -118,7 +121,10 @@ func (c *Client) StopServices(ctx context.Context, project *types.Project, servi
 // arcave does not capture has no copy anywhere else.
 func (c *Client) Down(ctx context.Context, project *types.Project) error {
 	defer c.routeEvents(ctx)()
-	timeout := c.logStopTimeout(ctx, project, nil, "removing compose containers and networks")
+	timeout, raisedBy := c.stopTimeoutFor(project, nil)
+	if raisedBy != "" {
+		zerolog.Ctx(ctx).Info().Str("stop_timeout", timeout.String()).Str("raised_by", raisedBy).Msg("a stop_grace_period raised the stop timeout")
+	}
 
 	return c.api.Down(ctx, project.Name, api.DownOptions{
 		Project:       project,
@@ -211,20 +217,6 @@ func (c *Client) routePrompts(ctx context.Context, restoredVolumes []string) fun
 		sink:     sink,
 		logger:   zerolog.Ctx(ctx),
 	})
-}
-
-// logStopTimeout resolves the stop bound for the services of project — none naming every one —
-// and logs it with msg, at info only when a service's stop_grace_period raised it.
-func (c *Client) logStopTimeout(ctx context.Context, project *types.Project, services []string, msg string) time.Duration {
-	timeout, raisedBy := c.stopTimeoutFor(project, services)
-	// Str, not Dur: zerolog renders a Dur in milliseconds, and "10000" is not what
-	// a user reading a grace period wants to see.
-	event := zerolog.Ctx(ctx).Debug().Str("stop_timeout", timeout.String())
-	if raisedBy != "" {
-		event = zerolog.Ctx(ctx).Info().Str("stop_timeout", timeout.String()).Str("raised_by", raisedBy)
-	}
-	event.Msg(msg)
-	return timeout
 }
 
 // stopTimeoutFor is the configured grace period raised to the longest stop_grace_period

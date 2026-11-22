@@ -318,9 +318,8 @@ func TestService_Rollback_RevertsPastTheMarker(t *testing.T) {
 			_, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
 
 			// Assert
-			require.EqualError(t, err, tt.wantErr)
+			require.EqualError(t, err, tt.wantErr+"; reverted to the pre-rollback state")
 			assert.ErrorIs(t, err, errBoom)
-			assert.Contains(t, logs.String(), "reverted to the pre-rollback state")
 			inflight.AssertExpectations(t)
 			savepoints.AssertExpectations(t)
 			locker.AssertExpectations(t)
@@ -367,8 +366,7 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 
 	// Assert
 	require.ErrorIs(t, err, errBoom)
-	assert.Contains(t, logs.String(), "revert failed: environment left in an inconsistent state, safety snapshot retained")
-	assert.Contains(t, logs.String(), safetySnapshot.ID.String())
+	assert.ErrorContains(t, err, "; the revert failed: create boom")
 	inflight.AssertExpectations(t)
 	savepoints.AssertExpectations(t)
 	locker.AssertExpectations(t)
@@ -403,8 +401,7 @@ func TestService_Rollback_RevertThatCannotPrepare(t *testing.T) {
 	_, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
 
 	// Assert
-	require.EqualError(t, err, "rollback failed: down boom")
-	assert.Contains(t, logs.String(), "prepare the safety snapshot: load boom")
+	require.EqualError(t, err, "rollback failed: down boom; the revert failed: prepare the safety snapshot: load boom")
 	marker, found, getErr := inflight.Get(ctx)
 	require.NoError(t, getErr)
 	require.True(t, found)
@@ -503,7 +500,7 @@ func TestService_Rollback_SafetySnapshotNamesItsRollback(t *testing.T) {
 			_, err := svc.Rollback(zerolog.Nop().WithContext(context.Background()), req)
 
 			// Assert
-			require.ErrorContains(t, err, "pre-rollback safety snapshot failed, nothing changed: boom")
+			require.ErrorContains(t, err, "pre-rollback safety snapshot failed: boom")
 			savepoints.AssertExpectations(t)
 			locker.AssertExpectations(t)
 			stages.AssertExpectations(t)
@@ -533,22 +530,22 @@ func TestService_takeSafetySnapshot(t *testing.T) {
 			name:      "a failed hold captures nothing",
 			savepoint: demoRecord(),
 			holdErr:   boom,
-			wantErr:   "stop services: boom",
+			wantErr:   "stop services: boom; partial capture <id> is retained for a later gc",
 			wantBeat:  heartbeat.StatusFailed,
 		},
 		{
 			name:       "a failed capture",
 			savepoint:  demoRecord(),
 			captureErr: boom,
-			wantErr:    "pre-rollback safety snapshot failed, nothing changed: boom",
+			wantErr:    "pre-rollback safety snapshot failed: boom; partial capture <id> is retained for a later gc",
 			wantBeat:   heartbeat.StatusFailed,
 		},
 		{
 			name:      "a lost lock commits nothing",
 			savepoint: demoRecord(),
 			verifyErr: model.ErrSessionLockLost,
-			wantErr: "pre-rollback safety snapshot failed, nothing changed: commit savepoint <id>: " +
-				model.ErrSessionLockLost.Error(),
+			wantErr: "pre-rollback safety snapshot failed: commit savepoint <id>: " +
+				model.ErrSessionLockLost.Error() + "; partial capture <id> is retained for a later gc",
 			wantBeat: heartbeat.StatusFailed,
 		},
 		{name: "a named savepoint", savepoint: demoRecord(), wantBeat: heartbeat.StatusDone},
@@ -624,10 +621,9 @@ func TestService_Rollback_ReleasesBeforeTheMarker(t *testing.T) {
 		captureErr  error
 		putErr      error
 		teardownErr error
+		releaseErr  error
 		wantErr     string
 		wantRelease bool
-		// wantKept is a safety snapshot committed and then not used, which the log names.
-		wantKept bool
 	}{
 		{name: "a failed stop", holdErr: boom, wantErr: "stop services: boom", wantRelease: true},
 		{
@@ -640,22 +636,27 @@ func TestService_Rollback_ReleasesBeforeTheMarker(t *testing.T) {
 		{
 			name:        "a failed safety snapshot",
 			captureErr:  boom,
-			wantErr:     "pre-rollback safety snapshot failed, nothing changed: boom",
+			wantErr:     "pre-rollback safety snapshot failed: boom",
 			wantRelease: true,
 		},
 		{
 			name:        "an interrupt right after the safety snapshot",
 			interruptOn: "Commit",
-			wantErr:     "rollback interrupted, nothing changed: context canceled",
+			wantErr:     "interrupted: context canceled",
 			wantRelease: true,
-			wantKept:    true,
 		},
 		{
 			name:        "a marker that cannot be written",
 			putErr:      errors.New("disk full"),
-			wantErr:     "recording the inflight marker, nothing changed: disk full",
+			wantErr:     "recording the inflight marker: disk full",
 			wantRelease: true,
-			wantKept:    true,
+		},
+		{
+			name:        "a restart that fails",
+			putErr:      errors.New("disk full"),
+			releaseErr:  errors.New("start boom"),
+			wantErr:     "recording the inflight marker: disk full; the services were not resumed: start boom",
+			wantRelease: true,
 		},
 		{name: "a failure past the marker", teardownErr: boom, wantErr: "rollback failed: "},
 	}
@@ -711,7 +712,7 @@ func TestService_Rollback_ReleasesBeforeTheMarker(t *testing.T) {
 				)
 			}
 			if tt.wantRelease {
-				calls = append(calls, stages.expectRelease(60*time.Second, nil))
+				calls = append(calls, stages.expectRelease(60*time.Second, tt.releaseErr))
 			}
 			mock.InOrder(calls...)
 			svc := newStagedService(t, stages, savepoints, locker, inflight)
@@ -721,9 +722,6 @@ func TestService_Rollback_ReleasesBeforeTheMarker(t *testing.T) {
 
 			// Assert
 			require.ErrorContains(t, err, tt.wantErr)
-			if tt.wantKept {
-				assert.Contains(t, logs.String(), safetySnapshot.ID.String(), "the snapshot it stopped short of using is named")
-			}
 			savepoints.AssertExpectations(t)
 			locker.AssertExpectations(t)
 			stages.AssertExpectations(t)
@@ -771,7 +769,7 @@ func TestService_Rollback_APrepareFailureHoldsNothing(t *testing.T) {
 				model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: time.Second})
 
 			// Assert
-			require.EqualError(t, err, tt.wantErr)
+			require.EqualError(t, err, tt.wantErr+"")
 			assert.ErrorIs(t, err, errBoom)
 			savepoints.AssertExpectations(t)
 			locker.AssertExpectations(t)
@@ -804,7 +802,7 @@ func TestService_planSafetySnapshot(t *testing.T) {
 
 // A rollback aborted before its restore releases what its safety snapshot held on a revertContext:
 // the release outlives the interrupt. No session lock is asked.
-func TestAbortBeforeRestore(t *testing.T) {
+func TestReleaseHeld(t *testing.T) {
 	// Arrange
 	ctx, cancel := context.WithCancel(newLockTestContext())
 	cancel()
@@ -816,8 +814,9 @@ func TestAbortBeforeRestore(t *testing.T) {
 	capturePlan.On("Release", revertCtx, time.Minute).Return(nil).Once()
 
 	// Act
-	abortBeforeRestore(ctx, capturePlan, time.Minute)
+	err := releaseHeld(ctx, capturePlan, time.Minute)
 
 	// Assert
+	require.NoError(t, err)
 	capturePlan.AssertExpectations(t)
 }

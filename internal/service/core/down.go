@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/rs/zerolog"
-
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
@@ -150,12 +148,7 @@ func (s *DownService) requireDownMarker(ctx context.Context, force bool) (*model
 	if force && marker.ComposeProject == s.composeProject {
 		return &marker, nil
 	}
-	err = &model.InterruptedRollbackError{Marker: marker}
-	zerolog.Ctx(ctx).Error().Err(err).
-		Str("session", marker.Session.String()).
-		Str("compose_project", marker.ComposeProject.String()).
-		Msg(workflow.RecoveryHint(marker))
-	return nil, err
+	return nil, &model.InterruptedRollbackError{Marker: marker}
 }
 
 // clearMarker clears the marker a forced down took over, nil for none, and says what is left of

@@ -64,8 +64,7 @@ func resolveConfig(v *viper.Viper, projectRoot string) (config.Config, bool, err
 
 	found := true
 	if err := v.ReadInConfig(); err != nil {
-		var notFound viper.ConfigFileNotFoundError
-		if errors.As(err, &notFound) || errors.Is(err, os.ErrNotExist) {
+		if _, notFound := errors.AsType[viper.ConfigFileNotFoundError](err); notFound || errors.Is(err, os.ErrNotExist) {
 			found = false
 		} else {
 			return config.Config{}, false, fmt.Errorf("read config: %w", err)

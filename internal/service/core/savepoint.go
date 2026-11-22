@@ -23,7 +23,6 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -65,7 +64,6 @@ func (s *Service) createSavepoint(
 
 	plan, err := s.planCapture(ctx)
 	if err != nil {
-		workflow.LogInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
 		return model.Savepoint{}, preferInterrupt(ctx, err)
 	}
 
@@ -121,32 +119,27 @@ func (s *Service) captureHeld(
 		beforeErr, captureErr, afterErr error
 	)
 	if beatCtx, beat, err = s.startSavepointHeartbeat(ctx, req.ID); err != nil {
-		workflow.LogInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
 		return model.Savepoint{}, fmt.Errorf("capturing the savepoint: %w", preferInterrupt(ctx, err))
 	}
 	if held, beforeErr = plan.Hold(beatCtx); beforeErr != nil {
 		// A hold that failed or was interrupted partway may have held some services.
-		beforeErr = beat.fail(ctx, beatCtx, beforeErr)
-		workflow.LogInterrupt(ctx, "savepoint interrupted while holding the services: resuming them, nothing captured")
+		beforeErr = newCaptureRetainedError(req.ID, preferInterrupt(ctx, beat.fail(ctx, beatCtx, beforeErr)))
 	} else if savepoint, captureErr = captureAndCommit(ctx, beatCtx, beat, grantedLock, held, req); captureErr != nil {
-		workflow.LogInterrupt(ctx, "savepoint interrupted during capture: resuming the services, nothing committed")
-		captureErr = preferInterrupt(ctx, captureErr)
-	} else {
-		workflow.LogInterrupt(ctx, "savepoint committed before the interrupt: resuming the services")
+		captureErr = newCaptureRetainedError(req.ID, preferInterrupt(ctx, captureErr))
+	} else if ctx.Err() != nil {
+		log.Info().Msg("savepoint committed before the interrupt: resuming the services")
 	}
 	afterErr = releaseHeld(ctx, plan, waitTimeout)
 
+	err = beforeErr
+	if captureErr != nil {
+		err = fmt.Errorf("capturing the savepoint: %w", captureErr)
+	}
 	switch {
-	case beforeErr != nil:
-		if afterErr != nil {
-			log.Error().Err(afterErr).Msg("bringing the project back failed after the hold failure")
-		}
-		return model.Savepoint{}, preferInterrupt(ctx, beforeErr)
-	case captureErr != nil:
-		if afterErr != nil {
-			log.Error().Err(afterErr).Msg("bringing the project back failed after the capture failure")
-		}
-		return model.Savepoint{}, fmt.Errorf("capturing the savepoint: %w", captureErr)
+	case err != nil && afterErr != nil:
+		return model.Savepoint{}, fmt.Errorf("%w; the services were not resumed: %w", err, afterErr)
+	case err != nil:
+		return model.Savepoint{}, err
 	case afterErr != nil:
 		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; bringing the project back: %w", savepoint.ID, afterErr)
 	}
@@ -154,7 +147,8 @@ func (s *Service) captureHeld(
 }
 
 // captureAndCommit captures what held holds on beatCtx and commits it while beat is alive and the
-// session's lock still this workflow's. On error the record is zero and beat failed.
+// session's lock still this workflow's. On error the record is zero and beat failed, its tree the
+// caller's to name.
 func captureAndCommit(
 	ctx, beatCtx context.Context,
 	beat savepointHeartbeat,

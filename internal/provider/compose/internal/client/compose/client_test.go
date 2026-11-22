@@ -266,7 +266,7 @@ func TestClient_Stop_warnsOfAKilledContainer(t *testing.T) {
 			composeAPI.AssertExpectations(t)
 			assert.Equal(t, tt.wantKilled, killed)
 			var warned []string
-			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			for line := range strings.Lines(logs.String()) {
 				var record struct{ Level, Message string }
 				require.NoError(t, json.Unmarshal([]byte(line), &record))
 				if record.Level == "warn" && strings.Contains(record.Message, "was killed") {

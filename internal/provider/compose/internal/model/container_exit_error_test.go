@@ -60,8 +60,7 @@ func TestContainerExitError_ErrorsAs(t *testing.T) {
 		&ContainerExitError{Image: "busybox", StatusCode: 2, Output: []string{"a", "b", "c"}})
 
 	// Act
-	var exitErr *ContainerExitError
-	ok := errors.As(wrapped, &exitErr)
+	exitErr, ok := errors.AsType[*ContainerExitError](wrapped)
 
 	// Assert
 	require.True(t, ok)

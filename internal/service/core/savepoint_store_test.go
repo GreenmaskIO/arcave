@@ -171,7 +171,7 @@ func TestService_RemoveSavepoints_SafetySnapshotVisibility(t *testing.T) {
 }
 
 // A savepoint the repository fails to delete may be left uncommitted with its tree behind it; the
-// orphan is named in the log.
+// orphan is named in the error.
 func TestService_RemoveSavepoints_DeleteFailureNamesTheOrphan(t *testing.T) {
 	// Arrange
 	record := demoRecord()
@@ -188,17 +188,14 @@ func TestService_RemoveSavepoints_DeleteFailureNamesTheOrphan(t *testing.T) {
 		Savepoints:     repo, ProjectLocker: locker,
 		Inflight: &fakeInflight{},
 	})
-	logs := &syncBuffer{}
-	ctx := zerolog.New(logs).WithContext(context.Background())
+	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
 	_, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{Refs: []string{record.ID.String()}})
 
 	// Assert
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "remove boom")
-	assert.Contains(t, logs.String(), "the directory is orphaned")
-	assert.Contains(t, logs.String(), record.ID.String())
+	require.EqualError(t, err, "remove savepoint "+record.ID.String()+": remove boom; if its record went, the directory "+
+		"is orphaned for a gc; the savepoints not yet removed are kept, a partly removed one is left as an orphan directory")
 	locker.AssertExpectations(t)
 	repo.AssertExpectations(t)
 }

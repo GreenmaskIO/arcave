@@ -304,8 +304,7 @@ func (s *Service) RemoveSession(
 		zerolog.Ctx(ctx).Debug().Str("ref", req.Session).Str("session", id.String()).Bool("force", req.Force).
 			Msg("session to delete found")
 		if id == model.DefaultSession && !req.Force {
-			return model.RemoveSessionResponse{}, fmt.Errorf("%w; --force empties it, every savepoint it holds included",
-				model.ErrDefaultSessionDelete)
+			return model.RemoveSessionResponse{}, model.ErrDefaultSessionDelete
 		}
 		current, err := s.requireNotInUse(ctx, id, req)
 		if err != nil {
@@ -322,24 +321,33 @@ func (s *Service) RemoveSession(
 		if err != nil {
 			return model.RemoveSessionResponse{}, err
 		}
+		var notices []model.Notice
 		if id == model.DefaultSession {
 			zerolog.Ctx(ctx).Info().Str("session", id.String()).
 				Msg("the default session was emptied; it still exists")
 		} else if current {
-			if err := s.current.Clear(ctx); err != nil {
-				zerolog.Ctx(ctx).Warn().Err(err).Str("session", id.String()).
-					Msg("the deleted session is still the current one")
-			} else {
-				zerolog.Ctx(ctx).Info().Str("session", id.String()).
-					Msg("the deleted session was the current one; commands now work in the default session")
-			}
+			notices = s.clearCurrent(ctx, id)
 		}
 		return model.RemoveSessionResponse{
 			Session:    id,
 			Removed:    true,
 			FreedBytes: size,
+			Notices:    notices,
 		}, nil
 	})
+}
+
+// clearCurrent clears the current-session pointer naming the removed session id, and says so if it
+// stays.
+func (s *Service) clearCurrent(ctx context.Context, id model.SessionID) []model.Notice {
+	if err := s.current.Clear(ctx); err != nil {
+		return []model.Notice{{
+			Message: fmt.Sprintf("the deleted session %s is still the current one: the pointer could not be cleared: %v", id, err),
+		}}
+	}
+	zerolog.Ctx(ctx).Info().Str("session", id.String()).
+		Msg("the deleted session was the current one; commands now work in the default session")
+	return nil
 }
 
 // deleteSession measures and deletes the session id, once its lock is still held.
@@ -353,8 +361,7 @@ func (s *Service) deleteSession(ctx context.Context, grantedLock model.GrantedSe
 	}
 	zerolog.Ctx(ctx).Debug().Str("session", id.String()).Int64("size_bytes", size).Msg("deleting session")
 	if err := s.sessions.DeleteSession(ctx, id); err != nil {
-		workflow.LogInterrupt(ctx, "session remove interrupted: run it again with the session id to remove the rest")
-		return 0, fmt.Errorf("deleting session %s: %w", id, err)
+		return 0, fmt.Errorf("deleting session %s: %w; %w", id, err, model.ErrSessionRemovePartial)
 	}
 	zerolog.Ctx(ctx).Info().Str("session", id.String()).Int64("freed_bytes", size).
 		Msg("session deleted; any compose project running from it is left as it is")
@@ -384,11 +391,10 @@ func (s *Service) findRemovable(ctx context.Context, req model.RemoveSessionRequ
 	if !req.Force {
 		switch status {
 		case model.SessionStatusCloning:
-			return model.SessionID{}, fmt.Errorf("%w: %s's heartbeat is younger than its stale age; "+
-				"if no fork is running, --force deletes it", model.ErrSessionCloning, id)
+			return model.SessionID{}, fmt.Errorf("%w: %s's heartbeat is younger than its stale age",
+				model.ErrSessionCloning, id)
 		case model.SessionStatusUnknown:
-			return model.SessionID{}, fmt.Errorf("%w: %s: %w; if nothing is writing it, --force deletes it",
-				model.ErrSessionStatusUnknown, id, readErr)
+			return model.SessionID{}, fmt.Errorf("%w: %s: %w", model.ErrSessionStatusUnknown, id, readErr)
 		}
 	}
 	zerolog.Ctx(ctx).Info().Str("session", id.String()).Str("status", string(status)).
@@ -595,7 +601,6 @@ func (s *Service) readTreeStatus(
 		return model.SessionStatusIncomplete, heartbeat.Heartbeat{}, nil
 	}
 	if err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Str("session", id.String()).Msg("reading the heartbeat")
 		return model.SessionStatusUnknown, heartbeat.Heartbeat{}, err
 	}
 	zerolog.Ctx(ctx).Debug().Str("session", id.String()).Str("operation", string(beat.Operation)).
@@ -687,8 +692,7 @@ func (s *Service) forkSession(ctx context.Context, grantedLock model.GrantedSess
 	}
 	copyCtx, beat, err := heartbeat.StartRun(ctx, writer, s.heartbeatInterval, s.heartbeatStaleAfter, initialBeat)
 	if err != nil {
-		logForkAbandoned(ctx, session.ID)
-		return fmt.Errorf("cloning session %s: %w", source, err)
+		return newForkAbandonedError(session.ID, fmt.Errorf("cloning session %s: %w", source, err))
 	}
 	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Str("from", source.String()).
 		Msg("heartbeat started; copying the source tree")
@@ -696,8 +700,8 @@ func (s *Service) forkSession(ctx context.Context, grantedLock model.GrantedSess
 	beat.Stop()
 	if err != nil {
 		err = fmt.Errorf("cloning session %s: %w", source, heartbeat.PreferLost(copyCtx, err))
-		abandonFork(ctx, beat, session.ID, err)
-		return err
+		beat.Fail(ctx, err)
+		return newForkAbandonedError(session.ID, err)
 	}
 	zerolog.Ctx(ctx).Info().Str("session", session.ID.String()).Str("from", source.String()).
 		Int64("copied_bytes", copied).Msg("session cloned")
@@ -707,8 +711,8 @@ func (s *Service) forkSession(ctx context.Context, grantedLock model.GrantedSess
 	}
 	if err := beat.Commit(ctx, grantedLock.Verify, commit); err != nil {
 		err = fmt.Errorf("committing session %s: %w", session.ID, err)
-		abandonFork(ctx, beat, session.ID, err)
-		return err
+		beat.Fail(ctx, err)
+		return newForkAbandonedError(session.ID, err)
 	}
 	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Msg("fork committed")
 	return nil
@@ -726,16 +730,8 @@ func (s *Service) requireEmptyForkTree(ctx context.Context, id model.SessionID) 
 	return nil
 }
 
-// abandonFork marks an uncommitted fork's heartbeat failed and logs its tree, the only pointer
-// left to it.
-func abandonFork(ctx context.Context, beat *heartbeat.Run, id model.SessionID, cause error) {
-	beat.Fail(ctx, cause)
-	logForkAbandoned(ctx, id)
-}
-
-// logForkAbandoned logs an uncommitted fork's tree, the only pointer left to it.
-func logForkAbandoned(ctx context.Context, id model.SessionID) {
-	workflow.LogInterrupt(ctx, "fork interrupted: the partial session is not committed")
-	zerolog.Ctx(ctx).Error().Str("session", id.String()).Str("tree", "sessions/"+id.String()).
-		Msg("the fork did not commit; its tree is left in the store")
+// newForkAbandonedError is err of the fork into id that did not commit, naming its tree, the only
+// pointer left to it.
+func newForkAbandonedError(id model.SessionID, err error) error {
+	return fmt.Errorf("fork into sessions/%s: %w; the partial session is not committed; its tree is left in the store", id, err)
 }

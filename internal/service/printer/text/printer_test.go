@@ -475,6 +475,18 @@ func TestPrinter_Print(t *testing.T) {
 			},
 		},
 		{
+			name: "session_remove_pointer_kept",
+			result: model.RemoveSessionResponse{
+				Session:    sessionID,
+				Removed:    true,
+				FreedBytes: 48_800_000,
+				Notices: []model.Notice{{
+					Message: "the deleted session " + sessionID.String() +
+						" is still the current one: the pointer could not be cleared: permission denied",
+				}},
+			},
+		},
+		{
 			name:   "unknown_type_as_json",
 			result: map[string]string{"path": "compose.yaml"},
 		},

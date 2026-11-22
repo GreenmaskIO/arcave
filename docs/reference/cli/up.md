@@ -144,7 +144,7 @@ There is no `safety_snapshot`: `up` takes none.
 | The daemon holds containers or volumes of the compose project | `the daemon holds the compose project already: containers …; volumes …`, with the way past it. Nothing is written. |
 | `latest` or a name, and the session holds no savepoint of the compose project | `finding savepoint "latest": no savepoints exist; start the compose project with 'docker compose up -d', then take one with 'arcave savepoint create'` |
 | The id or the name is not there, or the name matches several | As for [`rollback`](rollback.md#errors). |
-| An interrupted rollback is marked | `require no inflight: rollback to savepoint … was interrupted (…); recover by rolling back to …` — with `--force` too. Recovering is `rollback`'s. |
+| An interrupted rollback is marked | ``require no inflight: rollback to savepoint … was interrupted (…): …; recover with `arcave rollback …` `` — with `--force` too. Recovering is `rollback`'s. |
 | The savepoint carries no compose spec | `load the savepoint's compose spec: savepoint carries no compose spec: …` |
 | The Docker daemon is older than 25 | `unsupported docker daemon: …` — before anything is dropped. |
 | A forced drop leaves a container or a volume — something outside the compose project still holds it | `the daemon still holds the compose project after its drop: volumes myapp_pgdata: …`, naming the holder; nothing is built. See [Troubleshooting](../troubleshooting.md#the-daemon-still-holds-the-compose-project-after-its-drop). |

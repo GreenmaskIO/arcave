@@ -149,12 +149,13 @@ func formatComposeProjectNames(names []model.DockerComposeProjectName) string {
 	return line
 }
 
-// formatRemoveSession is the session a remove took and what it freed.
+// formatRemoveSession is the session a remove took, what it freed and what it left to act on.
 func formatRemoveSession(response model.RemoveSessionResponse) string {
 	if !response.Removed {
 		return fmt.Sprintf("Session %s was not removed.\n", response.Session)
 	}
-	return fmt.Sprintf("Removed session %s · freed %s\n", response.Session, formatSize(response.FreedBytes))
+	return fmt.Sprintf("Removed session %s · freed %s\n", response.Session, formatSize(response.FreedBytes)) +
+		formatNotices(response.Notices)
 }
 
 // formatSessionDetail is one session: a title, then each compose project's savepoints as a table.

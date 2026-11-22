@@ -513,8 +513,8 @@ func (h *MCPHandler) garbageCollectMCP(
 	defer release()
 
 	result, err := svc.GarbageCollect(ctx, req)
-	var interrupted *model.GarbageCollectInterruptedError
-	if errors.As(err, &interrupted) {
+	err = gcInflightError(err, mcpGCInflightFixHint)
+	if _, interrupted := errors.AsType[*model.GarbageCollectInterruptedError](err); interrupted {
 		// A gc stopped midway through deleting fails, but what it had deleted must still be seen.
 		return &mcpsdk.CallToolResult{
 			IsError: true,
@@ -754,7 +754,7 @@ func (h *MCPHandler) openSessionService(ctx context.Context) (MCPSessionService,
 }
 
 // mcpError names what holds the project or session lock, so an agent waits instead of retrying blind,
-// and adds the fix to a current-session error as this server can take it.
+// and adds the fix to a session or an interrupted-rollback error as this server can take it.
 func (h *MCPHandler) mcpError(err error) error {
 	switch {
 	case errors.Is(err, model.ErrProjectLocked):
@@ -764,6 +764,7 @@ func (h *MCPHandler) mcpError(err error) error {
 		return fmt.Errorf("%w: another arcave command, possibly on another machine sharing the store, works in "+
 			"this session; retry when it finishes", err)
 	}
+	err = recoveryError(err, mcpRecoveryFixHints)
 	if h.pinnedSession != (model.SessionID{}) {
 		return sessionFixError(err, mcpPinnedSessionFixHints)
 	}

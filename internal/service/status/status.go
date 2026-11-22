@@ -192,19 +192,22 @@ func (s *Service) readResolvedSession(
 	ctx context.Context, sessions SessionReader, ref string,
 ) (*model.SessionRef, *model.StatusUnreadable, error) {
 	session, err := sessionref.Resolve(ctx, sessions, s.current, ref)
-	var ambiguous *model.AmbiguousSessionNameError
-	switch {
-	case err == nil:
-		return &model.SessionRef{
-			ID:   session.ID,
-			Name: session.Name,
-		}, nil, nil
-	case errors.Is(err, model.ErrSessionNotFound), errors.Is(err, model.ErrSessionRefKeyword),
-		errors.As(err, &ambiguous):
-		return nil, nil, err
-	default:
+	if err != nil {
+		if isSessionRefError(err) {
+			return nil, nil, err
+		}
 		return nil, newUnreadable(model.StatusUnreadableSession, err), nil
 	}
+	return &model.SessionRef{
+		ID:   session.ID,
+		Name: session.Name,
+	}, nil, nil
+}
+
+// isSessionRefError reports a ref naming no session, several, or a keyword.
+func isSessionRefError(err error) bool {
+	_, ambiguous := errors.AsType[*model.AmbiguousSessionNameError](err)
+	return ambiguous || errors.Is(err, model.ErrSessionNotFound) || errors.Is(err, model.ErrSessionRefKeyword)
 }
 
 // readDeployedSavepoint reads the deployed savepoint's record in its own session; nil for none, a

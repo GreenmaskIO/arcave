@@ -200,7 +200,7 @@ func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 	assert.Contains(t, err.Error(), "rollback failed")
 	assert.Equal(t, preRollback, env.hashAll(t),
 		"the revert must put back exactly what the safety snapshot captured")
-	assert.Contains(t, env.logs.String(), "reverted to the pre-rollback state")
+	assert.Contains(t, err.Error(), "reverted to the pre-rollback state")
 
 	// A successful revert leaves the backup committed, listed under the flag; a listing without
 	// it shows the savepoint alone, untouched.

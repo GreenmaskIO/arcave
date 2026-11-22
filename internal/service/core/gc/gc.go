@@ -191,12 +191,7 @@ func (s *GarbageCollector) requireNoInflight(ctx context.Context) error {
 	if !found || marker.Session != s.sessionID {
 		return nil
 	}
-	err = &model.InterruptedRollbackError{Marker: marker}
-	zerolog.Ctx(ctx).Error().Err(err).
-		Str("session", marker.Session.String()).
-		Str("compose_project", marker.ComposeProject.String()).
-		Msg(workflow.RecoveryHint(marker))
-	return err
+	return &model.InterruptedRollbackError{Marker: marker}
 }
 
 // findGarbage finds what the provider deems garbage, then the safety snapshots past the retention:
