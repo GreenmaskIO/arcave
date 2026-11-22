@@ -99,7 +99,7 @@ func (s *Deployer) Drop(ctx context.Context, before composemodel.ComposeProjectR
 	removeContainers := func(names []string) {
 		for _, name := range names {
 			if err := s.projectRemover.RemoveContainer(ctx, name); err != nil {
-				log.Warn().Err(err).Str("container", name).Msg("container of the compose project left")
+				log.Debug().Err(err).Str("container", name).Msg("container of the compose project left")
 				refusals = append(refusals, err)
 			}
 		}
@@ -121,14 +121,14 @@ func (s *Deployer) Drop(ctx context.Context, before composemodel.ComposeProjectR
 	removeContainers(left.Containers)
 	for _, name := range left.Volumes {
 		if err := s.volumeRemover.RemoveVolume(ctx, name); err != nil {
-			log.Warn().Err(err).Str("volume", name).Msg("volume of the compose project left")
+			log.Debug().Err(err).Str("volume", name).Msg("volume of the compose project left")
 			refusals = append(refusals, err)
 		}
 	}
 	networkRefusals := map[string]error{}
 	for _, name := range left.Networks {
 		if err := s.projectRemover.RemoveNetwork(ctx, name); err != nil {
-			log.Warn().Err(err).Str("network", name).Msg("network of the compose project left")
+			log.Debug().Err(err).Str("network", name).Msg("network of the compose project left")
 			networkRefusals[name] = err
 		}
 	}

@@ -183,7 +183,7 @@ Removes a session and everything under it — its savepoints, and the backend da
 
 `baseline` cannot be deleted: `--force` only empties it, and it stays the default session. A session an interrupted rollback names is deleted like any other: the marker is not read, and recovering then goes as [Troubleshooting](../troubleshooting.md#the-way-back-from-an-interrupted-rollback-is-gone) says.
 
-The current session is refused unless `--force` is given; with it, the session is deleted and `.arcave/current_session` is cleared, so commands that name no session work in `baseline` again.
+The current session is refused unless `--force` is given; with it, the session is deleted and `.arcave/current_session` is cleared, so commands that name no session work in `baseline` again. A pointer that cannot be cleared does not fail the removal: the result carries a notice under `notices` that the deleted session is still the current one.
 
 A session directory without a record — `failed`, `incomplete`, `cloning` or `unknown` in `session list --all` — is removed by its id. A `cloning` one is refused unless `--force` is given: no fork can be running in this project directory while `session remove` holds the lock, so a `cloning` tree there is one whose fork was killed; `--force` deletes it without waiting the 30 minutes for it to turn `failed`. An `unknown` one is refused unless `--force` too: arcave cannot tell that nothing is writing it.
 
@@ -228,9 +228,11 @@ arcave session current
 | The current session has been deleted | `the current session no longer exists`, with how to get out: `arcave session unset` or `arcave session set <session>`. |
 | `.arcave/current_session` holds no session id, or cannot be read | `the current-session pointer cannot be read`, with the same way out. |
 | `session remove baseline` without `--force` | Refused: the default session always exists. `--force` empties it — every savepoint it holds goes — and it stays the default session. |
-| `session remove` of a `cloning` directory without `--force` | `session is still being cloned`; nothing is deleted. |
-| `session remove` of an `unknown` directory without `--force` | `session tree status is unknown`, with why; nothing is deleted. |
+| `session remove` of a `cloning` directory without `--force` | `session is still being cloned`, with `if no fork is running, pass --force to delete it`; nothing is deleted. |
+| `session remove` of an `unknown` directory without `--force` | `session tree status is unknown`, with why and `if nothing is writing it, pass --force to delete it`; nothing is deleted. |
 | `session remove` of the current session without `--force` | `session is the current session`, naming it; switch away first or force it. |
+| `session remove` fails partway | `deleting session …: …; the session is partly removed; run it again with the session id to remove the rest` |
+| `session create --from` fails before its record lands | `fork into sessions/<id>: …; the partial session is not committed; its tree is left in the store` — `session list --all` lists it as `failed`, `session remove <id>` deletes it. |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
 
 ## Examples

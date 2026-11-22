@@ -27,7 +27,6 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -126,16 +125,20 @@ func TestService_Rollback_WithoutSafetySnapshotFailures(t *testing.T) {
 		teardownErr error
 		wantErr     string
 	}{
-		{name: "a failure past the marker", teardownErr: errBoom, wantErr: "rollback failed: boom"},
+		{
+			name:        "a failure past the marker",
+			teardownErr: errBoom,
+			wantErr:     "rollback failed: boom",
+		},
 		{
 			name:    "a marker that cannot be written",
 			putErr:  errors.New("disk full"),
-			wantErr: "recording the inflight marker, nothing changed: disk full",
+			wantErr: "recording the inflight marker: disk full",
 		},
 		{
 			name:      "an interrupt during the prepare",
 			interrupt: true,
-			wantErr:   "rollback interrupted, nothing changed: context canceled",
+			wantErr:   "interrupted: context canceled",
 		},
 	}
 	for _, tt := range tests {
@@ -300,7 +303,8 @@ func TestService_Rollback_ColdStartInterruptBeforeTheMarker(t *testing.T) {
 	_, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: time.Second})
 
 	// Assert
-	require.EqualError(t, err, "rollback interrupted, nothing changed: context canceled")
+	require.EqualError(t, err, "interrupted: context canceled")
+	require.ErrorIs(t, err, context.Canceled)
 	inflight.AssertExpectations(t)
 	savepoints.AssertExpectations(t)
 	locker.AssertExpectations(t)
@@ -324,7 +328,12 @@ func TestService_Rollback_ColdStartFailure(t *testing.T) {
 		wantMarkPhase model.InflightPhase
 		wantLog       string
 	}{
-		{name: "a failed teardown clears the marker, nothing to discard", teardownErr: errBoom, wantErr: "rollback failed: boom"},
+		{
+			name:        "a failed teardown clears the marker, nothing to discard",
+			teardownErr: errBoom,
+			// Nothing was built, so the error claims nothing of what was created.
+			wantErr: "rollback failed: boom",
+		},
 		{name: "a failed build clears the marker", buildErr: errBoom, wantErr: "rollback failed: boom"},
 		{
 			name:          "a failed restore keeps the marker",
@@ -341,11 +350,10 @@ func TestService_Rollback_ColdStartFailure(t *testing.T) {
 			wantMarkPhase: model.InflightRestoring,
 		},
 		{
-			name:       "a failed discard is logged",
+			name:       "a failed discard is named in the error",
 			buildErr:   errBoom,
 			discardErr: errors.New("down boom"),
-			wantErr:    "rollback failed: boom",
-			wantLog:    "failed to remove what the failed rollback created",
+			wantErr:    "rollback failed: boom; what it created could not be removed: down boom",
 		},
 	}
 	for _, tt := range tests {
@@ -482,10 +490,7 @@ func TestService_Rollback_FailedRecoveryKeepsTheSafetySnapshot(t *testing.T) {
 	assert.Equal(t, record.ID, marker.Safety)
 	assert.Equal(t, model.InflightRestoring, marker.Phase)
 	assert.True(t, svc.isRecoveryRollback(marker, demoSafetySnapshot().ID), "another savepoint may recover now")
-	hint := workflow.RecoveryHint(marker)
-	assert.Contains(t, hint, "the recovery to the safety snapshot failed")
-	assert.Contains(t, hint, record.ID.String())
-	assert.Contains(t, hint, "or name another savepoint")
+	assert.True(t, marker.AcceptsAnySavepoint())
 	savepoints.AssertExpectations(t)
 	locker.AssertExpectations(t)
 	stages.AssertExpectations(t)

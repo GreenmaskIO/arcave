@@ -164,8 +164,8 @@ func TestProgressE2E_JSONStream(t *testing.T) {
 	result := decode[model.RollbackResult](t, rolledBack.last.Result)
 	assert.Equal(t, savepoint.ID, result.RolledBackTo.ID)
 
-	var exitErr *exec.ExitError
-	require.True(t, errors.As(refusedErr, &exitErr), "the refusal exits non-zero: %v", refusedErr)
+	exitErr, ok := errors.AsType[*exec.ExitError](refusedErr)
+	require.True(t, ok, "the refusal exits non-zero: %v", refusedErr)
 	assert.Equal(t, 1, exitErr.ExitCode())
 	refused := readProgressStream(t, refusedOut)
 	assert.Equal(t, "error", refused.last.Type, "the error is the last line")

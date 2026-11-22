@@ -23,7 +23,6 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -78,7 +77,6 @@ func (s *Service) up(ctx context.Context, session model.SessionRef, req model.Up
 	// up is for.
 	surveyed, err := s.workload.Survey(ctx)
 	if err != nil {
-		workflow.LogInterrupt(ctx, "up interrupted before anything was created: nothing changed")
 		return model.UpResult{}, preferInterrupt(ctx, err)
 	}
 	// Every volume of the compose project counts, not only those the savepoint restores: compose
@@ -127,21 +125,19 @@ func (s *Service) upOver(
 		log.Info().Msg("the compose project is not running: building it from the savepoint")
 	}
 
-	prepared, err := s.runPrepare(ctx, surveyed, session, savepoint, false,
-		"up interrupted before anything was created: nothing changed")
+	prepared, err := s.runPrepare(ctx, surveyed, session, savepoint, false)
 	if err != nil {
 		return model.RollbackResult{}, err
 	}
 	// An interrupt that landed during the prepare stops here, ahead of the drop: what the daemon
 	// holds is untouched, and a marker would refuse the next workflow over it.
-	if err := context.Cause(ctx); err != nil {
-		workflow.LogInterrupt(ctx, "up interrupted before anything was created: nothing changed")
-		return model.RollbackResult{}, fmt.Errorf("up interrupted, nothing changed: %w", err)
+	if ctx.Err() != nil {
+		return model.RollbackResult{}, newInterruptedError(ctx)
 	}
 
 	// No safety snapshot of its own: the marker tells the user how to recover.
 	if err := s.putInflightMarker(ctx, newFirstMarkerPhase(false), savepoint.ID, ""); err != nil {
-		return model.RollbackResult{}, fmt.Errorf("recording the inflight marker, nothing changed: %w", err)
+		return model.RollbackResult{}, fmt.Errorf("recording the inflight marker: %w", err)
 	}
 
 	restored, vacant, err := s.applySavepoint(ctx, prepared, savepoint.ID, "", req.WaitTimeout,
@@ -155,9 +151,14 @@ func (s *Service) upOver(
 			return dropped.Vacant(prepared)
 		})
 	if err != nil {
-		workflow.LogInterrupt(ctx, "up interrupted: removing what it created")
-		s.abortColdStart(ctx, vacant)
-		return model.RollbackResult{}, fmt.Errorf("up failed: %w", preferInterrupt(ctx, err))
+		err = fmt.Errorf("up failed: %w", preferInterrupt(ctx, err))
+		if ctx.Err() != nil {
+			log.Info().Msg("up interrupted: removing what it created")
+		}
+		if discardErr := s.abortColdStart(ctx, vacant); discardErr != nil {
+			return model.RollbackResult{}, fmt.Errorf("%w; what it created could not be removed: %w", err, discardErr)
+		}
+		return model.RollbackResult{}, err
 	}
 
 	// Nothing was orphaned, the drop leaving nothing.

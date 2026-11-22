@@ -79,8 +79,7 @@ func (s *mcpServer) waitExit(t *testing.T) int {
 
 	select {
 	case err := <-s.exited:
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			return exitErr.ExitCode()
 		}
 		require.NoError(t, err)

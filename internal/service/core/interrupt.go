@@ -16,11 +16,9 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"time"
 
-	"github.com/rs/zerolog"
-
+	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 )
 
@@ -41,13 +39,16 @@ func releaseHeld(ctx context.Context, plan provider.CapturePlan, waitTimeout tim
 	return plan.Release(revertCtx, waitTimeout)
 }
 
-// preferInterrupt returns the interrupt that cancelled ctx in place of err, the symptom
-// it caused somewhere downstream, and logs err.
+// preferInterrupt returns the interrupt that cancelled ctx in place of err, the failure it caused.
 func preferInterrupt(ctx context.Context, err error) error {
 	if ctx.Err() == nil {
 		return err
 	}
-	zerolog.Ctx(ctx).Debug().Err(err).Msg("failure the interrupt caused")
+	return newInterruptedError(ctx)
+}
+
+// newInterruptedError is the interrupt that cancelled ctx.
+func newInterruptedError(ctx context.Context) error {
 	// The cause, not ctx.Err: a lost session lock interrupts too, and says so.
-	return fmt.Errorf("interrupted: %w", context.Cause(ctx))
+	return &model.InterruptedError{Cause: context.Cause(ctx)}
 }

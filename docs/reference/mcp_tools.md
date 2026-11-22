@@ -324,7 +324,7 @@ Returns the object [`arcave status`](cli/status.md) prints: which savepoint a ro
 
 * **Lists come wrapped in an object.** `savepoint_list` answers `{"savepoints": […]}` and `session_list` `{"sessions": […]}`, where the CLI prints the bare array.
 * **A lock error says what to wait for.** A call refused because another run holds the project lock reads `another arcave command is already running in this project: a session fork holds the lock for its whole copy, as does a savepoint or rollback for its run; retry when it finishes`.
-* **Errors keep the CLI's flag names.** An unparseable `before_date` is reported as `invalid --before-date "2026-06-01": …`, and `retain_for` as `invalid --retain-for …`.
+* **An error's fix is spelled for the tools.** A refusal an argument gets past names it (`pass force to empty it, every savepoint it holds included`), and an interrupted rollback names the call that recovers: `recover by calling rollback with session …, compose_project myapp and ref 019e8491-04c8-7000-8000-000000000000`. An unparseable `before_date` is reported as `invalid before-date timestamp "2026-06-01": …; before-date takes an RFC 3339 timestamp, e.g. 2026-06-01T00:00:00Z`.
 
 `wait_timeout` takes a unit-bearing duration in every tool that accepts it. A bare number is refused:
 

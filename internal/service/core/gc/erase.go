@@ -18,8 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rs/zerolog"
-
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 )
@@ -67,9 +65,8 @@ func deleteFound(
 		return &model.GarbageDeletion{NotRun: len(ops)}, nil
 	}
 	if err := grantedLock.Verify(ctx); err != nil {
-		zerolog.Ctx(ctx).Error().Err(err).Str("data_kind", string(report.DataKind)).
-			Msg("session lock no longer vouches for the gc: nothing more is deleted")
-		return &model.GarbageDeletion{NotRun: len(ops)}, fmt.Errorf("verify session lock: %w", err)
+		return &model.GarbageDeletion{NotRun: len(ops)},
+			fmt.Errorf("verify session lock: %w; nothing more of %s is deleted", err, report.DataKind)
 	}
 	deletion := garbage.Delete(ctx)
 	return &deletion, nil

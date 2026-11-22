@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/rs/zerolog"
-
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/pkg/progress"
@@ -67,7 +65,6 @@ func (r retired) Delete(ctx context.Context) model.GarbageDeletion {
 		err := r.savepoints.Remove(removeCtx, model.SavepointID(op.Target))
 		step.End(err)
 		if err != nil {
-			zerolog.Ctx(ctx).Error().Err(err).Str("target", op.Target).Msg("delete garbage")
 			failed = append(failed, model.GarbageDeleteFailure{
 				Target:      op.Target,
 				Error:       err.Error(),
@@ -134,7 +131,6 @@ func (s *GarbageCollector) readWorkloadRetired(ctx context.Context, workload pro
 // step ctx carries; no name is every compose project.
 func newAbortedRetention(ctx context.Context, name model.DockerComposeProjectName, err error) model.GarbageReport {
 	aborted := fmt.Sprintf("cannot read the scope: %v", err)
-	zerolog.Ctx(ctx).Info().Err(err).Str("compose_project", name.String()).Msg("safety snapshots not judged")
 	progress.Current(ctx).WarnInResult("aborted: " + aborted)
 	return newRetentionReport(name, model.GarbageSummary{Aborted: aborted}, nil)
 }

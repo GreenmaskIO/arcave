@@ -153,7 +153,7 @@ func TestSessionFork_FailureLeavesTheTreeMarkedFailed(t *testing.T) {
 	hb := readHeartbeat(t, tree)
 	assert.Equal(t, heartbeat.StatusFailed, hb.Status)
 	assert.Equal(t, model.HeartbeatOperationFork, hb.Operation)
-	assert.Equal(t, createErr.Error(), hb.Error)
+	assert.ErrorContains(t, createErr, hb.Error, "the heartbeat holds the failure the error names")
 	assert.False(t, hb.FinishedAt.IsZero())
 }
 
@@ -187,7 +187,7 @@ func TestSessionFork_FailedTreeIsListedAndDeleted(t *testing.T) {
 	// Assert
 	assert.Len(t, ready, 1, "without --all only ready sessions are listed")
 	assert.Equal(t, model.SessionStatusFailed, failed.Status)
-	assert.Equal(t, createErr.Error(), failed.Error)
+	assert.ErrorContains(t, createErr, failed.Error)
 	assert.Equal(t, &model.SessionOrigin{Session: model.DefaultSession}, failed.From)
 	require.NoError(t, deleteErr)
 	assert.Equal(t, failed.SizeBytes, deleted.FreedBytes)

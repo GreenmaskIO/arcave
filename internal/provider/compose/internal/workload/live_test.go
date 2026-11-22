@@ -68,8 +68,8 @@ func TestLive_PlanCapture_RestoringRecord(t *testing.T) {
 
 			// Assert
 			require.ErrorIs(t, err, tt.wantErr)
-			var policyErr *provider.CapturePolicyError
-			assert.False(t, errors.As(err, &policyErr))
+			_, isPolicyErr := errors.AsType[*provider.CapturePolicyError](err)
+			assert.False(t, isPolicyErr)
 			assert.Nil(t, plan)
 			repo.AssertExpectations(t)
 			assembler.AssertExpectations(t)

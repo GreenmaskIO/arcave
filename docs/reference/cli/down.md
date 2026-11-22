@@ -133,7 +133,7 @@ A network another container still uses and a tag the daemon will not remove are 
 |---|---|
 | A replica was deployed by another session or arcave project | `the environment was deployed from elsewhere: session …`, with the `--session` to run it in. Nothing is removed. |
 | A replica has no deployment labels, or no replica is left but containers, volumes or networks of the compose project are | `the environment was not deployed by arcave: …`. Nothing is removed. |
-| An interrupted rollback of this compose project is marked | `rollback to savepoint … was interrupted (…); recover by rolling back to …` — `--force` takes it down and clears the marker. |
+| An interrupted rollback of this compose project is marked | ``rollback to savepoint … was interrupted (…): …; recover with `arcave rollback …` `` — `--force` takes it down and clears the marker. |
 | An interrupted rollback of another compose project is marked | The same error, `--force` or not. |
 | A container or a volume survives the drop — something outside the compose project holds it | `the daemon still holds the compose project after its drop: volumes myapp_pgdata: …`, naming the holder. The marker and the tags stay. See [Troubleshooting](../troubleshooting.md#the-daemon-still-holds-the-compose-project-after-its-drop). |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |

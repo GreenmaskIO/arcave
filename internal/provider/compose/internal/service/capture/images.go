@@ -137,8 +137,6 @@ func (s *Capturer) captureWritableLayers(
 	err := eg.Wait()
 	batch.End(err)
 	if err != nil {
-		zerolog.Ctx(ctx).Warn().Str("snapshot_id", snapshotID.String()).
-			Msg("the partial writable layer capture is retained for a later gc")
 		return nil, err
 	}
 	return captures, nil

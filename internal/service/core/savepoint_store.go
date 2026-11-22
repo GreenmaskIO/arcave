@@ -23,13 +23,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/xhit/go-str2duration/v2"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -166,9 +164,8 @@ func (s *SavepointStoreService) removeSavepoints(
 	}
 	if len(removed) > 0 {
 		if err := s.applyRemoval(ctx, grantedLock, removed); err != nil {
-			workflow.LogInterrupt(ctx, "removal interrupted: the savepoints not yet removed are kept, "+
-				"a partly removed one is left as an orphan directory")
-			return model.RemoveResult{}, err
+			return model.RemoveResult{}, fmt.Errorf("%w; the savepoints not yet removed are kept, a partly removed one is "+
+				"left as an orphan directory", err)
 		}
 	}
 	return model.RemoveResult{Removed: removed}, nil
@@ -275,7 +272,7 @@ func (s *SavepointStoreService) parseRetentionCutoffs(req model.RemoveRequest) (
 	if req.RetainFor != "" {
 		retainFor, err := str2duration.ParseDuration(req.RetainFor)
 		if err != nil {
-			return nil, fmt.Errorf("invalid --retain-for %q: %w", req.RetainFor, err)
+			return nil, fmt.Errorf("%w %q: %w", model.ErrInvalidRetainFor, req.RetainFor, err)
 		}
 		// Known only once parsed, so checked here rather than in validateRemoveRequest:
 		// a negative age would put the cutoff in the future and sweep everything.
@@ -287,7 +284,7 @@ func (s *SavepointStoreService) parseRetentionCutoffs(req model.RemoveRequest) (
 	if req.BeforeDate != "" {
 		before, err := time.Parse(time.RFC3339Nano, req.BeforeDate)
 		if err != nil {
-			return nil, fmt.Errorf("invalid --before-date %q: %w", req.BeforeDate, err)
+			return nil, fmt.Errorf("%w %q: %w", model.ErrInvalidBeforeDate, req.BeforeDate, err)
 		}
 		cutoffs = append(cutoffs, before)
 	}
@@ -371,9 +368,8 @@ func (s *SavepointStoreService) removeSavepoint(
 		return fmt.Errorf("remove savepoint %s: %w", savepoint.ID, err)
 	}
 	if err := s.savepoints.Remove(ctx, savepoint.ID); err != nil {
-		zerolog.Ctx(ctx).Error().Err(err).Str("savepoint", savepoint.ID.String()).
-			Msg("failed to remove the savepoint; if its record went, the directory is orphaned for a gc")
-		return err
+		return fmt.Errorf("remove savepoint %s: %w; if its record went, the directory is orphaned for a gc",
+			savepoint.ID, err)
 	}
 	return nil
 }

@@ -109,7 +109,6 @@ func (f found) Delete(ctx context.Context) model.GarbageDeletion {
 	case len(ops) == 0:
 		return model.GarbageDeletion{}
 	case f.erase == nil:
-		zerolog.Ctx(ctx).Warn().Err(errNoEraser).Str("data_kind", string(f.report.DataKind)).Msg("garbage not deleted")
 		return newUnerasedDeletion(ops)
 	}
 	if f.report.ComposeProject == "" {

@@ -52,6 +52,8 @@ linters:
         - (*hash/maphash.Hash).Write
         - (*hash/maphash.Hash).WriteByte
         - (*hash/maphash.Hash).WriteString
+        # Its first result is the match, not a failure: a check that only asks whether err is one blanks it.
+        - errors.AsType
     importas:
       # The compose provider's own model shares its package name with internal/model, which
       # nearly every importer of it also imports.

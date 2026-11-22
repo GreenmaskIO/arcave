@@ -43,6 +43,12 @@ var (
 	ErrRetainRecentNegative = errors.New("retain-recent count must be zero or positive")
 	// ErrRetainForNegative is returned when the retain-for duration is negative.
 	ErrRetainForNegative = errors.New("retain-for duration must be zero or positive")
+	// ErrInvalidRetainFor reports a retain-for that is not a duration.
+	ErrInvalidRetainFor = errors.New("invalid retain-for duration")
+	// ErrInvalidBeforeDate reports a before-date that is not an RFC 3339 timestamp.
+	ErrInvalidBeforeDate = errors.New("invalid before-date timestamp")
+	// ErrProjectInitialized refuses to initialize a project whose config already exists.
+	ErrProjectInitialized = errors.New("project already initialized")
 	// ErrProjectLocked is returned when another arcave process is already running a
 	// mutating workflow in this project.
 	ErrProjectLocked = errors.New("another arcave command is already running in this project")
@@ -148,7 +154,21 @@ var (
 	// ErrStatusPartial reports a status that could not read the store, the session or the inflight
 	// marker; the result still carries what the daemon reports.
 	ErrStatusPartial = errors.New("status is partial")
+
+	// ErrSessionRemovePartial reports a session removal that stopped partway through deleting.
+	ErrSessionRemovePartial = errors.New("the session is partly removed")
 )
+
+// InterruptedError is a failure an interrupt caused: Cause is the interrupt.
+type InterruptedError struct {
+	Cause error
+}
+
+func (m *InterruptedError) Error() string {
+	return "interrupted: " + m.Cause.Error()
+}
+
+func (m *InterruptedError) Unwrap() error { return m.Cause }
 
 // GarbageCollectInterruptedError reports a gc that stopped deleting partway: it lost its session
 // lock, or was interrupted. It is ErrGarbageCollectPartial: the result beside it says what went.

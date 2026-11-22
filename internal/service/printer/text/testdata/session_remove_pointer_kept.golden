@@ -1,0 +1,4 @@
+Removed session 019a2b3c-4d5e-7000-8000-000000000007 · freed 48.8 MB
+
+Warnings (1)
+  ! the deleted session 019a2b3c-4d5e-7000-8000-000000000007 is still the current one: the pointer could not be cleared: permission denied

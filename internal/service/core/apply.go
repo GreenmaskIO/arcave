@@ -23,7 +23,6 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/service/core/internal/workflow"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -33,15 +32,13 @@ type savepointPreparer interface {
 	PrepareSavepoint(ctx context.Context, id model.SavepointID, opts provider.PrepareOptions) (provider.PreparedSavepoint, error)
 }
 
-// runPrepare prepares savepoint over the live compose project under the rollback's prepare step;
-// onInterrupt says what an interrupt there leaves.
+// runPrepare prepares savepoint over the live compose project under the rollback's prepare step.
 func (s *Service) runPrepare(
 	ctx context.Context,
 	live savepointPreparer,
 	session model.SessionRef,
 	savepoint model.Savepoint,
 	recovering bool,
-	onInterrupt string,
 ) (provider.PreparedSavepoint, error) {
 	prepareCtx, prepare := progress.Begin(ctx, progress.Step{Kind: kindRollbackPrepare})
 	prepared, err := live.PrepareSavepoint(prepareCtx, savepoint.ID, provider.PrepareOptions{
@@ -50,7 +47,6 @@ func (s *Service) runPrepare(
 	})
 	prepare.End(err)
 	if err != nil {
-		workflow.LogInterrupt(ctx, onInterrupt)
 		return nil, preferInterrupt(ctx, err)
 	}
 	return prepared, nil
@@ -83,14 +79,19 @@ func newFirstMarkerPhase(recovering bool) model.InflightPhase {
 // putInflightMarker writes the marker for the rollback restoring targetID; safety is the safety
 // snapshot it names, empty for none. A phase change rewrites it whole.
 func (s *Service) putInflightMarker(ctx context.Context, phase model.InflightPhase, targetID, safety model.SavepointID) error {
-	return s.inflightMarker.Put(ctx, model.InflightMarker{
+	return s.inflightMarker.Put(ctx, s.newInflightMarker(phase, targetID, safety))
+}
+
+// newInflightMarker is the marker of the rollback restoring targetID, in phase.
+func (s *Service) newInflightMarker(phase model.InflightPhase, targetID, safety model.SavepointID) model.InflightMarker {
+	return model.InflightMarker{
 		Phase:          phase,
 		Session:        s.session,
 		ComposeProject: s.composeProject,
 		Target:         targetID,
 		Safety:         safety,
 		At:             time.Now(),
-	})
+	}
 }
 
 // applySavepoint vacates the workload and builds prepared on it, under the rollback's apply step.
@@ -154,46 +155,40 @@ func (s *Service) buildFromSavepoint(
 }
 
 // abortColdStart removes what a failed rollbackColdStart created, new volumes included, and
-// clears the inflight marker if no volume was written yet; all best-effort.
-func (s *Service) abortColdStart(ctx context.Context, vacant provider.VacantWorkload) {
+// clears the inflight marker if no volume was written yet. It returns why what was created could
+// not be removed; a marker it could not settle is only logged.
+func (s *Service) abortColdStart(ctx context.Context, vacant provider.VacantWorkload) (discardErr error) {
 	log := zerolog.Ctx(ctx)
 	// On a revertContext: the Ctrl-C that aborted the rollback must not leave a half-created
 	// compose project behind.
 	ctx, cancel := revertContext(ctx)
 	defer cancel()
 	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindRollbackRevert})
-	var discardErr error
 	if vacant != nil {
 		discardErr = vacant.Discard(ctx)
 	}
 	defer step.End(discardErr)
 
-	if discardErr != nil {
-		log.Error().Err(discardErr).Msg("failed to remove what the failed rollback created")
-	}
-
 	marker, found, err := s.inflightMarker.Get(ctx)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to read the inflight marker back")
-		return
+		return discardErr
 	}
 	if !found {
-		return
+		return discardErr
 	}
-	if marker.Phase != model.InflightRecreating {
-		// restore-done would say only the start is missing, and what the restore wrote into has just gone.
-		if marker.Phase == model.InflightRestoreDone {
-			marker.Phase = model.InflightRestoring
-			if err := s.putInflightMarker(ctx, marker.Phase, marker.Target, marker.Safety); err != nil {
-				log.Warn().Err(err).Msg("failed to phase the inflight marker back")
-			}
+	switch marker.Phase {
+	case model.InflightRecreating:
+		if err := s.inflightMarker.Clear(ctx); err != nil {
+			log.Warn().Err(err).Msg("failed to clear the inflight marker")
 		}
-		log.Error().Str("phase", string(marker.Phase)).Msg(workflow.RecoveryHint(marker))
-		return
+	case model.InflightRestoreDone:
+		// restore-done would say only the start is missing, and what the restore wrote into has just gone.
+		if err := s.putInflightMarker(ctx, model.InflightRestoring, marker.Target, marker.Safety); err != nil {
+			log.Warn().Err(err).Msg("failed to phase the inflight marker back")
+		}
 	}
-	if err := s.inflightMarker.Clear(ctx); err != nil {
-		log.Warn().Err(err).Msg("failed to clear the inflight marker")
-	}
+	return discardErr
 }
 
 // cleanUpRollback ends a consistent rollback: it reaps what the teardown orphaned and clears the

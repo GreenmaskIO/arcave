@@ -149,6 +149,8 @@ type RemoveSessionResponse struct {
 	Removed bool      `json:"removed"`
 	// FreedBytes is the session's size, measured just before it was removed.
 	FreedBytes int64 `json:"freed_bytes"`
+	// Notices is what the removal left to act on: a current-session pointer it could not clear.
+	Notices []Notice `json:"notices,omitempty"`
 }
 
 // ForkHeartbeatData is a fork heartbeat's data.

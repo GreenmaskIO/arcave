@@ -42,7 +42,7 @@ func NewGCHandler(svc gcService, printer printer) *GCHandler {
 func (h *GCHandler) GarbageCollect(ctx context.Context, req model.GarbageCollectRequest) error {
 	result, err := h.svc.GarbageCollect(ctx, req)
 	if err != nil && !errors.Is(err, model.ErrGarbageCollectPartial) {
-		return err
+		return gcInflightError(err, cliGCInflightFixHint)
 	}
 	if printErr := h.printer.Print(result); printErr != nil {
 		return printErr

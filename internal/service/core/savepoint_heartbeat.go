@@ -20,7 +20,6 @@ import (
 	"fmt"
 
 	"github.com/greenmaskio/storages"
-	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
@@ -61,8 +60,7 @@ func (s *Service) startSavepointHeartbeat(
 	beatCtx, run, err := heartbeat.StartRun(ctx, heartbeat.NewWriter(tree),
 		s.heartbeatInterval, s.heartbeatStaleAfter, initialBeat)
 	if err != nil {
-		logCaptureRetained(ctx, id)
-		return nil, savepointHeartbeat{}, fmt.Errorf("savepoint %s: %w", id, err)
+		return nil, savepointHeartbeat{}, newCaptureRetainedError(id, err)
 	}
 	return beatCtx, savepointHeartbeat{
 		run: run,
@@ -70,13 +68,13 @@ func (s *Service) startSavepointHeartbeat(
 	}, nil
 }
 
-// fail stops the beats, marks the heartbeat failed and leaves the tree to a gc. A lost heartbeat
-// is returned in place of cause, the symptom it caused.
+// fail stops the beats, marks the heartbeat failed and leaves the tree to a gc, which the caller's
+// error names (newCaptureRetainedError). A lost heartbeat is returned in place of cause, the symptom
+// it caused.
 func (b savepointHeartbeat) fail(ctx, beatCtx context.Context, cause error) error {
 	b.run.Stop()
 	cause = heartbeat.PreferLost(beatCtx, cause)
 	b.run.Fail(ctx, cause)
-	logCaptureRetained(ctx, b.id)
 	return cause
 }
 
@@ -94,8 +92,8 @@ func requireEmptyTree(ctx context.Context, tree storages.Inspector, id model.Sav
 	return nil
 }
 
-// logCaptureRetained logs an uncommitted capture's tree, left for a gc.
-func logCaptureRetained(ctx context.Context, id model.SavepointID) {
-	zerolog.Ctx(ctx).Warn().Str("snapshot_id", id.String()).
-		Msg("the partial capture is retained for a later gc")
+// newCaptureRetainedError is err of the uncommitted capture id, whose tree is left for a gc; added
+// past preferInterrupt, so an interrupt keeps it.
+func newCaptureRetainedError(id model.SavepointID, err error) error {
+	return fmt.Errorf("%w; partial capture %s is retained for a later gc", err, id)
 }

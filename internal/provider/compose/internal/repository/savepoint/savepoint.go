@@ -211,7 +211,7 @@ func (r *Repository) LoadSavepoints(ctx context.Context, ids []model.SavepointID
 // warnUnreadable logs the savepoint id names as skipped: its record is not this provider's.
 func warnUnreadable(ctx context.Context, id model.SavepointID, err error) {
 	log.Ctx(ctx).Warn().Err(err).Str("savepoint", id.String()).
-		Msg("skipping a savepoint this arcave cannot read; arcave gc removes it")
+		Msg("skipping a savepoint this arcave cannot read; it is left for gc")
 }
 
 // load reads one savepoint's record. found is false when the namespace holds no
